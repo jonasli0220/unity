@@ -60,6 +60,8 @@ internal static class DirectVisibleUISelection
         SceneView.duringSceneGui += OnDuringSceneGui;
         Selection.selectionChanged -= OnSelectionChanged;
         Selection.selectionChanged += OnSelectionChanged;
+        SceneVisibilityManager.visibilityChanged -= OnSceneVisibilityChanged;
+        SceneVisibilityManager.visibilityChanged += OnSceneVisibilityChanged;
     }
 
     [MenuItem(MenuPath)]
@@ -294,7 +296,9 @@ internal static class DirectVisibleUISelection
 
     internal static bool BeginInlineTextEdit(TMP_Text targetText, SceneView sceneView = null)
     {
-        if (targetText == null || EditorApplication.isPlaying)
+        if (targetText == null ||
+            EditorApplication.isPlaying ||
+            !IsSceneVisibleAndPickable(targetText.gameObject))
         {
             return false;
         }
@@ -718,6 +722,7 @@ internal static class DirectVisibleUISelection
         PrefabStage prefabStage = PrefabStageUtility.GetCurrentPrefabStage();
         if (!IsUIPrefabStage(prefabStage) ||
             !IsEditableUIObjectInStage(pressedObject, prefabStage) ||
+            !IsSceneVisibleAndPickable(pressedObject) ||
             IsBlockedByActiveSceneControl(pressedObject, prefabStage))
         {
             return false;
@@ -942,6 +947,7 @@ internal static class DirectVisibleUISelection
     {
         if (graphic == null ||
             graphic is EmptyRaycast ||
+            !IsSceneVisibleAndPickable(graphic.gameObject) ||
             !graphic.IsActive() ||
             graphic.canvas == null ||
             graphic.canvasRenderer == null ||
@@ -1028,6 +1034,11 @@ internal static class DirectVisibleUISelection
 
     private static void SetHoveredObject(GameObject target, SceneView sceneView)
     {
+        if (target != null && !IsSceneVisibleAndPickable(target))
+        {
+            target = null;
+        }
+
         if (hoveredObject == target)
         {
             return;
@@ -1051,7 +1062,8 @@ internal static class DirectVisibleUISelection
     private static void DrawHoverPreview()
     {
         if (hoveredObject == null ||
-            !hoveredObject.activeInHierarchy)
+            !hoveredObject.activeInHierarchy ||
+            !IsSceneVisibleAndPickable(hoveredObject))
         {
             return;
         }
@@ -1165,6 +1177,55 @@ internal static class DirectVisibleUISelection
         Transform prefabRoot = prefabStage.prefabContentsRoot.transform;
         Transform pickedTransform = pickedObject.transform;
         return pickedTransform == prefabRoot || pickedTransform.IsChildOf(prefabRoot);
+    }
+
+    private static bool IsSceneVisibleAndPickable(GameObject target)
+    {
+        if (target == null)
+        {
+            return false;
+        }
+
+        SceneVisibilityManager visibilityManager = SceneVisibilityManager.instance;
+        for (Transform current = target.transform; current != null; current = current.parent)
+        {
+            GameObject currentObject = current.gameObject;
+            if (visibilityManager.IsHidden(currentObject, false) ||
+                visibilityManager.IsPickingDisabled(currentObject, false))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static void OnSceneVisibilityChanged()
+    {
+        if (inlineEditingText != null &&
+            !IsSceneVisibleAndPickable(inlineEditingText.gameObject))
+        {
+            CommitInlineTextEdit();
+        }
+
+        if (isDirectDragging &&
+            draggedRectTransform != null &&
+            !IsSceneVisibleAndPickable(draggedRectTransform.gameObject))
+        {
+            CancelDirectDrag();
+        }
+
+        if (pressedObject != null && !IsSceneVisibleAndPickable(pressedObject))
+        {
+            ResetClickState();
+        }
+
+        if (hoveredObject != null && !IsSceneVisibleAndPickable(hoveredObject))
+        {
+            ClearHoverPreview();
+        }
+
+        SceneView.RepaintAll();
     }
 
     private static bool HasSelectionModifier(Event currentEvent)
