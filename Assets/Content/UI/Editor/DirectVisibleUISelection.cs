@@ -403,12 +403,6 @@ internal static class DirectVisibleUISelection
                 }
             }
 
-            Rect hintRect = new Rect(
-                editorRect.x,
-                editorRect.yMax + 4f,
-                editorRect.width,
-                18f);
-            GUI.Label(hintRect, "Ctrl+Enter 完成    Esc 取消", EditorStyles.miniLabel);
         }
         finally
         {
@@ -531,7 +525,7 @@ internal static class DirectVisibleUISelection
         float centerY = (minY + maxY) * 0.5f;
 
         float maxWidth = Mathf.Max(InlineTextMinWidth, sceneView.position.width - 16f);
-        float maxHeight = Mathf.Max(InlineTextMinHeight, sceneView.position.height - 42f);
+        float maxHeight = Mathf.Max(InlineTextMinHeight, sceneView.position.height - 16f);
         width = Mathf.Min(width, maxWidth);
         height = Mathf.Min(height, maxHeight);
 
@@ -541,7 +535,7 @@ internal static class DirectVisibleUISelection
             width,
             height);
         editorRect.x = Mathf.Clamp(editorRect.x, 8f, sceneView.position.width - width - 8f);
-        editorRect.y = Mathf.Clamp(editorRect.y, 8f, sceneView.position.height - height - 26f);
+        editorRect.y = Mathf.Clamp(editorRect.y, 8f, sceneView.position.height - height - 8f);
         return editorRect;
     }
 
@@ -928,7 +922,7 @@ internal static class DirectVisibleUISelection
                 (Vector2)guiCorners[1] + new Vector2(4f, -20f);
             GUI.Label(
                 new Rect(labelPosition.x, labelPosition.y, 80f, 18f),
-                "松开复位",
+                "Layout控制",
                 EditorStyles.miniLabel);
         }
         finally
