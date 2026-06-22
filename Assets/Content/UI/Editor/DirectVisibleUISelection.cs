@@ -260,8 +260,7 @@ internal static class DirectVisibleUISelection
     {
         if (currentEvent.button != 0 ||
             currentEvent.clickCount < 2 ||
-            HasSelectionModifier(currentEvent) ||
-            EditorApplication.isPlaying)
+            HasSelectionModifier(currentEvent))
         {
             return false;
         }
@@ -272,14 +271,8 @@ internal static class DirectVisibleUISelection
             return false;
         }
 
-        GameObject pickedObject =
-            PickTopmostVisibleUIObject(prefabStage, currentEvent.mousePosition);
-        if (!IsEditableUIObjectInStage(pickedObject, prefabStage))
-        {
-            return false;
-        }
-
-        TMP_Text targetText = pickedObject.GetComponent<TMP_Text>();
+        TMP_Text targetText =
+            PickTopmostVisibleUIText(prefabStage, currentEvent.mousePosition);
         if (targetText == null)
         {
             return false;
@@ -297,7 +290,6 @@ internal static class DirectVisibleUISelection
     internal static bool BeginInlineTextEdit(TMP_Text targetText, SceneView sceneView = null)
     {
         if (targetText == null ||
-            EditorApplication.isPlaying ||
             !IsSceneVisibleAndPickable(targetText.gameObject))
         {
             return false;
@@ -941,6 +933,71 @@ internal static class DirectVisibleUISelection
         }
 
         return ResolveSelectionObject(bestGraphic);
+    }
+
+    private static TMP_Text PickTopmostVisibleUIText(
+        PrefabStage prefabStage,
+        Vector2 mousePosition)
+    {
+        if (prefabStage == null || prefabStage.prefabContentsRoot == null)
+        {
+            return null;
+        }
+
+        TMP_Text selectedText =
+            Selection.activeGameObject != null
+                ? Selection.activeGameObject.GetComponent<TMP_Text>()
+                : null;
+        if (IsSelectableVisibleUIText(selectedText, prefabStage, mousePosition))
+        {
+            return selectedText;
+        }
+
+        TMP_Text[] texts =
+            prefabStage.prefabContentsRoot.GetComponentsInChildren<TMP_Text>(true);
+        TMP_Text bestText = null;
+        int bestDepth = int.MinValue;
+        int bestHierarchyOrder = int.MinValue;
+        float bestArea = float.MaxValue;
+
+        for (int i = 0; i < texts.Length; i++)
+        {
+            TMP_Text text = texts[i];
+            if (!IsSelectableVisibleUIText(text, prefabStage, mousePosition))
+            {
+                continue;
+            }
+
+            Graphic graphic = text as Graphic;
+            int depth = graphic.depth;
+            float area = GetGuiRectArea(text.rectTransform);
+            if (bestText == null ||
+                depth > bestDepth ||
+                (depth == bestDepth && area < bestArea) ||
+                (depth == bestDepth &&
+                 Mathf.Approximately(area, bestArea) &&
+                 i > bestHierarchyOrder))
+            {
+                bestText = text;
+                bestDepth = depth;
+                bestHierarchyOrder = i;
+                bestArea = area;
+            }
+        }
+
+        return bestText;
+    }
+
+    private static bool IsSelectableVisibleUIText(
+        TMP_Text text,
+        PrefabStage prefabStage,
+        Vector2 mousePosition)
+    {
+        Graphic graphic = text as Graphic;
+        return graphic != null &&
+               IsEditableUIObjectInStage(text.gameObject, prefabStage) &&
+               IsSelectableVisibleGraphic(graphic) &&
+               RectTransformContainsGuiPoint(text.rectTransform, mousePosition);
     }
 
     private static bool IsSelectableVisibleGraphic(Graphic graphic)
