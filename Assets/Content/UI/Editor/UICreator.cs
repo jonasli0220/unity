@@ -77,10 +77,21 @@ public class UICreator
         return EditorPrefs.GetBool(SpriteDragEnabledEditorPrefKey, true);
     }
 
+    private static bool IsStructuralEditingAllowedInCurrentContext()
+    {
+        if (!EditorApplication.isPlayingOrWillChangePlaymode)
+        {
+            return true;
+        }
+
+        return EditorApplication.isPlaying &&
+               IsUIPrefabStage(PrefabStageUtility.GetCurrentPrefabStage());
+    }
+
     private static void HandleUIQuickCreateContextMenu(SceneView sceneView)
     {
         Event currentEvent = Event.current;
-        if (currentEvent == null || EditorApplication.isPlayingOrWillChangePlaymode)
+        if (currentEvent == null || !IsStructuralEditingAllowedInCurrentContext())
         {
             ResetRightClickState();
             return;
@@ -216,7 +227,7 @@ public class UICreator
 
     private static void BeginQuickCreatedTMPTextEdit(TMP_Text text)
     {
-        if (text == null || EditorApplication.isPlayingOrWillChangePlaymode)
+        if (text == null)
         {
             return;
         }
@@ -364,7 +375,7 @@ public class UICreator
     private static void HandleSpriteDragIntoUI(SceneView sceneView)
     {
         if (!IsSpriteDragToUIEnabled() ||
-            EditorApplication.isPlayingOrWillChangePlaymode)
+            !IsStructuralEditingAllowedInCurrentContext())
         {
             ClearSpriteDragPreview(sceneView);
             return;

@@ -705,8 +705,7 @@ internal static class DirectVisibleUISelection
     {
         if (pressedObject == null ||
             pressedObject == Selection.activeGameObject ||
-            Tools.current == Tool.View ||
-            EditorApplication.isPlaying)
+            Tools.current == Tool.View)
         {
             return false;
         }
