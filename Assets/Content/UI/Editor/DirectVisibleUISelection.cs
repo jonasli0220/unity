@@ -26,7 +26,9 @@ internal static class DirectVisibleUISelection
     private static bool isClickPending;
     private static bool isDragging;
     private static bool isDirectDragging;
+    private static bool isLayoutPreviewDrag;
     private static Vector2 mouseDownPosition;
+    private static Vector2 layoutPreviewMousePosition;
     private static GameObject pressedObject;
     private static GameObject hoveredObject;
     private static RectTransform draggedRectTransform;
@@ -185,6 +187,7 @@ internal static class DirectVisibleUISelection
                 break;
 
             case EventType.Repaint:
+                DrawLayoutDragPreview();
                 DrawHoverPreview();
                 break;
 
@@ -703,8 +706,13 @@ internal static class DirectVisibleUISelection
         Event currentEvent,
         int currentDirectDragControlId)
     {
+        RectTransform rectTransform =
+            pressedObject != null ? pressedObject.GetComponent<RectTransform>() : null;
+        bool useLayoutPreview = IsDrivenByParentLayout(rectTransform);
+
         if (pressedObject == null ||
-            pressedObject == Selection.activeGameObject ||
+            rectTransform == null ||
+            (pressedObject == Selection.activeGameObject && !useLayoutPreview) ||
             Tools.current == Tool.View)
         {
             return false;
@@ -714,13 +722,8 @@ internal static class DirectVisibleUISelection
         if (!IsUIPrefabStage(prefabStage) ||
             !IsEditableUIObjectInStage(pressedObject, prefabStage) ||
             !IsSceneVisibleAndPickable(pressedObject) ||
-            IsBlockedByActiveSceneControl(pressedObject, prefabStage))
-        {
-            return false;
-        }
-
-        RectTransform rectTransform = pressedObject.GetComponent<RectTransform>();
-        if (rectTransform == null)
+            (!useLayoutPreview &&
+             IsBlockedByActiveSceneControl(pressedObject, prefabStage)))
         {
             return false;
         }
@@ -732,12 +735,17 @@ internal static class DirectVisibleUISelection
             return false;
         }
 
-        Undo.IncrementCurrentGroup();
-        directDragUndoGroup = Undo.GetCurrentGroup();
-        Undo.SetCurrentGroupName("Move UI Element");
-        Undo.RecordObject(rectTransform, "Move UI Element");
+        if (!useLayoutPreview)
+        {
+            Undo.IncrementCurrentGroup();
+            directDragUndoGroup = Undo.GetCurrentGroup();
+            Undo.SetCurrentGroupName("Move UI Element");
+            Undo.RecordObject(rectTransform, "Move UI Element");
+        }
 
         draggedRectTransform = rectTransform;
+        isLayoutPreviewDrag = useLayoutPreview;
+        layoutPreviewMousePosition = currentEvent.mousePosition;
         directDragPlane = dragPlane;
         directDragStartPointerWorld = startPointerWorld;
         directDragStartObjectWorld = rectTransform.position;
@@ -754,9 +762,22 @@ internal static class DirectVisibleUISelection
 
     private static void UpdateDirectDrag(SceneView sceneView, Vector2 mousePosition)
     {
-        if (!isDirectDragging ||
-            draggedRectTransform == null ||
-            !TryGetWorldPointOnPlane(directDragPlane, mousePosition, out Vector3 pointerWorld))
+        if (!isDirectDragging || draggedRectTransform == null)
+        {
+            return;
+        }
+
+        if (isLayoutPreviewDrag)
+        {
+            layoutPreviewMousePosition = mousePosition;
+            sceneView.Repaint();
+            return;
+        }
+
+        if (!TryGetWorldPointOnPlane(
+                directDragPlane,
+                mousePosition,
+                out Vector3 pointerWorld))
         {
             return;
         }
@@ -826,9 +847,95 @@ internal static class DirectVisibleUISelection
     private static void ClearDirectDragState()
     {
         isDirectDragging = false;
+        isLayoutPreviewDrag = false;
         draggedRectTransform = null;
         directDragControlId = 0;
         directDragUndoGroup = -1;
+    }
+
+    private static bool IsDrivenByParentLayout(RectTransform rectTransform)
+    {
+        if (rectTransform == null || rectTransform.parent == null)
+        {
+            return false;
+        }
+
+        LayoutGroup parentLayout =
+            rectTransform.parent.GetComponent<LayoutGroup>();
+        if (parentLayout == null || !parentLayout.isActiveAndEnabled)
+        {
+            return false;
+        }
+
+        Component[] components = rectTransform.GetComponents<Component>();
+        for (int i = 0; i < components.Length; i++)
+        {
+            ILayoutIgnorer layoutIgnorer = components[i] as ILayoutIgnorer;
+            if (layoutIgnorer == null || !layoutIgnorer.ignoreLayout)
+            {
+                continue;
+            }
+
+            Behaviour behaviour = components[i] as Behaviour;
+            if (behaviour == null || behaviour.isActiveAndEnabled)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static void DrawLayoutDragPreview()
+    {
+        if (!isDirectDragging ||
+            !isLayoutPreviewDrag ||
+            draggedRectTransform == null)
+        {
+            return;
+        }
+
+        Vector3[] worldCorners = new Vector3[4];
+        draggedRectTransform.GetWorldCorners(worldCorners);
+        Vector2 mouseDelta = layoutPreviewMousePosition - mouseDownPosition;
+        Vector3[] guiCorners = new Vector3[4];
+        for (int i = 0; i < worldCorners.Length; i++)
+        {
+            guiCorners[i] =
+                HandleUtility.WorldToGUIPoint(worldCorners[i]) +
+                mouseDelta;
+        }
+
+        Vector3[] outlinePoints =
+        {
+            guiCorners[0],
+            guiCorners[1],
+            guiCorners[2],
+            guiCorners[3],
+            guiCorners[0]
+        };
+
+        Color previousColor = Handles.color;
+        Handles.BeginGUI();
+        try
+        {
+            Handles.color = new Color(0.2f, 0.75f, 1f, 0.12f);
+            Handles.DrawAAConvexPolygon(guiCorners);
+            Handles.color = HoverOutlineColor;
+            Handles.DrawAAPolyLine(2f, outlinePoints);
+
+            Vector2 labelPosition =
+                (Vector2)guiCorners[1] + new Vector2(4f, -20f);
+            GUI.Label(
+                new Rect(labelPosition.x, labelPosition.y, 220f, 18f),
+                "Layout 控制：松开后恢复原位",
+                EditorStyles.miniLabel);
+        }
+        finally
+        {
+            Handles.color = previousColor;
+            Handles.EndGUI();
+        }
     }
 
     private static bool TryGetWorldPointOnPlane(
