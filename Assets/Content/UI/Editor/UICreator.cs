@@ -37,6 +37,8 @@ public class UICreator
     private static RectTransform dragPreviewParent;
     private static Vector2 dragPreviewMousePosition;
     private static string dragPreviewExternalPathKey;
+    private static Image dragPreviewReplacementTarget;
+    private static bool isDragPreviewReplacement;
     private static bool isDragPreviewActive;
     private static bool isRightClickPending;
     private static bool isRightClickDragging;
@@ -415,27 +417,58 @@ public class UICreator
             return;
         }
 
-        RectTransform parent = ResolveSpriteDropParent();
-        if (parent == null)
-        {
-            ClearSpriteDragPreview(sceneView);
-            return;
-        }
-
         List<string> externalImagePaths = new List<string>();
         bool isExternalImageDrag = TryGetExternalImagePaths(externalImagePaths);
         List<Sprite> sprites = new List<Sprite>();
+        PrefabStage prefabStage = PrefabStageUtility.GetCurrentPrefabStage();
 
         if (isExternalImageDrag)
         {
-            PrefabStage prefabStage = PrefabStageUtility.GetCurrentPrefabStage();
             if (!IsUIPrefabStage(prefabStage))
             {
                 ClearSpriteDragPreview(sceneView);
                 return;
             }
+
+            Image replacementTarget = externalImagePaths.Count == 1
+                ? ResolveSelectedImageReplacementTarget(prefabStage)
+                : null;
+            if (replacementTarget != null)
+            {
+                EventType replacementEventType = currentEvent.type;
+                DragAndDrop.visualMode = DragAndDropVisualMode.Copy;
+
+                if (replacementEventType != EventType.DragPerform)
+                {
+                    UpdateExternalImageReplacementPreview(
+                        sceneView,
+                        replacementTarget,
+                        externalImagePaths[0],
+                        currentEvent.mousePosition);
+                    currentEvent.Use();
+                    return;
+                }
+
+                ClearSpriteDragPreview(sceneView);
+                DragAndDrop.AcceptDrag();
+                sprites = ImportExternalImagesForCurrentPrefab(externalImagePaths);
+                if (sprites.Count > 0)
+                {
+                    ReplaceSelectedImageSprite(replacementTarget, sprites[0]);
+                }
+
+                currentEvent.Use();
+                return;
+            }
         }
         else if (!TryGetDraggedSprites(sprites))
+        {
+            ClearSpriteDragPreview(sceneView);
+            return;
+        }
+
+        RectTransform parent = ResolveSpriteDropParent();
+        if (parent == null)
         {
             ClearSpriteDragPreview(sceneView);
             return;
@@ -503,6 +536,8 @@ public class UICreator
         DragPreviewSprites.AddRange(sprites);
         dragPreviewParent = parent;
         dragPreviewMousePosition = mousePosition;
+        dragPreviewReplacementTarget = null;
+        isDragPreviewReplacement = false;
         isDragPreviewActive = true;
         sceneView.Repaint();
     }
@@ -542,6 +577,25 @@ public class UICreator
 
         dragPreviewParent = parent;
         dragPreviewMousePosition = mousePosition;
+        dragPreviewReplacementTarget = null;
+        isDragPreviewReplacement = false;
+        isDragPreviewActive = true;
+        sceneView.Repaint();
+    }
+
+    private static void UpdateExternalImageReplacementPreview(
+        SceneView sceneView,
+        Image replacementTarget,
+        string externalImagePath,
+        Vector2 mousePosition)
+    {
+        DestroyDragPreviewTemporaryObjects();
+        DragPreviewSprites.Clear();
+        dragPreviewParent = null;
+        dragPreviewExternalPathKey = externalImagePath;
+        dragPreviewReplacementTarget = replacementTarget;
+        dragPreviewMousePosition = mousePosition;
+        isDragPreviewReplacement = true;
         isDragPreviewActive = true;
         sceneView.Repaint();
     }
@@ -602,6 +656,8 @@ public class UICreator
         DragPreviewSprites.Clear();
         dragPreviewParent = null;
         dragPreviewExternalPathKey = null;
+        dragPreviewReplacementTarget = null;
+        isDragPreviewReplacement = false;
         isDragPreviewActive = false;
 
         if (shouldRepaint && sceneView != null)
@@ -612,7 +668,18 @@ public class UICreator
 
     private static void DrawSpriteDragPreview()
     {
-        if (!isDragPreviewActive || dragPreviewParent == null || DragPreviewSprites.Count == 0)
+        if (!isDragPreviewActive)
+        {
+            return;
+        }
+
+        if (isDragPreviewReplacement)
+        {
+            DrawExternalImageReplacementFeedback();
+            return;
+        }
+
+        if (dragPreviewParent == null || DragPreviewSprites.Count == 0)
         {
             return;
         }
@@ -641,6 +708,47 @@ public class UICreator
             horizontalOffset += nativeSize.x + MultiSpriteSpacing;
         }
 
+        GUI.color = previousColor;
+        Handles.EndGUI();
+    }
+
+    private static void DrawExternalImageReplacementFeedback()
+    {
+        if (dragPreviewReplacementTarget == null)
+        {
+            return;
+        }
+
+        RectTransform targetRect = dragPreviewReplacementTarget.rectTransform;
+        Vector3[] worldCorners = new Vector3[4];
+        targetRect.GetWorldCorners(worldCorners);
+
+        Handles.color = new Color(1f, 0.72f, 0.12f, 1f);
+        Handles.DrawAAPolyLine(
+            3f,
+            worldCorners[0],
+            worldCorners[1],
+            worldCorners[2],
+            worldCorners[3],
+            worldCorners[0]);
+
+        Handles.BeginGUI();
+        GUIStyle labelStyle = new GUIStyle(EditorStyles.helpBox);
+        labelStyle.alignment = TextAnchor.MiddleCenter;
+        labelStyle.fontStyle = FontStyle.Bold;
+        labelStyle.normal.textColor = Color.white;
+
+        GUIContent label = new GUIContent("松手替换");
+        Vector2 labelSize = labelStyle.CalcSize(label);
+        Rect labelRect = new Rect(
+            dragPreviewMousePosition.x + 16f,
+            dragPreviewMousePosition.y + 18f,
+            labelSize.x + 18f,
+            labelSize.y + 8f);
+
+        Color previousColor = GUI.color;
+        GUI.color = new Color(1f, 0.64f, 0.08f, 0.96f);
+        GUI.Box(labelRect, label, labelStyle);
         GUI.color = previousColor;
         Handles.EndGUI();
     }
@@ -754,6 +862,57 @@ public class UICreator
         }
 
         return externalImagePaths.Count > 0;
+    }
+
+    private static Image ResolveSelectedImageReplacementTarget(PrefabStage prefabStage)
+    {
+        GameObject selectedObject = Selection.activeGameObject;
+        if (selectedObject == null || !IsUIPrefabStage(prefabStage))
+        {
+            return null;
+        }
+
+        Image selectedImage = selectedObject.GetComponent<Image>();
+        if (selectedImage == null
+            || selectedImage.rectTransform == null
+            || !IsInsidePrefabStage(selectedImage.rectTransform, prefabStage))
+        {
+            return null;
+        }
+
+        return selectedImage;
+    }
+
+    private static void ReplaceSelectedImageSprite(Image targetImage, Sprite replacementSprite)
+    {
+        if (targetImage == null || replacementSprite == null)
+        {
+            return;
+        }
+
+        RectTransform targetRect = targetImage.rectTransform;
+        const string undoName = "Replace UI Image From External File";
+
+        Undo.IncrementCurrentGroup();
+        int undoGroup = Undo.GetCurrentGroup();
+        Undo.SetCurrentGroupName(undoName);
+        Undo.RecordObjects(
+            new UnityEngine.Object[] { targetImage, targetRect },
+            undoName);
+
+        targetImage.overrideSprite = null;
+        targetImage.sprite = replacementSprite;
+        targetImage.SetNativeSize();
+
+        EditorUtility.SetDirty(targetImage);
+        EditorUtility.SetDirty(targetRect);
+        PrefabUtility.RecordPrefabInstancePropertyModifications(targetImage);
+        PrefabUtility.RecordPrefabInstancePropertyModifications(targetRect);
+        EditorSceneManager.MarkSceneDirty(targetImage.gameObject.scene);
+        Undo.CollapseUndoOperations(undoGroup);
+
+        Selection.activeGameObject = targetImage.gameObject;
+        SceneView.RepaintAll();
     }
 
     private static List<Sprite> ImportExternalImagesForCurrentPrefab(
