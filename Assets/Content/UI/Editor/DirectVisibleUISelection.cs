@@ -707,7 +707,8 @@ internal static class DirectVisibleUISelection
         if (pressedObject == null ||
             rectTransform == null ||
             (pressedObject == Selection.activeGameObject && !useLayoutPreview) ||
-            Tools.current == Tool.View)
+            Tools.current == Tool.View ||
+            IsAnotherSceneControlActive(currentDirectDragControlId))
         {
             return false;
         }
@@ -752,6 +753,12 @@ internal static class DirectVisibleUISelection
         EditorApplication.RepaintHierarchyWindow();
         sceneView.Repaint();
         return true;
+    }
+
+    private static bool IsAnotherSceneControlActive(int directDragControlId)
+    {
+        int hotControl = GUIUtility.hotControl;
+        return hotControl != 0 && hotControl != directDragControlId;
     }
 
     private static void UpdateDirectDrag(SceneView sceneView, Vector2 mousePosition)
