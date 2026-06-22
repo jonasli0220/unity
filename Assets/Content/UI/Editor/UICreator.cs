@@ -890,24 +890,18 @@ public class UICreator
             return;
         }
 
-        RectTransform targetRect = targetImage.rectTransform;
         const string undoName = "Replace UI Image From External File";
 
         Undo.IncrementCurrentGroup();
         int undoGroup = Undo.GetCurrentGroup();
         Undo.SetCurrentGroupName(undoName);
-        Undo.RecordObjects(
-            new UnityEngine.Object[] { targetImage, targetRect },
-            undoName);
+        Undo.RecordObject(targetImage, undoName);
 
         targetImage.overrideSprite = null;
         targetImage.sprite = replacementSprite;
-        targetImage.SetNativeSize();
 
         EditorUtility.SetDirty(targetImage);
-        EditorUtility.SetDirty(targetRect);
         PrefabUtility.RecordPrefabInstancePropertyModifications(targetImage);
-        PrefabUtility.RecordPrefabInstancePropertyModifications(targetRect);
         EditorSceneManager.MarkSceneDirty(targetImage.gameObject.scene);
         Undo.CollapseUndoOperations(undoGroup);
 
