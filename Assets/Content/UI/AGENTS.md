@@ -168,7 +168,11 @@ This is not intended to be pixel-perfect runtime parity. The practical target is
 - Only intercept a real Project asset drag: `DragAndDrop.paths` must contain at least one valid asset path in addition to Sprite object references. Never consume editor dock resizing, Hierarchy object dragging, or other drags that have no Project asset path.
 - Preserve the Scene-view drop position and support Undo. Multiple dragged Sprites are placed with a small horizontal offset so they remain individually selectable.
 - Scene and Prefab Stage object creation must follow Unity's editor-safe structural Undo pattern: create through `ObjectFactory`, parent through `Undo.SetTransformParent`, then register the final parent hierarchy state. Do not register a Scene-root object and later reparent it with direct `Transform.SetParent`; Unity 2021.3 can corrupt structural Undo and crash on Ctrl+Z.
-- Do not intercept Sprite dragging while the toggle is disabled, in play mode, or when no valid Canvas/UI parent can be resolved.
+- When supported image files are dragged from the operating-system file explorer into an open UI Prefab Stage, import copies into the lowercase `resource` folder beside that prefab's module assets. For example, a prefab at `Assets/Content/UI/Prefab/event_support/a_event_support_pk.prefab` imports into `Assets/Content/UI/Prefab/event_support/resource/`.
+- External image import must preserve the source file, generate a unique Unity asset path on name collisions, configure the imported texture as a single Sprite with transparency and mipmaps disabled, then create the same native-size `SgrImage` used by Project-window Sprite dragging.
+- Do not intercept external image dragging in an ordinary Scene because there is no unambiguous prefab-local `resource` destination. Imported assets remain after UI-node Undo; Undo only removes the created hierarchy nodes.
+- During Play Mode, allow Sprite drag-to-UI only inside an open UI Prefab Stage, where changes are written to the prefab editing scene and can be saved. Keep ordinary runtime scenes protected because objects created there disappear when Play Mode ends.
+- Do not intercept Sprite dragging while the toggle is disabled, during a Play Mode transition, or when no valid Canvas/UI parent can be resolved.
 
 ## Scene UI Quick-Create Convention
 
@@ -179,21 +183,28 @@ This is not intended to be pixel-perfect runtime parity. The practical target is
 - Resolve and freeze the Scene cursor's world position before opening `GenericMenu`. Menu callbacks run after the original Scene GUI event has ended, so they must not call `HandleUtility.GUIPointToWorldRay` using the stale GUI mouse position.
 - Project text creation uses `MultiLanguageTMPText`, disables `Raycast Target`, and assigns the default UI TMP font at `Assets/Content/UI/Mutilanguage/zh-Hans/TMP_Font/uifont.asset`.
 - After creating TMP text from the Scene-view quick-create menu, start the same inline text editor on the next Editor frame with the default text fully selected, so the user can type the final copy immediately.
+- Allow the Scene-view quick-create menu and its structural creation actions during Play Mode only while a UI Prefab Stage is open. Do not expose them during the transition into or out of Play Mode.
 - Keep the first-level menu focused on frequent composition tasks: TMP text, `SgrImage`, empty `RectTransform`, and `EmptyRaycast`.
 - Do not show or intercept the quick-create menu in ordinary scenes, non-UI prefabs, play mode, or prefabs outside `Assets/Content/UI/Prefab`.
 
 ## Direct Visible UI Selection Convention
 
 - In a UI Prefab Stage, hovering a visible `Graphic` highlights the topmost selectable UI layer under the Scene-view cursor.
+- Respect Unity Hierarchy scene visibility and picking controls. If a UI object or any ancestor is hidden with the eye icon or has Scene picking disabled, exclude its entire subtree from hover highlighting, click selection, direct dragging, and inline TMP editing.
 - A short left click selects the highlighted layer directly.
 - Left-dragging a highlighted layer that is not already selected should select and move it in the same gesture; the user must not need a separate selection click first.
 - Direct hover-drag must preserve Undo, Prefab Stage dirty state, nested-prefab property modifications, and the target's existing RectTransform relationship.
+- If a direct child is actively controlled by a parent `LayoutGroup` and is not excluded through `ILayoutIgnorer.ignoreLayout`, treat direct dragging as a non-destructive preview. Show a translated ghost rectangle with the compact hint `Layout控制` while the pointer is held, including when the node is already selected; do not write RectTransform or Layout properties, and remove the preview on mouse-up or `Esc` so the node remains at its layout-computed position.
+- Never start direct dragging or Layout drag preview while a Unity Scene control already owns the mouse. Rect Tool resize, edge, corner, pivot, rotation, and other active handles must keep exclusive control and must not drag a visible layer behind the edited RectTransform.
 - When the highlighted layer is already selected, leave dragging, resizing handles, snapping, and other transform-tool behavior to Unity's native Scene-view controls.
 - Double-clicking a highlighted `TextMeshProUGUI` or project `MultiLanguageTMPText` should open a temporary Scene-view inline text editor over the text bounds without adding runtime components to the prefab.
+- Resolve a double-click text target independently from generic Graphic selection: prefer the currently selected visible TMP under the cursor, then choose among visible TMP components under the cursor. Outer Images or nested-prefab roots must not steal the second click.
+- Allow inline TMP editing, direct RectTransform dragging, Scene quick-create, and Sprite drag-to-UI while a UI Prefab Stage is open during Play Mode; this workflow is used for live UI preview. Ordinary runtime scenes remain protected from structural creation because those changes are discarded when Play Mode ends.
 - Inline TMP editing selects the complete existing text by default, so typing immediately replaces it. It updates the visible text live; clicking outside or pressing `Ctrl+Enter` commits, while `Esc` cancels and restores the original text. The whole edit session must remain a single Undo step.
+- Keep the inline TMP editor visually minimal; do not render persistent shortcut instructions beneath the input box.
 - `Ctrl+Z` during an active inline TMP edit cancels that edit and restores the original text. After the edit is committed, Unity's normal `Ctrl+Z` must also restore the pre-edit text in one step; record a complete TMP object snapshot and flush it before collapsing the Undo group.
 - Inline TMP editing changes only the TMP text content. It must not silently change localization IDs, font assets, layout settings, or RectTransform data.
-- Do not intercept modified clicks, the View tool, play mode, non-UI Prefab Stages, or another active Scene-view control.
+- Do not intercept modified clicks, the View tool, non-UI Prefab Stages, or another active Scene-view control.
 
 ## Useful Next Checks
 

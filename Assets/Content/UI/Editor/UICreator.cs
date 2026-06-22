@@ -7,6 +7,7 @@ using UnityEditor.UI;
 using UnityEditor.SceneManagement;
 using UnityEngine.SceneManagement;
 using System;
+using System.IO;
 using System.Reflection;
 using TMPro;
 using TMPro.EditorUtilities;
@@ -24,8 +25,18 @@ public class UICreator
         "Assets/Content/UI/Mutilanguage/zh-Hans/TMP_Font/uifont.asset";
 
     private static readonly List<Sprite> DragPreviewSprites = new List<Sprite>();
+    private static readonly List<UnityEngine.Object> DragPreviewTemporaryObjects =
+        new List<UnityEngine.Object>();
+    private static readonly HashSet<string> SupportedExternalImageExtensions =
+        new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ".png",
+            ".jpg",
+            ".jpeg"
+        };
     private static RectTransform dragPreviewParent;
     private static Vector2 dragPreviewMousePosition;
+    private static string dragPreviewExternalPathKey;
     private static bool isDragPreviewActive;
     private static bool isRightClickPending;
     private static bool isRightClickDragging;
@@ -404,15 +415,27 @@ public class UICreator
             return;
         }
 
-        List<Sprite> sprites = new List<Sprite>();
-        if (!TryGetDraggedSprites(sprites))
+        RectTransform parent = ResolveSpriteDropParent();
+        if (parent == null)
         {
             ClearSpriteDragPreview(sceneView);
             return;
         }
 
-        RectTransform parent = ResolveSpriteDropParent();
-        if (parent == null)
+        List<string> externalImagePaths = new List<string>();
+        bool isExternalImageDrag = TryGetExternalImagePaths(externalImagePaths);
+        List<Sprite> sprites = new List<Sprite>();
+
+        if (isExternalImageDrag)
+        {
+            PrefabStage prefabStage = PrefabStageUtility.GetCurrentPrefabStage();
+            if (!IsUIPrefabStage(prefabStage))
+            {
+                ClearSpriteDragPreview(sceneView);
+                return;
+            }
+        }
+        else if (!TryGetDraggedSprites(sprites))
         {
             ClearSpriteDragPreview(sceneView);
             return;
@@ -423,13 +446,36 @@ public class UICreator
 
         if (eventType != EventType.DragPerform)
         {
-            UpdateSpriteDragPreview(sceneView, parent, sprites, currentEvent.mousePosition);
+            if (isExternalImageDrag)
+            {
+                UpdateExternalImageDragPreview(
+                    sceneView,
+                    parent,
+                    externalImagePaths,
+                    currentEvent.mousePosition);
+            }
+            else
+            {
+                UpdateSpriteDragPreview(sceneView, parent, sprites, currentEvent.mousePosition);
+            }
+
             currentEvent.Use();
             return;
         }
 
         ClearSpriteDragPreview(sceneView);
         DragAndDrop.AcceptDrag();
+
+        if (isExternalImageDrag)
+        {
+            sprites = ImportExternalImagesForCurrentPrefab(externalImagePaths);
+            if (sprites.Count == 0)
+            {
+                currentEvent.Use();
+                return;
+            }
+        }
+
         CreateDraggedSgrImages(parent, sprites, currentEvent.mousePosition);
         currentEvent.Use();
     }
@@ -451,6 +497,8 @@ public class UICreator
         List<Sprite> sprites,
         Vector2 mousePosition)
     {
+        DestroyDragPreviewTemporaryObjects();
+        dragPreviewExternalPathKey = null;
         DragPreviewSprites.Clear();
         DragPreviewSprites.AddRange(sprites);
         dragPreviewParent = parent;
@@ -459,18 +507,104 @@ public class UICreator
         sceneView.Repaint();
     }
 
-    private static void ClearSpriteDragPreview(SceneView sceneView)
+    private static void UpdateExternalImageDragPreview(
+        SceneView sceneView,
+        RectTransform parent,
+        List<string> externalImagePaths,
+        Vector2 mousePosition)
     {
-        if (!isDragPreviewActive)
+        string pathKey = string.Join("\n", externalImagePaths.ToArray());
+        if (!string.Equals(
+                dragPreviewExternalPathKey,
+                pathKey,
+                StringComparison.OrdinalIgnoreCase))
         {
+            DestroyDragPreviewTemporaryObjects();
+            DragPreviewSprites.Clear();
+
+            for (int i = 0; i < externalImagePaths.Count; i++)
+            {
+                Sprite previewSprite = CreateExternalImagePreviewSprite(externalImagePaths[i]);
+                if (previewSprite != null)
+                {
+                    DragPreviewSprites.Add(previewSprite);
+                }
+            }
+
+            dragPreviewExternalPathKey = pathKey;
+        }
+
+        if (DragPreviewSprites.Count == 0)
+        {
+            ClearSpriteDragPreview(sceneView);
             return;
         }
 
+        dragPreviewParent = parent;
+        dragPreviewMousePosition = mousePosition;
+        isDragPreviewActive = true;
+        sceneView.Repaint();
+    }
+
+    private static Sprite CreateExternalImagePreviewSprite(string externalPath)
+    {
+        try
+        {
+            byte[] imageBytes = File.ReadAllBytes(externalPath);
+            Texture2D texture = new Texture2D(2, 2, TextureFormat.RGBA32, false);
+            texture.hideFlags = HideFlags.HideAndDontSave;
+
+            if (!texture.LoadImage(imageBytes, true))
+            {
+                UnityEngine.Object.DestroyImmediate(texture);
+                return null;
+            }
+
+            texture.name = Path.GetFileNameWithoutExtension(externalPath);
+            Sprite sprite = Sprite.Create(
+                texture,
+                new Rect(0f, 0f, texture.width, texture.height),
+                new Vector2(0.5f, 0.5f),
+                100f);
+            sprite.name = texture.name;
+            sprite.hideFlags = HideFlags.HideAndDontSave;
+
+            DragPreviewTemporaryObjects.Add(sprite);
+            DragPreviewTemporaryObjects.Add(texture);
+            return sprite;
+        }
+        catch (Exception exception)
+        {
+            Debug.LogWarning(
+                "Unable to preview external UI image: " + externalPath + "\n" + exception.Message);
+            return null;
+        }
+    }
+
+    private static void DestroyDragPreviewTemporaryObjects()
+    {
+        for (int i = 0; i < DragPreviewTemporaryObjects.Count; i++)
+        {
+            UnityEngine.Object temporaryObject = DragPreviewTemporaryObjects[i];
+            if (temporaryObject != null)
+            {
+                UnityEngine.Object.DestroyImmediate(temporaryObject);
+            }
+        }
+
+        DragPreviewTemporaryObjects.Clear();
+    }
+
+    private static void ClearSpriteDragPreview(SceneView sceneView)
+    {
+        bool shouldRepaint = isDragPreviewActive;
+        DestroyDragPreviewTemporaryObjects();
         DragPreviewSprites.Clear();
         dragPreviewParent = null;
+        dragPreviewExternalPathKey = null;
         isDragPreviewActive = false;
 
-        if (sceneView != null)
+        if (shouldRepaint && sceneView != null)
         {
             sceneView.Repaint();
         }
@@ -593,6 +727,152 @@ public class UICreator
         }
 
         return prefabStage.prefabContentsRoot.GetComponentInChildren<Canvas>(true) != null;
+    }
+
+    private static bool TryGetExternalImagePaths(List<string> externalImagePaths)
+    {
+        string[] draggedPaths = DragAndDrop.paths;
+        if (draggedPaths == null || draggedPaths.Length == 0)
+        {
+            return false;
+        }
+
+        for (int i = 0; i < draggedPaths.Length; i++)
+        {
+            string draggedPath = draggedPaths[i];
+            if (string.IsNullOrEmpty(draggedPath)
+                || draggedPath.StartsWith("Assets/", StringComparison.OrdinalIgnoreCase)
+                || !Path.IsPathRooted(draggedPath)
+                || !File.Exists(draggedPath)
+                || !SupportedExternalImageExtensions.Contains(Path.GetExtension(draggedPath)))
+            {
+                externalImagePaths.Clear();
+                return false;
+            }
+
+            externalImagePaths.Add(Path.GetFullPath(draggedPath));
+        }
+
+        return externalImagePaths.Count > 0;
+    }
+
+    private static List<Sprite> ImportExternalImagesForCurrentPrefab(
+        List<string> externalImagePaths)
+    {
+        List<Sprite> importedSprites = new List<Sprite>();
+        PrefabStage prefabStage = PrefabStageUtility.GetCurrentPrefabStage();
+        string targetFolder = GetCurrentPrefabResourceFolder(prefabStage);
+        if (string.IsNullOrEmpty(targetFolder))
+        {
+            return importedSprites;
+        }
+
+        EnsureAssetFolderExists(targetFolder);
+        if (!AssetDatabase.IsValidFolder(targetFolder))
+        {
+            Debug.LogError("Unable to create UI resource folder: " + targetFolder);
+            return importedSprites;
+        }
+
+        for (int i = 0; i < externalImagePaths.Count; i++)
+        {
+            string externalPath = externalImagePaths[i];
+            try
+            {
+                string fileName = Path.GetFileName(externalPath);
+                string requestedAssetPath = targetFolder + "/" + fileName;
+                string assetPath = AssetDatabase.GenerateUniqueAssetPath(requestedAssetPath);
+                string absoluteAssetPath = AssetPathToAbsolutePath(assetPath);
+
+                File.Copy(externalPath, absoluteAssetPath, false);
+                AssetDatabase.ImportAsset(
+                    assetPath,
+                    ImportAssetOptions.ForceSynchronousImport);
+                ConfigureImportedSprite(assetPath);
+
+                Sprite sprite = AssetDatabase.LoadAssetAtPath<Sprite>(assetPath);
+                if (sprite == null)
+                {
+                    Debug.LogError("Imported image is not a Sprite: " + assetPath);
+                    continue;
+                }
+
+                importedSprites.Add(sprite);
+            }
+            catch (Exception exception)
+            {
+                Debug.LogError(
+                    "Unable to import external UI image: " + externalPath + "\n" + exception);
+            }
+        }
+
+        AssetDatabase.SaveAssets();
+        AssetDatabase.Refresh();
+        return importedSprites;
+    }
+
+    private static string GetCurrentPrefabResourceFolder(PrefabStage prefabStage)
+    {
+        if (!IsUIPrefabStage(prefabStage))
+        {
+            return null;
+        }
+
+        string prefabDirectory = Path.GetDirectoryName(prefabStage.assetPath);
+        if (string.IsNullOrEmpty(prefabDirectory))
+        {
+            return null;
+        }
+
+        return prefabDirectory.Replace('\\', '/') + "/resource";
+    }
+
+    private static void EnsureAssetFolderExists(string assetFolder)
+    {
+        if (AssetDatabase.IsValidFolder(assetFolder))
+        {
+            return;
+        }
+
+        string parentFolder = Path.GetDirectoryName(assetFolder);
+        string folderName = Path.GetFileName(assetFolder);
+        if (string.IsNullOrEmpty(parentFolder) || string.IsNullOrEmpty(folderName))
+        {
+            return;
+        }
+
+        parentFolder = parentFolder.Replace('\\', '/');
+        if (!AssetDatabase.IsValidFolder(parentFolder))
+        {
+            EnsureAssetFolderExists(parentFolder);
+        }
+
+        if (AssetDatabase.IsValidFolder(parentFolder))
+        {
+            AssetDatabase.CreateFolder(parentFolder, folderName);
+        }
+    }
+
+    private static void ConfigureImportedSprite(string assetPath)
+    {
+        TextureImporter importer = AssetImporter.GetAtPath(assetPath) as TextureImporter;
+        if (importer == null)
+        {
+            return;
+        }
+
+        importer.textureType = TextureImporterType.Sprite;
+        importer.spriteImportMode = SpriteImportMode.Single;
+        importer.spritePixelsPerUnit = 100f;
+        importer.alphaIsTransparency = true;
+        importer.mipmapEnabled = false;
+        importer.SaveAndReimport();
+    }
+
+    private static string AssetPathToAbsolutePath(string assetPath)
+    {
+        string projectRoot = Path.GetDirectoryName(Application.dataPath);
+        return Path.GetFullPath(Path.Combine(projectRoot, assetPath));
     }
 
     private static bool TryGetDraggedSprites(List<Sprite> sprites)
