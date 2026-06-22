@@ -758,7 +758,9 @@ internal static class DirectVisibleUISelection
     private static bool IsAnotherSceneControlActive(int directDragControlId)
     {
         int hotControl = GUIUtility.hotControl;
-        return hotControl != 0 && hotControl != directDragControlId;
+        return hotControl != 0 &&
+               hotControl != directDragControlId &&
+               !IsDefaultSceneSelectionControlActive();
     }
 
     private static void UpdateDirectDrag(SceneView sceneView, Vector2 mousePosition)
@@ -1326,9 +1328,21 @@ internal static class DirectVisibleUISelection
 
     private static bool IsUIPrefabStage(PrefabStage prefabStage)
     {
-        return prefabStage != null &&
-               prefabStage.prefabContentsRoot != null &&
-               prefabStage.prefabContentsRoot.GetComponentInChildren<Canvas>(true) != null;
+        if (prefabStage == null || prefabStage.prefabContentsRoot == null)
+        {
+            return false;
+        }
+
+        GameObject prefabRoot = prefabStage.prefabContentsRoot;
+        if (prefabRoot.GetComponentInChildren<Canvas>(true) != null)
+        {
+            return true;
+        }
+
+        // UI component prefabs are previewed under Unity's Canvas (Environment),
+        // which is outside prefabContentsRoot and must not disqualify the stage.
+        return prefabRoot.GetComponentInChildren<RectTransform>(true) != null &&
+               prefabRoot.GetComponentInChildren<Graphic>(true) != null;
     }
 
     private static bool IsEditableUIObjectInStage(GameObject pickedObject, PrefabStage prefabStage)
