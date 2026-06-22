@@ -927,8 +927,8 @@ internal static class DirectVisibleUISelection
             Vector2 labelPosition =
                 (Vector2)guiCorners[1] + new Vector2(4f, -20f);
             GUI.Label(
-                new Rect(labelPosition.x, labelPosition.y, 220f, 18f),
-                "Layout 控制：松开后恢复原位",
+                new Rect(labelPosition.x, labelPosition.y, 80f, 18f),
+                "松开复位",
                 EditorStyles.miniLabel);
         }
         finally
