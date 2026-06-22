@@ -619,7 +619,9 @@ public class UICreator
                 texture,
                 new Rect(0f, 0f, texture.width, texture.height),
                 new Vector2(0.5f, 0.5f),
-                100f);
+                100f,
+                0u,
+                SpriteMeshType.FullRect);
             sprite.name = texture.name;
             sprite.hideFlags = HideFlags.HideAndDontSave;
 
@@ -815,7 +817,23 @@ public class UICreator
             textureRect.width / texture.width,
             textureRect.height / texture.height);
 
-        GUI.DrawTextureWithTexCoords(guiRect, texture, textureCoordinates, true);
+        Vector2 textureRectOffset = sprite.textureRectOffset;
+        Vector2 spriteRectSize = sprite.rect.size;
+        if (spriteRectSize.x <= 0f || spriteRectSize.y <= 0f)
+        {
+            return;
+        }
+
+        float scaleX = guiRect.width / spriteRectSize.x;
+        float scaleY = guiRect.height / spriteRectSize.y;
+        Rect visibleGuiRect = new Rect(
+            guiRect.x + textureRectOffset.x * scaleX,
+            guiRect.y
+                + (spriteRectSize.y - textureRectOffset.y - textureRect.height) * scaleY,
+            textureRect.width * scaleX,
+            textureRect.height * scaleY);
+
+        GUI.DrawTextureWithTexCoords(visibleGuiRect, texture, textureCoordinates, true);
     }
 
     private static bool IsUIPrefabStage(PrefabStage prefabStage)
