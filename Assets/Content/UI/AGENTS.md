@@ -147,6 +147,7 @@ This is not intended to be pixel-perfect runtime parity. The practical target is
 ## Development Conventions
 
 - All newly created Unity C# scripts for this UI workspace must be placed under `Assets/Content/UI/Editor`; create a clearly named subdirectory there when a tool contains multiple files.
+- `UICreator` has one active implementation at `Assets/Content/UI/Editor/UICreator.cs`. The SVN-managed legacy file at `Assets/Scripts/SgrProject/UI/Editor/UITools/UICreator.cs` is retained as a compile-disabled compatibility shell because deleting it causes SVN/update workflows to restore a second `UICreator` after restart. Never enable both implementations or define another global `UICreator` class.
 - Because Unity compiles everything under an `Editor` directory into an editor-only assembly, do not create runtime/player scripts without first updating this convention and agreeing on a runtime script location.
 - Prefer small, local edits inside `Assets/Content/UI/Editor/FigmaBridge`.
 - Do not move Figma Bridge docs to project root. Put detailed tool docs in `Editor/FigmaBridge/README.md`; use this `AGENTS.md` only as startup context.
@@ -194,12 +195,14 @@ This is not intended to be pixel-perfect runtime parity. The practical target is
 ## Direct Visible UI Selection Convention
 
 - In a UI Prefab Stage, hovering a visible `Graphic` highlights the topmost selectable UI layer under the Scene-view cursor.
+- Treat component prefabs that contain `RectTransform` and `Graphic` nodes as UI Prefab Stages even when the prefab itself has no `Canvas` and relies on Unity's `Canvas (Environment)` for preview.
 - Respect Unity Hierarchy scene visibility and picking controls. If a UI object or any ancestor is hidden with the eye icon or has Scene picking disabled, exclude its entire subtree from hover highlighting, click selection, direct dragging, and inline TMP editing.
 - A short left click selects the highlighted layer directly.
 - Left-dragging a highlighted layer that is not already selected should select and move it in the same gesture; the user must not need a separate selection click first.
 - Direct hover-drag must preserve Undo, Prefab Stage dirty state, nested-prefab property modifications, and the target's existing RectTransform relationship.
 - If a direct child is actively controlled by a parent `LayoutGroup` and is not excluded through `ILayoutIgnorer.ignoreLayout`, treat direct dragging as a non-destructive preview. Show a translated ghost rectangle with the compact hint `Layout控制` while the pointer is held, including when the node is already selected; do not write RectTransform or Layout properties, and remove the preview on mouse-up or `Esc` so the node remains at its layout-computed position.
 - Never start direct dragging or Layout drag preview while a Unity Scene control already owns the mouse. Rect Tool resize, edge, corner, pivot, rotation, and other active handles must keep exclusive control and must not drag a visible layer behind the edited RectTransform.
+- Unity's default Scene selection control may temporarily own the mouse during an ordinary press-drag gesture; it must not block direct dragging of the highlighted UI layer.
 - When the highlighted layer is already selected, leave dragging, resizing handles, snapping, and other transform-tool behavior to Unity's native Scene-view controls.
 - Double-clicking a highlighted `TextMeshProUGUI` or project `MultiLanguageTMPText` should open a temporary Scene-view inline text editor over the text bounds without adding runtime components to the prefab.
 - Resolve a double-click text target independently from generic Graphic selection: prefer the currently selected visible TMP under the cursor, then choose among visible TMP components under the cursor. Outer Images or nested-prefab roots must not steal the second click.
