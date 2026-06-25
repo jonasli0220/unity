@@ -9,7 +9,7 @@ using UnityEngine;
 
 public class UISemanticLocatorWindow : EditorWindow
 {
-    private const int CacheVersion = 1;
+    private const int CacheVersion = 2;
     private const int MaxResults = 80;
     private const string MenuPath = "Tools/UI/Semantic UI Locator/Open";
     private const string SmokeTestMenuPath = "Tools/UI/Semantic UI Locator/Smoke Test - Hero Journey";
@@ -423,7 +423,7 @@ public class UISemanticLocatorWindow : EditorWindow
             }
         }
 
-        if (!string.IsNullOrEmpty(route))
+        if (result.Score > 0f && !string.IsNullOrEmpty(route))
         {
             result.Score += 4f;
         }
