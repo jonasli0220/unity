@@ -22,6 +22,12 @@ Smoke-test the validation case from:
 
 The cache is written to `Library/Dragon/UISemanticLocator/index.json`.
 
+## Result Preview
+
+Search results show a prefab thumbnail beside each route. The window reuses the UI prefab preview generator when it is available in the project, and falls back to Unity's built-in `AssetPreview` otherwise.
+
+Preview textures are editor-only and in-memory. They are not written under `Assets/` and do not change the semantic index cache.
+
 ## Expected Smoke Test
 
 Search:

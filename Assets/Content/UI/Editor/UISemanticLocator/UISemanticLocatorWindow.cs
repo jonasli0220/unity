@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Reflection;
 using System.Text;
 using System.Text.RegularExpressions;
 using UnityEditor;
@@ -11,6 +12,12 @@ public class UISemanticLocatorWindow : EditorWindow
 {
     private const int CacheVersion = 2;
     private const int MaxResults = 80;
+    private const float PreviewWidth = 128f;
+    private const float PreviewHeight = 80f;
+    private const float EstimatedResultHeight = 116f;
+    private const int PreviewRenderSize = 256;
+    private const int PreviewWarmupResultCount = 8;
+    private const int PreviewVisibleResultCount = 14;
     private const string MenuPath = "Tools/UI/Semantic UI Locator/Open";
     private const string SmokeTestMenuPath = "Tools/UI/Semantic UI Locator/Smoke Test - Hero Journey";
     private const string HardTrainingSmokeTestMenuPath = "Tools/UI/Semantic UI Locator/Smoke Test - Hard Training";
@@ -32,12 +39,19 @@ public class UISemanticLocatorWindow : EditorWindow
     private Vector2 scrollPosition;
     private IndexCache indexCache;
     private List<SearchResult> results = new List<SearchResult>();
+    private readonly Dictionary<string, Texture2D> prefabPreviewCache = new Dictionary<string, Texture2D>();
+    private readonly Dictionary<string, string> prefabPreviewErrors = new Dictionary<string, string>();
+    private readonly Queue<string> prefabPreviewQueue = new Queue<string>();
+    private readonly HashSet<string> prefabPreviewQueued = new HashSet<string>();
+    private bool isPreviewGenerationScheduled;
+    private static bool prefabPreviewMethodResolved;
+    private static MethodInfo prefabPreviewGenerateMethod;
 
     [MenuItem(MenuPath, false, 2310)]
     public static void Open()
     {
         UISemanticLocatorWindow window = GetWindow<UISemanticLocatorWindow>("UI Semantic Locator");
-        window.minSize = new Vector2(820f, 520f);
+        window.minSize = new Vector2(980f, 520f);
         window.Show();
     }
 
@@ -134,6 +148,25 @@ public class UISemanticLocatorWindow : EditorWindow
         Search();
     }
 
+    private void OnDisable()
+    {
+        EditorApplication.delayCall -= ProcessNextPrefabPreview;
+        isPreviewGenerationScheduled = false;
+
+        foreach (Texture2D texture in prefabPreviewCache.Values)
+        {
+            if (texture != null)
+            {
+                DestroyImmediate(texture);
+            }
+        }
+
+        prefabPreviewCache.Clear();
+        prefabPreviewErrors.Clear();
+        prefabPreviewQueue.Clear();
+        prefabPreviewQueued.Clear();
+    }
+
     private void OnGUI()
     {
         DrawToolbar();
@@ -223,11 +256,25 @@ public class UISemanticLocatorWindow : EditorWindow
         EditorGUILayout.BeginVertical(EditorStyles.helpBox);
         EditorGUILayout.BeginHorizontal();
 
-        GUILayout.Label("#" + (index + 1), EditorStyles.boldLabel, GUILayout.Width(36f));
-        GUILayout.Label("Score " + result.Score.ToString("0"), EditorStyles.miniBoldLabel, GUILayout.Width(74f));
+        EditorGUILayout.BeginVertical(GUILayout.Width(58f));
+        GUILayout.Label("#" + (index + 1), EditorStyles.boldLabel, GUILayout.Width(52f));
+        GUILayout.Label("Score " + result.Score.ToString("0"), EditorStyles.miniBoldLabel, GUILayout.Width(58f));
+        EditorGUILayout.EndVertical();
+
+        Rect previewRect = GUILayoutUtility.GetRect(
+            PreviewWidth,
+            PreviewHeight,
+            GUILayout.Width(PreviewWidth),
+            GUILayout.Height(PreviewHeight));
+        DrawPrefabPreview(previewRect, entry.PrefabPath, ShouldGeneratePreviewForResult(index));
 
         EditorGUILayout.BeginVertical();
-        EditorGUILayout.LabelField(string.IsNullOrEmpty(entry.Route) ? "(prefab only)" : entry.Route, EditorStyles.boldLabel);
+        EditorGUILayout.BeginHorizontal();
+
+        EditorGUILayout.BeginVertical();
+        EditorGUILayout.LabelField(
+            string.IsNullOrEmpty(entry.Route) ? "(prefab only)" : entry.Route,
+            EditorStyles.boldLabel);
         EditorGUILayout.LabelField(entry.PrefabPath, EditorStyles.miniLabel);
         EditorGUILayout.EndVertical();
 
@@ -259,6 +306,236 @@ public class UISemanticLocatorWindow : EditorWindow
         }
 
         EditorGUILayout.EndVertical();
+        EditorGUILayout.EndHorizontal();
+        EditorGUILayout.EndVertical();
+    }
+
+    private void DrawPrefabPreview(Rect rect, string prefabPath, bool shouldGenerateProjectPreview)
+    {
+        EditorGUI.DrawRect(rect, new Color(0.07f, 0.07f, 0.07f, 1f));
+
+        Texture2D texture = GetPrefabPreview(prefabPath, shouldGenerateProjectPreview);
+        if (texture != null)
+        {
+            Rect imageRect = new Rect(rect.x + 4f, rect.y + 4f, rect.width - 8f, rect.height - 8f);
+            GUI.DrawTexture(imageRect, texture, ScaleMode.ScaleToFit, true);
+        }
+        else
+        {
+            EditorGUI.LabelField(rect, "Preview");
+        }
+
+        string tooltip = prefabPath;
+        string error;
+        if (!string.IsNullOrEmpty(prefabPath)
+            && prefabPreviewErrors.TryGetValue(prefabPath, out error)
+            && !string.IsNullOrEmpty(error))
+        {
+            tooltip += "\n" + error;
+        }
+
+        GUI.Box(rect, new GUIContent(string.Empty, tooltip));
+    }
+
+    private Texture2D GetPrefabPreview(string prefabPath, bool shouldGenerateProjectPreview)
+    {
+        if (string.IsNullOrEmpty(prefabPath))
+        {
+            return null;
+        }
+
+        Texture2D texture;
+        if (prefabPreviewCache.TryGetValue(prefabPath, out texture) && texture != null)
+        {
+            return texture;
+        }
+
+        if (shouldGenerateProjectPreview)
+        {
+            RequestPrefabPreview(prefabPath);
+        }
+
+        return GetAssetPreviewFallback(prefabPath);
+    }
+
+    private Texture2D GetAssetPreviewFallback(string prefabPath)
+    {
+        UnityEngine.Object prefab = AssetDatabase.LoadAssetAtPath<UnityEngine.Object>(prefabPath);
+        if (prefab == null)
+        {
+            return null;
+        }
+
+        Texture2D preview = AssetPreview.GetAssetPreview(prefab);
+        if (preview != null)
+        {
+            return preview;
+        }
+
+        if (AssetPreview.IsLoadingAssetPreview(prefab.GetInstanceID()))
+        {
+            Repaint();
+        }
+
+        return AssetPreview.GetMiniThumbnail(prefab);
+    }
+
+    private bool ShouldGeneratePreviewForResult(int index)
+    {
+        if (index < PreviewWarmupResultCount)
+        {
+            return true;
+        }
+
+        int firstVisibleIndex = Mathf.Max(0, Mathf.FloorToInt(scrollPosition.y / EstimatedResultHeight) - 2);
+        return index >= firstVisibleIndex && index < firstVisibleIndex + PreviewVisibleResultCount;
+    }
+
+    private void RequestPrefabPreview(string prefabPath)
+    {
+        if (prefabPreviewCache.ContainsKey(prefabPath)
+            || prefabPreviewErrors.ContainsKey(prefabPath)
+            || prefabPreviewQueued.Contains(prefabPath)
+            || GetPrefabPreviewGenerateMethod() == null)
+        {
+            return;
+        }
+
+        prefabPreviewQueued.Add(prefabPath);
+        prefabPreviewQueue.Enqueue(prefabPath);
+        SchedulePrefabPreviewGeneration();
+    }
+
+    private void SchedulePrefabPreviewGeneration()
+    {
+        if (isPreviewGenerationScheduled)
+        {
+            return;
+        }
+
+        isPreviewGenerationScheduled = true;
+        EditorApplication.delayCall += ProcessNextPrefabPreview;
+    }
+
+    private void ProcessNextPrefabPreview()
+    {
+        isPreviewGenerationScheduled = false;
+
+        while (prefabPreviewQueue.Count > 0)
+        {
+            string prefabPath = prefabPreviewQueue.Dequeue();
+            prefabPreviewQueued.Remove(prefabPath);
+
+            if (prefabPreviewCache.ContainsKey(prefabPath) || prefabPreviewErrors.ContainsKey(prefabPath) || !IsCurrentResultPrefab(prefabPath))
+            {
+                continue;
+            }
+
+            GeneratePrefabPreview(prefabPath);
+            break;
+        }
+
+        if (prefabPreviewQueue.Count > 0)
+        {
+            SchedulePrefabPreviewGeneration();
+        }
+
+        Repaint();
+    }
+
+    private bool IsCurrentResultPrefab(string prefabPath)
+    {
+        for (int i = 0; i < results.Count; i++)
+        {
+            if (results[i].Entry.PrefabPath == prefabPath)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private void GeneratePrefabPreview(string prefabPath)
+    {
+        GameObject prefab = AssetDatabase.LoadAssetAtPath<GameObject>(prefabPath);
+        if (prefab == null)
+        {
+            prefabPreviewErrors[prefabPath] = "Prefab not found.";
+            return;
+        }
+
+        Texture2D texture;
+        string error;
+        if (TryGenerateProjectPreview(prefab, out texture, out error) && texture != null)
+        {
+            prefabPreviewCache[prefabPath] = texture;
+            prefabPreviewErrors.Remove(prefabPath);
+            return;
+        }
+
+        if (!string.IsNullOrEmpty(error))
+        {
+            prefabPreviewErrors[prefabPath] = error;
+        }
+    }
+
+    private static bool TryGenerateProjectPreview(GameObject prefab, out Texture2D texture, out string error)
+    {
+        texture = null;
+        error = string.Empty;
+
+        MethodInfo method = GetPrefabPreviewGenerateMethod();
+        if (method == null)
+        {
+            return false;
+        }
+
+        object[] args = { prefab, PreviewRenderSize, string.Empty };
+        try
+        {
+            texture = method.Invoke(null, args) as Texture2D;
+            error = args[2] as string ?? string.Empty;
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Exception actual = ex is TargetInvocationException && ex.InnerException != null ? ex.InnerException : ex;
+            error = actual.Message;
+            return true;
+        }
+    }
+
+    private static MethodInfo GetPrefabPreviewGenerateMethod()
+    {
+        if (prefabPreviewMethodResolved)
+        {
+            return prefabPreviewGenerateMethod;
+        }
+
+        prefabPreviewMethodResolved = true;
+        Assembly[] assemblies = AppDomain.CurrentDomain.GetAssemblies();
+        for (int i = 0; i < assemblies.Length; i++)
+        {
+            Type type = assemblies[i].GetType("UIPrefabPreviewGenerator");
+            if (type == null)
+            {
+                continue;
+            }
+
+            prefabPreviewGenerateMethod = type.GetMethod(
+                "Generate",
+                BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic,
+                null,
+                new[] { typeof(GameObject), typeof(int), typeof(string).MakeByRefType() },
+                null);
+            if (prefabPreviewGenerateMethod != null)
+            {
+                break;
+            }
+        }
+
+        return prefabPreviewGenerateMethod;
     }
 
     private void LoadOrBuildIndex(bool force)
@@ -314,6 +591,7 @@ public class UISemanticLocatorWindow : EditorWindow
         if (string.IsNullOrEmpty(query))
         {
             results.Clear();
+            ClearPendingPreviewRequests();
             statusText = "Type a semantic clue, UI route, or prefab filename.";
             return;
         }
@@ -337,7 +615,14 @@ public class UISemanticLocatorWindow : EditorWindow
             .Take(MaxResults)
             .ToList();
 
+        ClearPendingPreviewRequests();
         statusText = "Search \"" + query + "\" found " + results.Count + " result(s).";
+    }
+
+    private void ClearPendingPreviewRequests()
+    {
+        prefabPreviewQueue.Clear();
+        prefabPreviewQueued.Clear();
     }
 
     private static SearchResult ScoreEntry(IndexEntry entry, QueryPlan queryPlan)
