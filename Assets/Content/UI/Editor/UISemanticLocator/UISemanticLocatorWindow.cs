@@ -13,10 +13,15 @@ public class UISemanticLocatorWindow : EditorWindow
     private const int MaxResults = 80;
     private const string MenuPath = "Tools/UI/Semantic UI Locator/Open";
     private const string SmokeTestMenuPath = "Tools/UI/Semantic UI Locator/Smoke Test - Hero Journey";
+    private const string HardTrainingSmokeTestMenuPath = "Tools/UI/Semantic UI Locator/Smoke Test - Hard Training";
     private const string PrefabRoot = "Assets/Content/UI/Prefab";
     private const string CacheRelativePath = "Library/Dragon/UISemanticLocator/index.json";
 
     private static readonly Regex PanelMappingRegex = new Regex("\\{[\\s\\S]*?\"id\"\\s*:\\s*\"([^\"]+)\"[\\s\\S]*?\"prefab\"\\s*:\\s*\"([^\"]+\\.prefab)\"[\\s\\S]*?\\}", RegexOptions.Compiled);
+    private static readonly Regex ActEntryStartRegex = new Regex("^\\s{6}\\d+\\s*:\\s*\\{\\s*$", RegexOptions.Compiled);
+    private static readonly Regex ActEntryEndRegex = new Regex("^\\s{6}\\},?\\s*$", RegexOptions.Compiled);
+    private static readonly Regex ActShowTabLineRegex = new Regex("\"show_tab\"\\s*:\\s*\"([^\"]+)\"", RegexOptions.Compiled);
+    private static readonly Regex ActShowNameLineRegex = new Regex("\"show_(?:tab_)?name\"\\s*:\\s*\"([^\"]+)\"", RegexOptions.Compiled);
     private static readonly Regex UiCreateRegex = new Regex("(?:game_mgr\\.ui_mgr\\.)?(?:AbbrCreate|Create)\\(\\s*[\"']([^\"']+)[\"']", RegexOptions.Compiled);
     private static readonly Regex CommentAliasRegex = new Regex("^\\s*([A-Za-z_][A-Za-z0-9_]*)\\s*=\\s*[^#\\r\\n]+#\\s*(.+)$", RegexOptions.Compiled);
     private static readonly Regex IdentifierRegex = new Regex("[A-Za-z_][A-Za-z0-9_]*", RegexOptions.Compiled);
@@ -72,6 +77,52 @@ public class UISemanticLocatorWindow : EditorWindow
                 ? smokeResults[0].Entry.Route + " -> " + smokeResults[0].Entry.PrefabPath
                 : "(no result)";
             string message = "Smoke test failed.\n\nExpected season_all_common.event_subscribe -> Assets/Content/UI/Prefab/season_all/a_event_subscribe.prefab\nTop result: " + top;
+            Debug.LogError("[UI Semantic Locator] " + message);
+            EditorUtility.DisplayDialog("UI Semantic Locator", message, "OK");
+        }
+    }
+
+    [MenuItem(HardTrainingSmokeTestMenuPath, false, 2312)]
+    public static void SmokeTestHardTraining()
+    {
+        IndexBuilder builder = new IndexBuilder(GetProjectRoot());
+        IndexCache cache = builder.Build();
+        QueryPlan queryPlan = QueryPlan.Build("千锤百炼", cache.Aliases);
+
+        List<SearchResult> smokeResults = cache.Entries
+            .Select(entry => ScoreEntry(entry, queryPlan))
+            .Where(result => result.Score > 0f)
+            .OrderByDescending(result => result.Score)
+            .ThenBy(result => string.IsNullOrEmpty(result.Entry.Route) ? 1 : 0)
+            .ThenBy(result => result.Entry.PrefabPath)
+            .Take(20)
+            .ToList();
+
+        SearchResult expected = smokeResults.FirstOrDefault(result =>
+            result.Entry.Route == "activity.week_score"
+            && result.Entry.PrefabPath == "Assets/Content/UI/Prefab/event/a_event_week_score.prefab");
+
+        SearchResult rewardPopup = smokeResults.FirstOrDefault(result =>
+            result.Entry.Route == "common.multi_reward_window"
+            && result.Entry.PrefabPath == "Assets/Content/UI/Prefab/common_window/multi_reward_window.prefab");
+
+        if (expected != null && rewardPopup != null)
+        {
+            string message = "Smoke test passed.\n\n"
+                             + "Query: 千锤百炼\n"
+                             + "Main Route: " + expected.Entry.Route + "\n"
+                             + "Main Prefab: " + expected.Entry.PrefabPath + "\n"
+                             + "Related Popup: " + rewardPopup.Entry.Route + "\n"
+                             + "Popup Prefab: " + rewardPopup.Entry.PrefabPath;
+            Debug.Log("[UI Semantic Locator] " + message);
+            EditorUtility.DisplayDialog("UI Semantic Locator", message, "OK");
+        }
+        else
+        {
+            string top = smokeResults.Count > 0
+                ? smokeResults[0].Entry.Route + " -> " + smokeResults[0].Entry.PrefabPath
+                : "(no result)";
+            string message = "Smoke test failed.\n\nExpected activity.week_score and common.multi_reward_window for 千锤百炼.\nTop result: " + top;
             Debug.LogError("[UI Semantic Locator] " + message);
             EditorUtility.DisplayDialog("UI Semantic Locator", message, "OK");
         }
@@ -712,6 +763,7 @@ public class UISemanticLocatorWindow : EditorWindow
         {
             AddBuiltInAliases();
             AddPanelMappings();
+            AddActDataEvidence();
             AddRawPrefabs();
             AddCodeAliasesAndCreateEvidence();
             FinalizeHaystacks();
@@ -764,6 +816,108 @@ public class UISemanticLocatorWindow : EditorWindow
                     AddEvidence(entry.Evidence, MakeRelative(file) + ":" + line + " maps " + route + " -> " + prefabResourcePath);
                     AppendHaystack(entry, route + " " + prefabResourcePath + " " + prefabAssetPath);
                     prefabsWithRoute.Add(prefabAssetPath);
+                }
+            }
+        }
+
+        private void AddActDataEvidence()
+        {
+            string[] actDataFiles =
+            {
+                CombineProjectPath("game/server/finalized/A9/ActData.py")
+            };
+
+            for (int i = 0; i < actDataFiles.Length; i++)
+            {
+                string file = actDataFiles[i];
+                if (!File.Exists(file))
+                {
+                    continue;
+                }
+
+                string text = ReadTextSafe(file);
+                string[] lines = text.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n');
+                bool inEntry = false;
+                int entryLine = 0;
+                string route = string.Empty;
+                List<string> displayNames = new List<string>();
+
+                for (int lineIndex = 0; lineIndex < lines.Length; lineIndex++)
+                {
+                    string line = lines[lineIndex];
+                    if (!inEntry && ActEntryStartRegex.IsMatch(line))
+                    {
+                        inEntry = true;
+                        entryLine = lineIndex + 1;
+                        route = string.Empty;
+                        displayNames.Clear();
+                        continue;
+                    }
+
+                    if (!inEntry)
+                    {
+                        continue;
+                    }
+
+                    Match routeMatch = ActShowTabLineRegex.Match(line);
+                    if (routeMatch.Success)
+                    {
+                        route = routeMatch.Groups[1].Value.Trim();
+                    }
+
+                    Match nameMatch = ActShowNameLineRegex.Match(line);
+                    if (nameMatch.Success)
+                    {
+                        string displayName = nameMatch.Groups[1].Value.Trim();
+                        if (!string.IsNullOrEmpty(displayName) && !displayNames.Contains(displayName))
+                        {
+                            displayNames.Add(displayName);
+                        }
+                    }
+
+                    if (ActEntryEndRegex.IsMatch(line))
+                    {
+                        AddActEntryEvidence(file, entryLine, route, displayNames);
+                        inEntry = false;
+                    }
+                }
+            }
+        }
+
+        private void AddActEntryEvidence(string file, int line, string route, List<string> displayNames)
+        {
+            if (string.IsNullOrEmpty(route) || displayNames == null || displayNames.Count == 0)
+            {
+                return;
+            }
+
+            List<IndexEntry> routeEntries;
+            if (!entriesByRoute.TryGetValue(route, out routeEntries))
+            {
+                return;
+            }
+
+            string source = MakeRelative(file) + ":" + line;
+            for (int i = 0; i < displayNames.Count; i++)
+            {
+                string displayName = displayNames[i];
+                if (string.IsNullOrEmpty(displayName) || !ContainsCjk(displayName))
+                {
+                    continue;
+                }
+
+                string baseName = StripActivityOrdinal(displayName);
+                AddAlias(displayName, route + " " + RouteToSearchTerms(route), source);
+                if (!string.IsNullOrEmpty(baseName) && baseName != displayName)
+                {
+                    AddAlias(baseName, route + " " + RouteToSearchTerms(route), source);
+                }
+
+                for (int e = 0; e < routeEntries.Count; e++)
+                {
+                    IndexEntry entry = routeEntries[e];
+                    AddEvidence(entry.Evidence, source + " ActData show_name " + displayName + " uses " + route);
+                    AppendHaystack(entry, displayName + " " + baseName + " " + route);
                 }
             }
         }
@@ -857,6 +1011,40 @@ public class UISemanticLocatorWindow : EditorWindow
                     AddEvidence(entry.Evidence, relative + ":" + line + " creates " + route);
                     AppendHaystack(entry, relative + " " + context);
                 }
+            }
+
+            AddHelperCreateEvidence(file, text, "ui_utils.OpenMultiRewardWindow", "common.multi_reward_window");
+        }
+
+        private void AddHelperCreateEvidence(string file, string text, string helperCall, string route)
+        {
+            List<IndexEntry> routeEntries;
+            if (!entriesByRoute.TryGetValue(route, out routeEntries))
+            {
+                return;
+            }
+
+            int searchFrom = 0;
+            while (searchFrom < text.Length)
+            {
+                int index = text.IndexOf(helperCall, searchFrom, StringComparison.Ordinal);
+                if (index < 0)
+                {
+                    break;
+                }
+
+                int line = GetLineNumber(text, index);
+                string context = GetContextWindow(text, line, 5);
+                string relative = MakeRelative(file);
+
+                for (int i = 0; i < routeEntries.Count; i++)
+                {
+                    IndexEntry entry = routeEntries[i];
+                    AddEvidence(entry.Evidence, relative + ":" + line + " calls " + helperCall + " -> " + route);
+                    AppendHaystack(entry, relative + " " + context);
+                }
+
+                searchFrom = index + helperCall.Length;
             }
         }
 
@@ -1008,6 +1196,27 @@ public class UISemanticLocatorWindow : EditorWindow
             }
 
             return phrase.Trim();
+        }
+
+        private static string StripActivityOrdinal(string displayName)
+        {
+            if (string.IsNullOrEmpty(displayName))
+            {
+                return string.Empty;
+            }
+
+            string trimmed = displayName.Trim();
+            return Regex.Replace(trimmed, "\\s+(?:[IVXLCDM]+|[0-9]+|[一二三四五六七八九十]+)$", string.Empty, RegexOptions.IgnoreCase).Trim();
+        }
+
+        private static string RouteToSearchTerms(string route)
+        {
+            if (string.IsNullOrEmpty(route))
+            {
+                return string.Empty;
+            }
+
+            return route.Replace('.', ' ').Replace('_', ' ');
         }
 
         private static bool ContainsCjk(string text)

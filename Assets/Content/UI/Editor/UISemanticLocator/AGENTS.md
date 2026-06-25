@@ -25,3 +25,4 @@ This directory contains the Unity Editor tool that maps semantic UI descriptions
 ## Validation
 
 - After changing the tool, verify that searching `英雄之旅` can surface `season_all_common.event_subscribe` and `Assets/Content/UI/Prefab/season_all/a_event_subscribe.prefab`.
+- After changing activity-name indexing, verify that searching `千锤百炼` can surface `activity.week_score`, `Assets/Content/UI/Prefab/event/a_event_week_score.prefab`, and related popup `common.multi_reward_window`.
