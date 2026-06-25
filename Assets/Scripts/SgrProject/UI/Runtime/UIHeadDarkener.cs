@@ -116,6 +116,40 @@ namespace SgrUnity
             }
         }
 
+#if UNITY_EDITOR
+        private void OnValidate()
+        {
+            darkFactor = Mathf.Clamp01(darkFactor);
+            grayStrength = Mathf.Clamp01(grayStrength);
+
+            if (!Application.isPlaying || !isActiveAndEnabled)
+            {
+                return;
+            }
+
+            if (isDark)
+            {
+                ApplyDarkState();
+            }
+            else
+            {
+                RestoreAll();
+            }
+        }
+#endif
+
+        [ContextMenu("Apply Dark Now")]
+        private void ApplyDarkNow()
+        {
+            SetDark(true, darkFactor, grayStrength);
+        }
+
+        [ContextMenu("Restore Now")]
+        private void RestoreNow()
+        {
+            SetDark(false, darkFactor, grayStrength);
+        }
+
         private void OnDisable()
         {
             RestoreAll();
