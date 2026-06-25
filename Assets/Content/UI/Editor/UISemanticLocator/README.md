@@ -20,6 +20,8 @@ Smoke-test the validation case from:
 - Python enum comments such as `HERO_JOURNEY = 4 # 英雄之旅`, used as semantic aliases.
 - Prefabs under `Assets/Content/UI/Prefab`, used as a fallback filename/path index.
 
+Generic UI words such as `tips`, `rule`, `window`, `panel`, `common`, and `item` are downweighted when they come from an inferred alias instead of the user's direct query.
+
 The cache is written to `Library/Dragon/UISemanticLocator/index.json`.
 
 ## Result Preview

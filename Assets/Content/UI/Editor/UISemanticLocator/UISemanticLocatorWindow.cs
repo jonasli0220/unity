@@ -33,6 +33,28 @@ public class UISemanticLocatorWindow : EditorWindow
     private static readonly Regex CommentAliasRegex = new Regex("^\\s*([A-Za-z_][A-Za-z0-9_]*)\\s*=\\s*[^#\\r\\n]+#\\s*(.+)$", RegexOptions.Compiled);
     private static readonly Regex IdentifierRegex = new Regex("[A-Za-z_][A-Za-z0-9_]*", RegexOptions.Compiled);
     private static readonly Regex WordSplitRegex = new Regex("[^\\p{L}\\p{Nd}]+", RegexOptions.Compiled);
+    private static readonly HashSet<string> GenericSearchTerms = new HashSet<string>
+    {
+        "activity",
+        "btn",
+        "button",
+        "common",
+        "event",
+        "info",
+        "item",
+        "items",
+        "main",
+        "panel",
+        "popup",
+        "rule",
+        "rules",
+        "show",
+        "tip",
+        "tips",
+        "title",
+        "view",
+        "window"
+    };
 
     private string searchText = "英雄之旅";
     private string statusText = string.Empty;
@@ -669,7 +691,7 @@ public class UISemanticLocatorWindow : EditorWindow
                 if (term.Length > 1 && haystack.Contains(term))
                 {
                     aliasMatched = true;
-                    result.Score += 24f;
+                    result.Score += GetTermScore(term, queryPlan, 24f, 4f);
                 }
             }
 
@@ -692,21 +714,21 @@ public class UISemanticLocatorWindow : EditorWindow
 
             if (haystack.Contains(term))
             {
-                result.Score += 10f;
+                result.Score += GetTermScore(term, queryPlan, 10f, 2f);
                 AddEvidence(result.Evidence, "Matched term: " + term);
             }
 
             string routeNormalized = NormalizeForSearch(route);
             if (!string.IsNullOrEmpty(routeNormalized) && routeNormalized.Contains(term))
             {
-                result.Score += 18f;
+                result.Score += GetTermScore(term, queryPlan, 18f, 3f);
                 AddEvidence(result.Evidence, "Route contains: " + term);
             }
 
             string prefabNormalized = NormalizeForSearch(prefabName);
             if (!string.IsNullOrEmpty(prefabNormalized) && prefabNormalized.Contains(term))
             {
-                result.Score += 16f;
+                result.Score += GetTermScore(term, queryPlan, 16f, 3f);
                 AddEvidence(result.Evidence, "Prefab name contains: " + term);
             }
         }
@@ -720,10 +742,11 @@ public class UISemanticLocatorWindow : EditorWindow
 
             string evidence = entry.Evidence[i];
             string evidenceSearch = ExpandTextForSearch(evidence);
-            if (ContainsAny(evidenceSearch, queryPlan.Terms) || ContainsAny(evidenceSearch, queryPlan.AliasTerms))
+            float evidenceScore = GetEvidenceMatchScore(evidenceSearch, queryPlan);
+            if (evidenceScore > 0f)
             {
                 AddEvidence(result.Evidence, evidence);
-                result.Score += 8f;
+                result.Score += evidenceScore;
             }
         }
 
@@ -733,6 +756,61 @@ public class UISemanticLocatorWindow : EditorWindow
         }
 
         return result;
+    }
+
+    private static float GetTermScore(string term, QueryPlan queryPlan, float normalScore, float genericScore)
+    {
+        return ShouldDownweightGenericTerm(term, queryPlan) ? genericScore : normalScore;
+    }
+
+    private static float GetEvidenceMatchScore(string evidenceSearch, QueryPlan queryPlan)
+    {
+        bool matched = false;
+        bool hasSpecificMatch = false;
+
+        AccumulateEvidenceMatch(evidenceSearch, queryPlan.Terms, queryPlan, ref matched, ref hasSpecificMatch);
+        AccumulateEvidenceMatch(evidenceSearch, queryPlan.AliasTerms, queryPlan, ref matched, ref hasSpecificMatch);
+
+        if (!matched)
+        {
+            return 0f;
+        }
+
+        return hasSpecificMatch ? 8f : 2f;
+    }
+
+    private static void AccumulateEvidenceMatch(string haystack, List<string> terms, QueryPlan queryPlan, ref bool matched, ref bool hasSpecificMatch)
+    {
+        if (string.IsNullOrEmpty(haystack) || terms == null)
+        {
+            return;
+        }
+
+        for (int i = 0; i < terms.Count; i++)
+        {
+            string term = terms[i];
+            if (term.Length <= 1 || !haystack.Contains(term))
+            {
+                continue;
+            }
+
+            matched = true;
+            if (!ShouldDownweightGenericTerm(term, queryPlan))
+            {
+                hasSpecificMatch = true;
+            }
+        }
+    }
+
+    private static bool ShouldDownweightGenericTerm(string term, QueryPlan queryPlan)
+    {
+        return IsGenericSearchTerm(term)
+               && (queryPlan.DirectTerms == null || !queryPlan.DirectTerms.Contains(term));
+    }
+
+    private static bool IsGenericSearchTerm(string term)
+    {
+        return !string.IsNullOrEmpty(term) && GenericSearchTerms.Contains(term);
     }
 
     private static void PingPrefab(string prefabPath)
@@ -768,25 +846,6 @@ public class UISemanticLocatorWindow : EditorWindow
     private static string GetCachePath()
     {
         return Path.Combine(GetProjectRoot(), CacheRelativePath).Replace('\\', '/');
-    }
-
-    private static bool ContainsAny(string haystack, List<string> terms)
-    {
-        if (string.IsNullOrEmpty(haystack) || terms == null)
-        {
-            return false;
-        }
-
-        for (int i = 0; i < terms.Count; i++)
-        {
-            string term = terms[i];
-            if (term.Length > 1 && haystack.Contains(term))
-            {
-                return true;
-            }
-        }
-
-        return false;
     }
 
     private static void AddEvidence(List<string> evidence, string text)
@@ -976,6 +1035,7 @@ public class UISemanticLocatorWindow : EditorWindow
     {
         public string RawQuery;
         public string NormalizedQuery;
+        public List<string> DirectTerms = new List<string>();
         public List<string> Terms = new List<string>();
         public List<string> AliasTerms = new List<string>();
         public List<AliasEntry> AliasHits = new List<AliasEntry>();
@@ -985,6 +1045,7 @@ public class UISemanticLocatorWindow : EditorWindow
             QueryPlan plan = new QueryPlan();
             plan.RawQuery = query;
             plan.NormalizedQuery = NormalizeForSearch(query);
+            AddTerms(plan.DirectTerms, ExpandTextForSearch(query));
             AddTerms(plan.Terms, ExpandTextForSearch(query));
 
             if (aliases != null)
@@ -1009,6 +1070,7 @@ public class UISemanticLocatorWindow : EditorWindow
                 }
             }
 
+            plan.DirectTerms = plan.DirectTerms.Distinct().Where(term => term.Length > 1).ToList();
             plan.Terms = plan.Terms.Distinct().Where(term => term.Length > 1).ToList();
             plan.AliasTerms = plan.AliasTerms.Distinct().Where(term => term.Length > 1).ToList();
             return plan;
