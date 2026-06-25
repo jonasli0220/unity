@@ -12,10 +12,10 @@ public class UISemanticLocatorWindow : EditorWindow
 {
     private const int CacheVersion = 2;
     private const int MaxResults = 80;
-    private const float PreviewWidth = 128f;
-    private const float PreviewHeight = 80f;
-    private const float EstimatedResultHeight = 116f;
-    private const int PreviewRenderSize = 256;
+    private const float PreviewWidth = 220f;
+    private const float PreviewHeight = 124f;
+    private const float EstimatedResultHeight = 160f;
+    private const int PreviewRenderSize = 384;
     private const int PreviewWarmupResultCount = 8;
     private const int PreviewVisibleResultCount = 14;
     private const string MenuPath = "Tools/UI/Semantic UI Locator/Open";
@@ -312,6 +312,8 @@ public class UISemanticLocatorWindow : EditorWindow
 
     private void DrawPrefabPreview(Rect rect, string prefabPath, bool shouldGenerateProjectPreview)
     {
+        HandlePrefabPreviewInput(rect, prefabPath);
+        EditorGUIUtility.AddCursorRect(rect, MouseCursor.Link);
         EditorGUI.DrawRect(rect, new Color(0.07f, 0.07f, 0.07f, 1f));
 
         Texture2D texture = GetPrefabPreview(prefabPath, shouldGenerateProjectPreview);
@@ -334,7 +336,24 @@ public class UISemanticLocatorWindow : EditorWindow
             tooltip += "\n" + error;
         }
 
+        tooltip += "\nDouble-click to open prefab.";
         GUI.Box(rect, new GUIContent(string.Empty, tooltip));
+    }
+
+    private void HandlePrefabPreviewInput(Rect rect, string prefabPath)
+    {
+        Event current = Event.current;
+        if (current == null
+            || current.type != EventType.MouseDown
+            || current.clickCount != 2
+            || !rect.Contains(current.mousePosition)
+            || string.IsNullOrEmpty(prefabPath))
+        {
+            return;
+        }
+
+        OpenPrefab(prefabPath);
+        current.Use();
     }
 
     private Texture2D GetPrefabPreview(string prefabPath, bool shouldGenerateProjectPreview)

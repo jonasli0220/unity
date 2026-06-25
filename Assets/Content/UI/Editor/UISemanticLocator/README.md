@@ -24,7 +24,7 @@ The cache is written to `Library/Dragon/UISemanticLocator/index.json`.
 
 ## Result Preview
 
-Search results show a prefab thumbnail beside each route. The window reuses the UI prefab preview generator when it is available in the project, and falls back to Unity's built-in `AssetPreview` otherwise.
+Search results show a prefab thumbnail beside each route. Double-click a thumbnail to open that prefab. The window reuses the UI prefab preview generator when it is available in the project, and falls back to Unity's built-in `AssetPreview` otherwise.
 
 Preview textures are editor-only and in-memory. They are not written under `Assets/` and do not change the semantic index cache.
 
