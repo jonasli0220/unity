@@ -1,5 +1,7 @@
 using System.Collections.Generic;
+using Coffee.UIExtensions;
 using UnityEngine;
+using UnityEngine.Rendering;
 using UnityEngine.UI;
 using UITest;
 
@@ -10,6 +12,8 @@ namespace SgrUnity
     {
         private static readonly int TintColorId = Shader.PropertyToID("_TintColor");
         private static readonly int ColorId = Shader.PropertyToID("_Color");
+        private static readonly int BaseColorId = Shader.PropertyToID("_BaseColor");
+        private static readonly int MainColorId = Shader.PropertyToID("_MainColor");
         private static readonly int FaceColorId = Shader.PropertyToID("_FaceColor");
         private static readonly int GrayStrengthId = Shader.PropertyToID("_GrayStrength");
         private const string GrayKeyword = "_IS_GRAY";
@@ -23,7 +27,12 @@ namespace SgrUnity
         private readonly Dictionary<Graphic, GraphicState> graphicStates = new Dictionary<Graphic, GraphicState>();
         private readonly Dictionary<UIShaderParamHelper_vx_common_shader, ShaderHelperState> helperStates =
             new Dictionary<UIShaderParamHelper_vx_common_shader, ShaderHelperState>();
+        private readonly Dictionary<ParticleSystem, ParticleState> particleStates =
+            new Dictionary<ParticleSystem, ParticleState>();
+        private readonly Dictionary<ParticleSystemRenderer, ParticleRendererState> particleRendererStates =
+            new Dictionary<ParticleSystemRenderer, ParticleRendererState>();
 
+        private ParticleSystem.Particle[] particleBuffer = new ParticleSystem.Particle[128];
         private bool refreshPending;
 
         public bool IsDark
@@ -184,6 +193,7 @@ namespace SgrUnity
             ClearInvalidStates();
             ApplyShaderHelpers();
             ApplyGraphics();
+            ApplyParticles();
         }
 
         private void ApplyShaderHelpers()
@@ -299,24 +309,267 @@ namespace SgrUnity
             state.RuntimeMaterial = null;
         }
 
+        private void ApplyParticles()
+        {
+            var particles = GetComponentsInChildren<ParticleSystem>(true);
+            for (int i = 0; i < particles.Length; i++)
+            {
+                var particle = particles[i];
+                if (particle == null)
+                {
+                    continue;
+                }
+
+                ParticleState state;
+                if (!particleStates.TryGetValue(particle, out state))
+                {
+                    state = new ParticleState(particle.main.startColor);
+                    particleStates.Add(particle, state);
+                }
+
+                var main = particle.main;
+                main.startColor = MultiplyGradientRgb(state.StartColor, darkFactor);
+                ApplyLiveParticleFactor(particle, state, darkFactor);
+
+                var renderer = particle.GetComponent<ParticleSystemRenderer>();
+                if (!useMaterialFallback)
+                {
+                    RestoreParticleRendererIfTracked(renderer);
+                    continue;
+                }
+
+                if (renderer != null && TryApplyParticleRendererMaterialFallback(renderer))
+                {
+                    MarkUIParticleDirty(particle);
+                }
+            }
+        }
+
+        private void RestoreParticleRendererIfTracked(ParticleSystemRenderer renderer)
+        {
+            if (renderer == null)
+            {
+                return;
+            }
+
+            ParticleRendererState state;
+            if (!particleRendererStates.TryGetValue(renderer, out state))
+            {
+                return;
+            }
+
+            RestoreParticleRendererMaterials(renderer, state);
+            particleRendererStates.Remove(renderer);
+        }
+
+        private bool TryApplyParticleRendererMaterialFallback(ParticleSystemRenderer renderer)
+        {
+            ParticleRendererState state = GetOrCreateParticleRendererState(renderer);
+            bool applied = false;
+
+            Material[] runtimeMaterials = state.RuntimeMaterials;
+            if (runtimeMaterials == null || runtimeMaterials.Length != state.Materials.Length)
+            {
+                DestroyRuntimeMaterials(runtimeMaterials);
+                runtimeMaterials = new Material[state.Materials.Length];
+                state.RuntimeMaterials = runtimeMaterials;
+            }
+
+            Material[] nextMaterials = null;
+            for (int i = 0; i < state.Materials.Length; i++)
+            {
+                Material runtimeMaterial = runtimeMaterials[i];
+                if (TryCreateOrUpdateRuntimeMaterial(state.Materials[i], ref runtimeMaterial))
+                {
+                    runtimeMaterials[i] = runtimeMaterial;
+                    if (nextMaterials == null)
+                    {
+                        nextMaterials = (Material[])state.Materials.Clone();
+                    }
+
+                    nextMaterials[i] = runtimeMaterial;
+                    applied = true;
+                }
+            }
+
+            if (nextMaterials != null)
+            {
+                renderer.sharedMaterials = nextMaterials;
+            }
+
+            Material runtimeTrailMaterial = state.RuntimeTrailMaterial;
+            if (TryCreateOrUpdateRuntimeMaterial(state.TrailMaterial, ref runtimeTrailMaterial))
+            {
+                state.RuntimeTrailMaterial = runtimeTrailMaterial;
+                renderer.trailMaterial = runtimeTrailMaterial;
+                applied = true;
+            }
+
+            return applied;
+        }
+
+        private ParticleRendererState GetOrCreateParticleRendererState(ParticleSystemRenderer renderer)
+        {
+            ParticleRendererState state;
+            if (!particleRendererStates.TryGetValue(renderer, out state))
+            {
+                state = new ParticleRendererState(renderer.sharedMaterials, renderer.trailMaterial);
+                particleRendererStates.Add(renderer, state);
+                return state;
+            }
+
+            if (HasParticleRendererMaterialChanged(renderer, state))
+            {
+                DestroyRuntimeMaterials(state.RuntimeMaterials);
+                DestroyMaterial(state.RuntimeTrailMaterial);
+                state.Materials = renderer.sharedMaterials;
+                state.TrailMaterial = renderer.trailMaterial;
+                state.RuntimeMaterials = null;
+                state.RuntimeTrailMaterial = null;
+            }
+
+            return state;
+        }
+
+        private bool HasParticleRendererMaterialChanged(ParticleSystemRenderer renderer, ParticleRendererState state)
+        {
+            Material[] currentMaterials = renderer.sharedMaterials;
+            if (currentMaterials.Length != state.Materials.Length)
+            {
+                return true;
+            }
+
+            for (int i = 0; i < currentMaterials.Length; i++)
+            {
+                Material runtimeMaterial = null;
+                if (state.RuntimeMaterials != null && i < state.RuntimeMaterials.Length)
+                {
+                    runtimeMaterial = state.RuntimeMaterials[i];
+                }
+
+                if (currentMaterials[i] != state.Materials[i] && currentMaterials[i] != runtimeMaterial)
+                {
+                    return true;
+                }
+            }
+
+            if (renderer.trailMaterial != state.TrailMaterial && renderer.trailMaterial != state.RuntimeTrailMaterial)
+            {
+                return true;
+            }
+
+            return false;
+        }
+
+        private bool TryCreateOrUpdateRuntimeMaterial(Material source, ref Material runtimeMaterial)
+        {
+            if (source == null)
+            {
+                return false;
+            }
+
+            bool hasColorProperty = HasColorProperty(source);
+            bool hasGrayProperty = source.HasProperty(GrayStrengthId);
+            if (!hasColorProperty && !hasGrayProperty)
+            {
+                return false;
+            }
+
+            if (runtimeMaterial == null)
+            {
+                runtimeMaterial = new Material(source);
+                runtimeMaterial.name = source.name + " (UIHeadDarkener)";
+            }
+
+            CopyMaterialDarkParams(source, runtimeMaterial, hasColorProperty, hasGrayProperty);
+            return true;
+        }
+
+        private void ApplyLiveParticleFactor(ParticleSystem particle, ParticleState state, float factor)
+        {
+            float targetFactor = Mathf.Max(factor, 0.001f);
+            if (state.LiveFactorApplied && Mathf.Approximately(state.LiveFactor, targetFactor))
+            {
+                return;
+            }
+
+            float multiplier = targetFactor;
+            if (state.LiveFactorApplied && state.LiveFactor > 0.001f)
+            {
+                multiplier = targetFactor / state.LiveFactor;
+            }
+
+            TintLiveParticles(particle, multiplier);
+            state.LiveFactor = targetFactor;
+            state.LiveFactorApplied = true;
+        }
+
+        private void RestoreLiveParticleFactor(ParticleSystem particle, ParticleState state)
+        {
+            if (!state.LiveFactorApplied || state.LiveFactor <= 0.001f)
+            {
+                state.LiveFactorApplied = false;
+                state.LiveFactor = 1f;
+                return;
+            }
+
+            TintLiveParticles(particle, 1f / state.LiveFactor);
+            state.LiveFactorApplied = false;
+            state.LiveFactor = 1f;
+        }
+
+        private void TintLiveParticles(ParticleSystem particle, float multiplier)
+        {
+            int particleCount = particle.particleCount;
+            if (particleCount <= 0)
+            {
+                return;
+            }
+
+            EnsureParticleBuffer(particleCount);
+            int readCount = particle.GetParticles(particleBuffer);
+            for (int i = 0; i < readCount; i++)
+            {
+                particleBuffer[i].startColor = MultiplyRgb(particleBuffer[i].startColor, multiplier);
+            }
+
+            particle.SetParticles(particleBuffer, readCount);
+        }
+
+        private void EnsureParticleBuffer(int particleCount)
+        {
+            if (particleBuffer.Length >= particleCount)
+            {
+                return;
+            }
+
+            int nextLength = particleBuffer.Length;
+            while (nextLength < particleCount)
+            {
+                nextLength *= 2;
+            }
+
+            particleBuffer = new ParticleSystem.Particle[nextLength];
+        }
+
+        private void MarkUIParticleDirty(ParticleSystem particle)
+        {
+            var uiParticle = particle.GetComponentInParent<UIParticle>();
+            if (uiParticle != null)
+            {
+                uiParticle.SetMaterialDirty();
+            }
+        }
+
         private void CopyMaterialDarkParams(Material source, Material target, bool hasColorProperty, bool hasGrayProperty)
         {
             if (hasColorProperty)
             {
-                if (source.HasProperty(TintColorId))
-                {
-                    target.SetColor(TintColorId, MultiplyRgb(source.GetColor(TintColorId), darkFactor));
-                }
-
-                if (source.HasProperty(ColorId))
-                {
-                    target.SetColor(ColorId, MultiplyRgb(source.GetColor(ColorId), darkFactor));
-                }
-
-                if (source.HasProperty(FaceColorId))
-                {
-                    target.SetColor(FaceColorId, MultiplyRgb(source.GetColor(FaceColorId), darkFactor));
-                }
+                CopyMaterialColorParam(source, target, TintColorId);
+                CopyMaterialColorParam(source, target, ColorId);
+                CopyMaterialColorParam(source, target, BaseColorId);
+                CopyMaterialColorParam(source, target, MainColorId);
+                CopyMaterialColorParam(source, target, FaceColorId);
             }
 
             if (hasGrayProperty)
@@ -336,7 +589,43 @@ namespace SgrUnity
 
         private static bool HasColorProperty(Material material)
         {
-            return material.HasProperty(TintColorId) || material.HasProperty(ColorId) || material.HasProperty(FaceColorId);
+            return HasColorProperty(material, TintColorId)
+                || HasColorProperty(material, ColorId)
+                || HasColorProperty(material, BaseColorId)
+                || HasColorProperty(material, MainColorId)
+                || HasColorProperty(material, FaceColorId);
+        }
+
+        private void CopyMaterialColorParam(Material source, Material target, int propertyId)
+        {
+            if (HasColorProperty(source, propertyId))
+            {
+                target.SetColor(propertyId, MultiplyRgb(source.GetColor(propertyId), darkFactor));
+            }
+        }
+
+        private static bool HasColorProperty(Material material, int propertyId)
+        {
+            return material.HasProperty(propertyId) && IsColorProperty(material.shader, propertyId);
+        }
+
+        private static bool IsColorProperty(Shader shader, int propertyId)
+        {
+            if (shader == null)
+            {
+                return false;
+            }
+
+            int propertyCount = shader.GetPropertyCount();
+            for (int i = 0; i < propertyCount; i++)
+            {
+                if (shader.GetPropertyNameId(i) == propertyId)
+                {
+                    return shader.GetPropertyType(i) == ShaderPropertyType.Color;
+                }
+            }
+
+            return false;
         }
 
         private static Color MultiplyRgb(Color color, float factor)
@@ -345,6 +634,68 @@ namespace SgrUnity
             color.g *= factor;
             color.b *= factor;
             return color;
+        }
+
+        private static Color32 MultiplyRgb(Color32 color, float factor)
+        {
+            color.r = ScaleByte(color.r, factor);
+            color.g = ScaleByte(color.g, factor);
+            color.b = ScaleByte(color.b, factor);
+            return color;
+        }
+
+        private static byte ScaleByte(byte value, float factor)
+        {
+            return (byte)Mathf.Clamp(Mathf.RoundToInt(value * factor), 0, 255);
+        }
+
+        private static ParticleSystem.MinMaxGradient MultiplyGradientRgb(ParticleSystem.MinMaxGradient source, float factor)
+        {
+            switch (source.mode)
+            {
+                case ParticleSystemGradientMode.Color:
+                    return new ParticleSystem.MinMaxGradient(MultiplyRgb(source.color, factor));
+
+                case ParticleSystemGradientMode.TwoColors:
+                    return new ParticleSystem.MinMaxGradient(
+                        MultiplyRgb(source.colorMin, factor),
+                        MultiplyRgb(source.colorMax, factor));
+
+                case ParticleSystemGradientMode.Gradient:
+                    return new ParticleSystem.MinMaxGradient(MultiplyGradientRgb(source.gradient, factor));
+
+                case ParticleSystemGradientMode.TwoGradients:
+                    return new ParticleSystem.MinMaxGradient(
+                        MultiplyGradientRgb(source.gradientMin, factor),
+                        MultiplyGradientRgb(source.gradientMax, factor));
+
+                case ParticleSystemGradientMode.RandomColor:
+                    var randomColor = new ParticleSystem.MinMaxGradient(MultiplyGradientRgb(source.gradient, factor));
+                    randomColor.mode = ParticleSystemGradientMode.RandomColor;
+                    return randomColor;
+
+                default:
+                    return source;
+            }
+        }
+
+        private static Gradient MultiplyGradientRgb(Gradient source, float factor)
+        {
+            if (source == null)
+            {
+                return null;
+            }
+
+            var gradient = new Gradient();
+            GradientColorKey[] colorKeys = source.colorKeys;
+            for (int i = 0; i < colorKeys.Length; i++)
+            {
+                colorKeys[i].color = MultiplyRgb(colorKeys[i].color, factor);
+            }
+
+            gradient.SetKeys(colorKeys, source.alphaKeys);
+            gradient.mode = source.mode;
+            return gradient;
         }
 
         private void RestoreAll()
@@ -390,12 +741,83 @@ namespace SgrUnity
                 }
             }
             graphicStates.Clear();
+
+            foreach (var pair in particleStates)
+            {
+                var particle = pair.Key;
+                if (particle == null)
+                {
+                    continue;
+                }
+
+                var state = pair.Value;
+                RestoreLiveParticleFactor(particle, state);
+                var main = particle.main;
+                main.startColor = state.StartColor;
+            }
+            particleStates.Clear();
+
+            foreach (var pair in particleRendererStates)
+            {
+                RestoreParticleRendererMaterials(pair.Key, pair.Value);
+            }
+            particleRendererStates.Clear();
+        }
+
+        private void RestoreParticleRendererMaterials(ParticleSystemRenderer renderer, ParticleRendererState state)
+        {
+            if (renderer != null)
+            {
+                if (state.RuntimeMaterials != null)
+                {
+                    renderer.sharedMaterials = state.Materials;
+                }
+
+                if (state.RuntimeTrailMaterial != null)
+                {
+                    renderer.trailMaterial = state.TrailMaterial;
+                }
+
+                var particle = renderer.GetComponent<ParticleSystem>();
+                if (particle != null)
+                {
+                    MarkUIParticleDirty(particle);
+                }
+            }
+
+            DestroyRuntimeMaterials(state.RuntimeMaterials);
+            state.RuntimeMaterials = null;
+
+            if (state.RuntimeTrailMaterial != null)
+            {
+                DestroyMaterial(state.RuntimeTrailMaterial);
+                state.RuntimeTrailMaterial = null;
+            }
+        }
+
+        private void DestroyRuntimeMaterials(Material[] materials)
+        {
+            if (materials == null)
+            {
+                return;
+            }
+
+            for (int i = 0; i < materials.Length; i++)
+            {
+                if (materials[i] != null)
+                {
+                    DestroyMaterial(materials[i]);
+                    materials[i] = null;
+                }
+            }
         }
 
         private void ClearInvalidStates()
         {
             RemoveInvalidHelpers();
             RemoveInvalidGraphics();
+            RemoveInvalidParticles();
+            RemoveInvalidParticleRenderers();
         }
 
         private void RemoveInvalidHelpers()
@@ -446,6 +868,52 @@ namespace SgrUnity
             }
         }
 
+        private void RemoveInvalidParticles()
+        {
+            if (particleStates.Count == 0)
+            {
+                return;
+            }
+
+            var invalid = new List<ParticleSystem>();
+            foreach (var pair in particleStates)
+            {
+                if (pair.Key == null)
+                {
+                    invalid.Add(pair.Key);
+                }
+            }
+
+            for (int i = 0; i < invalid.Count; i++)
+            {
+                particleStates.Remove(invalid[i]);
+            }
+        }
+
+        private void RemoveInvalidParticleRenderers()
+        {
+            if (particleRendererStates.Count == 0)
+            {
+                return;
+            }
+
+            var invalid = new List<ParticleSystemRenderer>();
+            foreach (var pair in particleRendererStates)
+            {
+                if (pair.Key == null)
+                {
+                    DestroyRuntimeMaterials(pair.Value.RuntimeMaterials);
+                    DestroyMaterial(pair.Value.RuntimeTrailMaterial);
+                    invalid.Add(pair.Key);
+                }
+            }
+
+            for (int i = 0; i < invalid.Count; i++)
+            {
+                particleRendererStates.Remove(invalid[i]);
+            }
+        }
+
         private static void DestroyMaterial(Material material)
         {
             if (material == null)
@@ -474,6 +942,32 @@ namespace SgrUnity
             {
                 Color = color;
                 Material = material;
+            }
+        }
+
+        private class ParticleState
+        {
+            public ParticleSystem.MinMaxGradient StartColor;
+            public bool LiveFactorApplied;
+            public float LiveFactor = 1f;
+
+            public ParticleState(ParticleSystem.MinMaxGradient startColor)
+            {
+                StartColor = startColor;
+            }
+        }
+
+        private class ParticleRendererState
+        {
+            public Material[] Materials;
+            public Material TrailMaterial;
+            public Material[] RuntimeMaterials;
+            public Material RuntimeTrailMaterial;
+
+            public ParticleRendererState(Material[] materials, Material trailMaterial)
+            {
+                Materials = materials ?? new Material[0];
+                TrailMaterial = trailMaterial;
             }
         }
 
