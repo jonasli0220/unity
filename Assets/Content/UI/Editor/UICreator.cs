@@ -951,11 +951,29 @@ public class UICreator
             try
             {
                 string fileName = Path.GetFileName(externalPath);
-                string requestedAssetPath = targetFolder + "/" + fileName;
-                string assetPath = AssetDatabase.GenerateUniqueAssetPath(requestedAssetPath);
+                string assetPath = targetFolder + "/" + fileName;
                 string absoluteAssetPath = AssetPathToAbsolutePath(assetPath);
+                if ((AssetDatabase.LoadMainAssetAtPath(assetPath) != null
+                        || File.Exists(absoluteAssetPath))
+                    && !EditorUtility.DisplayDialog(
+                        "替换同名图片？",
+                        "resource 文件夹里已经存在同名资源：\n\n" +
+                        assetPath +
+                        "\n\n是否用当前拖入的图片替换它？\n确认后会保留原资源 GUID，已有引用会指向新图片。",
+                        "替换",
+                        "跳过"))
+                {
+                    continue;
+                }
 
-                File.Copy(externalPath, absoluteAssetPath, false);
+                if (!string.Equals(
+                        Path.GetFullPath(externalPath),
+                        Path.GetFullPath(absoluteAssetPath),
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    File.Copy(externalPath, absoluteAssetPath, true);
+                }
+
                 AssetDatabase.ImportAsset(
                     assetPath,
                     ImportAssetOptions.ForceSynchronousImport);
