@@ -29,6 +29,46 @@ public class ProjectImageDuplicateImportResolver : AssetPostprocessor
     private static bool isDelayCallRegistered;
     private static bool isProcessing;
 
+    [InitializeOnLoadMethod]
+    private static void InitProjectImageDuplicateImportResolver()
+    {
+        EditorApplication.projectWindowItemOnGUI -= HandleProjectWindowExternalImageDrag;
+        EditorApplication.projectWindowItemOnGUI += HandleProjectWindowExternalImageDrag;
+    }
+
+    private static void HandleProjectWindowExternalImageDrag(string guid, Rect selectionRect)
+    {
+        Event currentEvent = Event.current;
+        if (currentEvent == null
+            || (currentEvent.type != EventType.DragUpdated
+                && currentEvent.type != EventType.DragPerform)
+            || !selectionRect.Contains(currentEvent.mousePosition))
+        {
+            return;
+        }
+
+        List<string> externalImagePaths = new List<string>();
+        if (!TryGetExternalImagePaths(externalImagePaths))
+        {
+            return;
+        }
+
+        string targetFolder = ResolveTargetFolderFromProjectItem(guid);
+        if (string.IsNullOrEmpty(targetFolder))
+        {
+            return;
+        }
+
+        DragAndDrop.visualMode = DragAndDropVisualMode.Copy;
+        if (currentEvent.type == EventType.DragPerform)
+        {
+            DragAndDrop.AcceptDrag();
+            ImportExternalImagesToProjectFolder(externalImagePaths, targetFolder);
+        }
+
+        currentEvent.Use();
+    }
+
     [MenuItem(ResolveSelectedFolderMenuPath)]
     private static void ResolveSelectedFolderDuplicateImages()
     {
@@ -72,6 +112,122 @@ public class ProjectImageDuplicateImportResolver : AssetPostprocessor
     private static bool ValidateResolveSelectedFolderDuplicateImages()
     {
         return !string.IsNullOrEmpty(GetSelectedProjectFolderPath());
+    }
+
+    private static bool TryGetExternalImagePaths(List<string> externalImagePaths)
+    {
+        string[] draggedPaths = DragAndDrop.paths;
+        if (draggedPaths == null || draggedPaths.Length == 0)
+        {
+            return false;
+        }
+
+        for (int i = 0; i < draggedPaths.Length; i++)
+        {
+            string draggedPath = draggedPaths[i];
+            if (string.IsNullOrEmpty(draggedPath)
+                || !Path.IsPathRooted(draggedPath)
+                || !File.Exists(draggedPath)
+                || !SupportedImageExtensions.Contains(Path.GetExtension(draggedPath)))
+            {
+                externalImagePaths.Clear();
+                return false;
+            }
+
+            externalImagePaths.Add(Path.GetFullPath(draggedPath));
+        }
+
+        return externalImagePaths.Count > 0;
+    }
+
+    private static string ResolveTargetFolderFromProjectItem(string guid)
+    {
+        string assetPath = NormalizeAssetPath(AssetDatabase.GUIDToAssetPath(guid));
+        if (string.IsNullOrEmpty(assetPath))
+        {
+            return null;
+        }
+
+        if (AssetDatabase.IsValidFolder(assetPath))
+        {
+            return assetPath.StartsWith(UIAssetRoot, StringComparison.OrdinalIgnoreCase)
+                ? assetPath
+                : null;
+        }
+
+        if (!assetPath.StartsWith(UIAssetRoot, StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        string parentFolder = NormalizeAssetPath(Path.GetDirectoryName(assetPath));
+        return AssetDatabase.IsValidFolder(parentFolder) ? parentFolder : null;
+    }
+
+    private static void ImportExternalImagesToProjectFolder(
+        List<string> externalImagePaths,
+        string targetFolder)
+    {
+        if (externalImagePaths == null
+            || externalImagePaths.Count == 0
+            || string.IsNullOrEmpty(targetFolder)
+            || !AssetDatabase.IsValidFolder(targetFolder)
+            || !targetFolder.StartsWith(UIAssetRoot, StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        isProcessing = true;
+        try
+        {
+            for (int i = 0; i < externalImagePaths.Count; i++)
+            {
+                ImportExternalImageToProjectFolder(externalImagePaths[i], targetFolder);
+            }
+        }
+        finally
+        {
+            isProcessing = false;
+        }
+
+        AssetDatabase.SaveAssets();
+        AssetDatabase.Refresh();
+    }
+
+    private static void ImportExternalImageToProjectFolder(string externalPath, string targetFolder)
+    {
+        string fileName = Path.GetFileName(externalPath);
+        if (string.IsNullOrEmpty(fileName))
+        {
+            return;
+        }
+
+        string assetPath = NormalizeAssetPath(targetFolder + "/" + fileName);
+        string absoluteAssetPath = AssetPathToAbsolutePath(assetPath);
+        bool assetExists = AssetDatabase.LoadMainAssetAtPath(assetPath) != null
+            || File.Exists(absoluteAssetPath);
+
+        if (assetExists
+            && !EditorUtility.DisplayDialog(
+                "替换同名图片？",
+                "Project 中已经存在同名图片：\n\n" +
+                assetPath +
+                "\n\n是否用当前拖入的图片替换它？\n确认后会保留已有资源 GUID。",
+                "替换已有资源",
+                "跳过"))
+        {
+            return;
+        }
+
+        if (!string.Equals(
+                Path.GetFullPath(externalPath),
+                Path.GetFullPath(absoluteAssetPath),
+                StringComparison.OrdinalIgnoreCase))
+        {
+            File.Copy(externalPath, absoluteAssetPath, assetExists);
+        }
+
+        AssetDatabase.ImportAsset(assetPath, ImportAssetOptions.ForceSynchronousImport);
     }
 
     private static void OnPostprocessAllAssets(
@@ -237,10 +393,7 @@ public class ProjectImageDuplicateImportResolver : AssetPostprocessor
             return true;
         }
 
-        baseName = DecrementTrailingNumber(fileNameWithoutExtension);
-        return !string.IsNullOrEmpty(baseName)
-            && !string.Equals(baseName, fileNameWithoutExtension, StringComparison.Ordinal)
-            && AssetExists(directory, baseName, extension);
+        return false;
     }
 
     private static string StripUnityDuplicateSuffix(string fileNameWithoutExtension)
@@ -264,24 +417,6 @@ public class ProjectImageDuplicateImportResolver : AssetPostprocessor
         }
 
         return fileNameWithoutExtension;
-    }
-
-    private static string DecrementTrailingNumber(string fileNameWithoutExtension)
-    {
-        Match match = Regex.Match(fileNameWithoutExtension, @"^(.*?)([1-9][0-9]*)$");
-        if (!match.Success)
-        {
-            return fileNameWithoutExtension;
-        }
-
-        string prefix = match.Groups[1].Value;
-        string numberText = match.Groups[2].Value;
-        if (!int.TryParse(numberText, out int number) || number <= 0)
-        {
-            return fileNameWithoutExtension;
-        }
-
-        return prefix + (number - 1).ToString(new string('0', numberText.Length));
     }
 
     private static bool AssetExists(string directory, string fileNameWithoutExtension, string extension)

@@ -181,11 +181,11 @@ This is not intended to be pixel-perfect runtime parity. The practical target is
 
 ## Project Image Import Convention
 
-- When images are dragged from the operating-system file explorer into the Unity Project window under `Assets/Content/UI/` and Unity creates a numbered duplicate such as `name1.png`, `name 1.png`, `name_1.png`, or increments an existing numbered name such as `name_0080.png` to `name_0081.png`, detect it after import and prompt before replacing the same-folder original image.
-- Confirming replacement copies the numbered duplicate's file bytes over the original asset file, reimports the original path, and deletes the numbered duplicate so the original `.meta` / GUID and existing references are preserved.
-- Cancelling keeps Unity's numbered duplicate untouched.
-- Keep this workflow post-import and delayed by one editor frame; do not block Unity's native Project-window drag operation before the asset database has finished creating the new file.
-- Provide `UITools/处理当前UI文件夹同名图片副本` for manually resolving numbered duplicates that were created before the post-import resolver existed or before its suffix rules were updated.
+- When images are dragged from the operating-system file explorer into the Unity Project window under `Assets/Content/UI/`, intercept the Project-window drop before Unity's native unique-name import runs. Use each external file's exact filename to decide whether the target folder already has a same-name asset.
+- Confirming replacement copies the dragged file bytes over the existing same-name asset file and reimports the original path so the original `.meta` / GUID and existing references are preserved. Cancelling skips that file.
+- Multiple-file drops such as `name_2.png`, `name_3.png`, and `name_4.png` must be matched by exact filename only; do not infer relationships by decrementing numeric suffixes because those names can be intentional sequence assets.
+- Keep the older post-import numbered-duplicate resolver only as a best-effort cleanup for Unity-created simple suffixes such as `name1.png`, `name 1.png`, or `name_1.png` when the Project-window drop interception did not run.
+- Provide `UITools/处理当前UI文件夹同名图片副本` for manually resolving simple numbered duplicates that were created before the Project-window drop interceptor existed.
 
 ## Scene UI Quick-Create Convention
 
