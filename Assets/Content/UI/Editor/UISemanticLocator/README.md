@@ -4,13 +4,9 @@ Unity Editor tool for finding a UI prefab from a natural-language clue, route na
 
 Open it from:
 
-`Tools/UI/Semantic UI Locator/Open`
+`Tools/UI/Semantic UI Locator`
 
-Smoke-test the validation case from:
-
-`Tools/UI/Semantic UI Locator/Smoke Test - Hero Journey`
-
-`Tools/UI/Semantic UI Locator/Smoke Test - Hard Training`
+The search field restores the last successful query. Press `Enter` in the search field to search again.
 
 ## What It Indexes
 

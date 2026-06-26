@@ -12,15 +12,15 @@ public class UISemanticLocatorWindow : EditorWindow
 {
     private const int CacheVersion = 2;
     private const int MaxResults = 80;
-    private const float PreviewWidth = 220f;
-    private const float PreviewHeight = 124f;
-    private const float EstimatedResultHeight = 160f;
+    private const float PreviewWidth = 196f;
+    private const float PreviewHeight = 110f;
+    private const float EstimatedResultHeight = 146f;
     private const int PreviewRenderSize = 384;
     private const int PreviewWarmupResultCount = 8;
     private const int PreviewVisibleResultCount = 14;
-    private const string MenuPath = "Tools/UI/Semantic UI Locator/Open";
-    private const string SmokeTestMenuPath = "Tools/UI/Semantic UI Locator/Smoke Test - Hero Journey";
-    private const string HardTrainingSmokeTestMenuPath = "Tools/UI/Semantic UI Locator/Smoke Test - Hard Training";
+    private const string MenuPath = "Tools/UI/Semantic UI Locator";
+    private const string SearchControlName = "UISemanticLocator.Search";
+    private const string SearchTextPrefsKey = "Dragon.UISemanticLocator.LastSearchText";
     private const string PrefabRoot = "Assets/Content/UI/Prefab";
     private const string CacheRelativePath = "Library/Dragon/UISemanticLocator/index.json";
 
@@ -70,14 +70,18 @@ public class UISemanticLocatorWindow : EditorWindow
     private static MethodInfo prefabPreviewGenerateMethod;
 
     [MenuItem(MenuPath, false, 2310)]
+    private static void OpenFromMenu()
+    {
+        Open();
+    }
+
     public static void Open()
     {
         UISemanticLocatorWindow window = GetWindow<UISemanticLocatorWindow>("UI Semantic Locator");
-        window.minSize = new Vector2(980f, 520f);
+        window.minSize = new Vector2(840f, 520f);
         window.Show();
     }
 
-    [MenuItem(SmokeTestMenuPath, false, 2311)]
     public static void SmokeTestHeroJourney()
     {
         IndexBuilder builder = new IndexBuilder(GetProjectRoot());
@@ -118,7 +122,6 @@ public class UISemanticLocatorWindow : EditorWindow
         }
     }
 
-    [MenuItem(HardTrainingSmokeTestMenuPath, false, 2312)]
     public static void SmokeTestHardTraining()
     {
         IndexBuilder builder = new IndexBuilder(GetProjectRoot());
@@ -166,6 +169,7 @@ public class UISemanticLocatorWindow : EditorWindow
 
     private void OnEnable()
     {
+        searchText = EditorPrefs.GetString(SearchTextPrefsKey, searchText);
         LoadOrBuildIndex(false);
         Search();
     }
@@ -198,9 +202,18 @@ public class UISemanticLocatorWindow : EditorWindow
 
     private void DrawToolbar()
     {
+        Event current = Event.current;
+        if (current.type == EventType.KeyDown
+            && IsSearchCommitKey(current.keyCode)
+            && GUI.GetNameOfFocusedControl() == SearchControlName)
+        {
+            Search();
+            current.Use();
+        }
+
         EditorGUILayout.BeginHorizontal(EditorStyles.toolbar);
 
-        GUI.SetNextControlName("UISemanticLocator.Search");
+        GUI.SetNextControlName(SearchControlName);
         searchText = GUILayout.TextField(searchText, GUI.skin.FindStyle("ToolbarSeachTextField") ?? EditorStyles.toolbarTextField, GUILayout.MinWidth(260f));
 
         if (GUILayout.Button("Search", EditorStyles.toolbarButton, GUILayout.Width(72f)))
@@ -228,13 +241,11 @@ public class UISemanticLocatorWindow : EditorWindow
         GUILayout.Label("Index: " + count + " entries", EditorStyles.miniLabel);
 
         EditorGUILayout.EndHorizontal();
+    }
 
-        Event current = Event.current;
-        if (current.type == EventType.KeyDown && current.keyCode == KeyCode.Return && GUI.GetNameOfFocusedControl() == "UISemanticLocator.Search")
-        {
-            Search();
-            current.Use();
-        }
+    private static bool IsSearchCommitKey(KeyCode keyCode)
+    {
+        return keyCode == KeyCode.Return || keyCode == KeyCode.KeypadEnter;
     }
 
     private void DrawStatus()
@@ -342,7 +353,7 @@ public class UISemanticLocatorWindow : EditorWindow
         if (texture != null)
         {
             Rect imageRect = new Rect(rect.x + 4f, rect.y + 4f, rect.width - 8f, rect.height - 8f);
-            GUI.DrawTexture(imageRect, texture, ScaleMode.ScaleToFit, true);
+            GUI.DrawTexture(imageRect, texture, ScaleMode.ScaleAndCrop, true);
         }
         else
         {
@@ -637,6 +648,7 @@ public class UISemanticLocatorWindow : EditorWindow
             return;
         }
 
+        EditorPrefs.SetString(SearchTextPrefsKey, query);
         QueryPlan queryPlan = QueryPlan.Build(query, indexCache.Aliases);
         List<SearchResult> nextResults = new List<SearchResult>();
 
