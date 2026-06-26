@@ -8,6 +8,8 @@ using UnityEngine;
 public class ProjectImageDuplicateImportResolver : AssetPostprocessor
 {
     private const string UIAssetRoot = "Assets/Content/UI/";
+    private const string ResolveSelectedFolderMenuPath =
+        "UITools/处理当前UI文件夹同名图片副本";
 
     private static readonly HashSet<string> SupportedImageExtensions =
         new HashSet<string>(StringComparer.OrdinalIgnoreCase)
@@ -26,6 +28,51 @@ public class ProjectImageDuplicateImportResolver : AssetPostprocessor
 
     private static bool isDelayCallRegistered;
     private static bool isProcessing;
+
+    [MenuItem(ResolveSelectedFolderMenuPath)]
+    private static void ResolveSelectedFolderDuplicateImages()
+    {
+        string folderPath = GetSelectedProjectFolderPath();
+        if (string.IsNullOrEmpty(folderPath))
+        {
+            EditorUtility.DisplayDialog(
+                "处理同名图片副本",
+                "请先在 Project 窗口选中一个 Assets/Content/UI/ 下的文件夹或图片资源。",
+                "确定");
+            return;
+        }
+
+        string[] guids = AssetDatabase.FindAssets(
+            "t:Texture",
+            new[] { folderPath });
+
+        List<string> candidatePaths = new List<string>();
+        for (int i = 0; i < guids.Length; i++)
+        {
+            string assetPath = NormalizeAssetPath(AssetDatabase.GUIDToAssetPath(guids[i]));
+            if (IsSupportedImageAsset(assetPath) && TryFindOriginalAssetPath(assetPath, out _))
+            {
+                candidatePaths.Add(assetPath);
+            }
+        }
+
+        if (candidatePaths.Count == 0)
+        {
+            EditorUtility.DisplayDialog(
+                "处理同名图片副本",
+                "当前文件夹没有发现可处理的同名序号副本。",
+                "确定");
+            return;
+        }
+
+        ProcessDuplicateImports(candidatePaths.ToArray());
+    }
+
+    [MenuItem(ResolveSelectedFolderMenuPath, true)]
+    private static bool ValidateResolveSelectedFolderDuplicateImages()
+    {
+        return !string.IsNullOrEmpty(GetSelectedProjectFolderPath());
+    }
 
     private static void OnPostprocessAllAssets(
         string[] importedAssets,
@@ -71,6 +118,16 @@ public class ProjectImageDuplicateImportResolver : AssetPostprocessor
         string[] candidatePaths = new string[PendingAssetPaths.Count];
         PendingAssetPaths.CopyTo(candidatePaths);
         PendingAssetPaths.Clear();
+
+        ProcessDuplicateImports(candidatePaths);
+    }
+
+    private static void ProcessDuplicateImports(string[] candidatePaths)
+    {
+        if (candidatePaths == null || candidatePaths.Length == 0)
+        {
+            return;
+        }
 
         isProcessing = true;
         try
@@ -185,6 +242,12 @@ public class ProjectImageDuplicateImportResolver : AssetPostprocessor
             return underscoreMatch.Groups[1].Value;
         }
 
+        Match directNumberMatch = Regex.Match(fileNameWithoutExtension, @"^(.*?)[1-9][0-9]*$");
+        if (directNumberMatch.Success)
+        {
+            return directNumberMatch.Groups[1].Value;
+        }
+
         return fileNameWithoutExtension;
     }
 
@@ -204,5 +267,34 @@ public class ProjectImageDuplicateImportResolver : AssetPostprocessor
     {
         string projectRoot = Path.GetDirectoryName(Application.dataPath);
         return Path.GetFullPath(Path.Combine(projectRoot, assetPath));
+    }
+
+    private static string GetSelectedProjectFolderPath()
+    {
+        UnityEngine.Object selectedObject = Selection.activeObject;
+        if (selectedObject == null)
+        {
+            return null;
+        }
+
+        string assetPath = NormalizeAssetPath(AssetDatabase.GetAssetPath(selectedObject));
+        if (string.IsNullOrEmpty(assetPath))
+        {
+            return null;
+        }
+
+        if (AssetDatabase.IsValidFolder(assetPath))
+        {
+            return assetPath.StartsWith(UIAssetRoot, StringComparison.OrdinalIgnoreCase)
+                ? assetPath
+                : null;
+        }
+
+        if (!IsSupportedImageAsset(assetPath))
+        {
+            return null;
+        }
+
+        return NormalizeAssetPath(Path.GetDirectoryName(assetPath));
     }
 }
