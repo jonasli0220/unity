@@ -22,10 +22,9 @@ namespace SgrUnity
         private static readonly int GrayStrengthId = Shader.PropertyToID("_GrayStrength");
         private const string GrayKeyword = "_IS_GRAY";
 
-        [SerializeField] private bool isDark;
-        [SerializeField] private bool previewInEditMode = true;
-        [SerializeField] [Range(0f, 1f)] private float darkFactor = 0.35f;
-        [SerializeField] [Range(0f, 1f)] private float grayStrength = 0.6f;
+        [SerializeField] private bool isDark = true;
+        [SerializeField] [Range(0f, 1f)] private float darkFactor = 0.6f;
+        [SerializeField] [Range(0f, 1f)] private float grayStrength;
         [SerializeField] private bool useMaterialFallback = true;
         [SerializeField] private bool autoRefreshOnChildrenChanged = true;
 
@@ -49,16 +48,6 @@ namespace SgrUnity
         public bool IsDark
         {
             get { return isDark; }
-        }
-
-        public bool PreviewInEditMode
-        {
-            get { return previewInEditMode; }
-            set
-            {
-                previewInEditMode = value;
-                ApplyCurrentState();
-            }
         }
 
         public float DarkFactor
@@ -223,7 +212,7 @@ namespace SgrUnity
         private bool CanApplyInCurrentMode()
         {
 #if UNITY_EDITOR
-            return Application.IsPlaying(gameObject) || previewInEditMode;
+            return true;
 #else
             return true;
 #endif
