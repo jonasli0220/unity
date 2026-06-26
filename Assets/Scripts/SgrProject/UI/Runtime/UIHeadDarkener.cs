@@ -4,9 +4,13 @@ using UnityEngine;
 using UnityEngine.Rendering;
 using UnityEngine.UI;
 using UITest;
+#if UNITY_EDITOR
+using UnityEditor;
+#endif
 
 namespace SgrUnity
 {
+    [ExecuteAlways]
     [DisallowMultipleComponent]
     public class UIHeadDarkener : MonoBehaviour
     {
@@ -19,6 +23,7 @@ namespace SgrUnity
         private const string GrayKeyword = "_IS_GRAY";
 
         [SerializeField] private bool isDark;
+        [SerializeField] private bool previewInEditMode = true;
         [SerializeField] [Range(0f, 1f)] private float darkFactor = 0.35f;
         [SerializeField] [Range(0f, 1f)] private float grayStrength = 0.6f;
         [SerializeField] private bool useMaterialFallback = true;
@@ -34,10 +39,26 @@ namespace SgrUnity
 
         private ParticleSystem.Particle[] particleBuffer = new ParticleSystem.Particle[128];
         private bool refreshPending;
+#if UNITY_EDITOR
+        private static readonly List<UIHeadDarkener> ActiveEditorPreviews = new List<UIHeadDarkener>();
+        private static bool editorCallbacksRegistered;
+
+        private bool editorPreviewRefreshQueued;
+#endif
 
         public bool IsDark
         {
             get { return isDark; }
+        }
+
+        public bool PreviewInEditMode
+        {
+            get { return previewInEditMode; }
+            set
+            {
+                previewInEditMode = value;
+                ApplyCurrentState();
+            }
         }
 
         public float DarkFactor
@@ -48,7 +69,7 @@ namespace SgrUnity
                 darkFactor = Mathf.Clamp01(value);
                 if (isDark)
                 {
-                    ApplyDarkState();
+                    ApplyCurrentState();
                 }
             }
         }
@@ -61,7 +82,7 @@ namespace SgrUnity
                 grayStrength = Mathf.Clamp01(value);
                 if (isDark)
                 {
-                    ApplyDarkState();
+                    ApplyCurrentState();
                 }
             }
         }
@@ -74,7 +95,7 @@ namespace SgrUnity
                 useMaterialFallback = value;
                 if (isDark)
                 {
-                    ApplyDarkState();
+                    ApplyCurrentState();
                 }
             }
         }
@@ -95,7 +116,12 @@ namespace SgrUnity
             grayStrength = Mathf.Clamp01(gray);
             isDark = dark;
 
-            if (isDark)
+            ApplyCurrentState();
+        }
+
+        public void Refresh()
+        {
+            if (isDark && CanApplyInCurrentMode())
             {
                 ApplyDarkState();
             }
@@ -105,24 +131,18 @@ namespace SgrUnity
             }
         }
 
-        public void Refresh()
-        {
-            if (isDark)
-            {
-                ApplyDarkState();
-            }
-            else
-            {
-                ClearInvalidStates();
-            }
-        }
-
         private void OnEnable()
         {
-            if (isDark)
+#if UNITY_EDITOR
+            EnsureEditorCallbacks();
+            if (IsEditorPreviewMode())
             {
-                ApplyDarkState();
+                QueueEditorPreviewRefresh();
+                return;
             }
+#endif
+
+            ApplyCurrentState();
         }
 
 #if UNITY_EDITOR
@@ -131,18 +151,18 @@ namespace SgrUnity
             darkFactor = Mathf.Clamp01(darkFactor);
             grayStrength = Mathf.Clamp01(grayStrength);
 
-            if (!Application.isPlaying || !isActiveAndEnabled)
+            if (!isActiveAndEnabled)
             {
                 return;
             }
 
-            if (isDark)
+            if (IsEditorPreviewMode())
             {
-                ApplyDarkState();
+                QueueEditorPreviewRefresh();
             }
             else
             {
-                RestoreAll();
+                ApplyCurrentState();
             }
         }
 #endif
@@ -188,9 +208,154 @@ namespace SgrUnity
             Refresh();
         }
 
+        private void ApplyCurrentState()
+        {
+            if (isDark && CanApplyInCurrentMode())
+            {
+                ApplyDarkState();
+            }
+            else
+            {
+                RestoreAll();
+            }
+        }
+
+        private bool CanApplyInCurrentMode()
+        {
+#if UNITY_EDITOR
+            return Application.IsPlaying(gameObject) || previewInEditMode;
+#else
+            return true;
+#endif
+        }
+
+#if UNITY_EDITOR
+        private bool IsEditorPreviewMode()
+        {
+            return !Application.IsPlaying(gameObject);
+        }
+
+        private void QueueEditorPreviewRefresh()
+        {
+            EnsureEditorCallbacks();
+            if (editorPreviewRefreshQueued)
+            {
+                return;
+            }
+
+            editorPreviewRefreshQueued = true;
+            EditorApplication.delayCall += () =>
+            {
+                if (this == null)
+                {
+                    return;
+                }
+
+                editorPreviewRefreshQueued = false;
+                if (!isActiveAndEnabled)
+                {
+                    return;
+                }
+
+                ApplyCurrentState();
+            };
+        }
+
+        private static void EnsureEditorCallbacks()
+        {
+            if (editorCallbacksRegistered)
+            {
+                return;
+            }
+
+            AssemblyReloadEvents.beforeAssemblyReload += RestoreAllEditorPreviews;
+            EditorApplication.playModeStateChanged += OnEditorPlayModeStateChanged;
+            EditorApplication.quitting += RestoreAllEditorPreviews;
+            editorCallbacksRegistered = true;
+        }
+
+        private static void OnEditorPlayModeStateChanged(PlayModeStateChange state)
+        {
+            if (state == PlayModeStateChange.ExitingEditMode || state == PlayModeStateChange.ExitingPlayMode)
+            {
+                RestoreAllEditorPreviews();
+            }
+        }
+
+        private static void RestoreAllEditorPreviews()
+        {
+            if (ActiveEditorPreviews.Count == 0)
+            {
+                return;
+            }
+
+            var previews = new List<UIHeadDarkener>(ActiveEditorPreviews);
+            for (int i = 0; i < previews.Count; i++)
+            {
+                if (previews[i] != null)
+                {
+                    previews[i].RestoreAll();
+                }
+            }
+
+            ActiveEditorPreviews.Clear();
+        }
+
+        internal static void RestoreEditorPreviewsBeforeSave()
+        {
+            if (ActiveEditorPreviews.Count == 0)
+            {
+                return;
+            }
+
+            var previews = new List<UIHeadDarkener>(ActiveEditorPreviews);
+            for (int i = 0; i < previews.Count; i++)
+            {
+                if (previews[i] != null)
+                {
+                    previews[i].RestoreAll();
+                }
+            }
+
+            EditorApplication.delayCall += () =>
+            {
+                for (int i = 0; i < previews.Count; i++)
+                {
+                    var preview = previews[i];
+                    if (preview != null && preview.isActiveAndEnabled)
+                    {
+                        preview.ApplyCurrentState();
+                    }
+                }
+            };
+        }
+
+        private void RegisterEditorPreview()
+        {
+            if (!IsEditorPreviewMode() || ActiveEditorPreviews.Contains(this))
+            {
+                return;
+            }
+
+            EnsureEditorCallbacks();
+            ActiveEditorPreviews.Add(this);
+        }
+
+        private void UnregisterEditorPreview()
+        {
+            ActiveEditorPreviews.Remove(this);
+        }
+#endif
+
         private void ApplyDarkState()
         {
             ClearInvalidStates();
+#if UNITY_EDITOR
+            if (IsEditorPreviewMode())
+            {
+                RegisterEditorPreview();
+            }
+#endif
             ApplyShaderHelpers();
             ApplyGraphics();
             ApplyParticles();
@@ -286,8 +451,7 @@ namespace SgrUnity
 
             if (state.RuntimeMaterial == null)
             {
-                state.RuntimeMaterial = new Material(sourceMaterial);
-                state.RuntimeMaterial.name = sourceMaterial.name + " (UIHeadDarkener)";
+                state.RuntimeMaterial = CreateRuntimeMaterial(sourceMaterial);
             }
 
             CopyMaterialDarkParams(sourceMaterial, state.RuntimeMaterial, hasColorProperty, hasGrayProperty);
@@ -477,8 +641,7 @@ namespace SgrUnity
 
             if (runtimeMaterial == null)
             {
-                runtimeMaterial = new Material(source);
-                runtimeMaterial.name = source.name + " (UIHeadDarkener)";
+                runtimeMaterial = CreateRuntimeMaterial(source);
             }
 
             CopyMaterialDarkParams(source, runtimeMaterial, hasColorProperty, hasGrayProperty);
@@ -700,6 +863,13 @@ namespace SgrUnity
 
         private void RestoreAll()
         {
+#if UNITY_EDITOR
+            if (IsEditorPreviewMode())
+            {
+                UnregisterEditorPreview();
+            }
+#endif
+
             foreach (var pair in helperStates)
             {
                 var helper = pair.Key;
@@ -914,6 +1084,14 @@ namespace SgrUnity
             }
         }
 
+        private static Material CreateRuntimeMaterial(Material source)
+        {
+            var material = new Material(source);
+            material.name = source.name + " (UIHeadDarkener)";
+            material.hideFlags = HideFlags.HideAndDontSave;
+            return material;
+        }
+
         private static void DestroyMaterial(Material material)
         {
             if (material == null)
@@ -1029,4 +1207,15 @@ namespace SgrUnity
             }
         }
     }
+
+#if UNITY_EDITOR
+    internal class UIHeadDarkenerAssetModificationProcessor : AssetModificationProcessor
+    {
+        private static string[] OnWillSaveAssets(string[] paths)
+        {
+            UIHeadDarkener.RestoreEditorPreviewsBeforeSave();
+            return paths;
+        }
+    }
+#endif
 }
