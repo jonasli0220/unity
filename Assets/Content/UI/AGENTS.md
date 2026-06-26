@@ -179,6 +179,13 @@ This is not intended to be pixel-perfect runtime parity. The practical target is
 - During Play Mode, allow Sprite drag-to-UI only inside an open UI Prefab Stage, where changes are written to the prefab editing scene and can be saved. Keep ordinary runtime scenes protected because objects created there disappear when Play Mode ends.
 - Do not intercept Sprite dragging while the toggle is disabled, during a Play Mode transition, or when no valid Canvas/UI parent can be resolved.
 
+## Project Image Import Convention
+
+- When images are dragged from the operating-system file explorer into the Unity Project window under `Assets/Content/UI/` and Unity creates a numbered duplicate such as `name 1.png` or `name_1.png`, detect it after import and prompt before replacing the same-folder original image.
+- Confirming replacement copies the numbered duplicate's file bytes over the original asset file, reimports the original path, and deletes the numbered duplicate so the original `.meta` / GUID and existing references are preserved.
+- Cancelling keeps Unity's numbered duplicate untouched.
+- Keep this workflow post-import and delayed by one editor frame; do not block Unity's native Project-window drag operation before the asset database has finished creating the new file.
+
 ## Scene UI Quick-Create Convention
 
 - While editing a prefab under `Assets/Content/UI/Prefab`, a short right-click in the Scene view may open a project-specific UI quick-create menu.
