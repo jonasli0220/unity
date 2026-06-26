@@ -26,6 +26,21 @@ public class ProjectImageDuplicateImportResolver : AssetPostprocessor
     private static readonly HashSet<string> PendingAssetPaths =
         new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
+    private class NumberedAssetRecord
+    {
+        public string AssetPath;
+        public string Directory;
+        public string Extension;
+        public string Prefix;
+        public int Number;
+    }
+
+    private class DuplicateImportResolution
+    {
+        public string DuplicateAssetPath;
+        public string OriginalAssetPath;
+    }
+
     private static bool isDelayCallRegistered;
     private static bool isProcessing;
 
@@ -245,7 +260,7 @@ public class ProjectImageDuplicateImportResolver : AssetPostprocessor
         for (int i = 0; i < importedAssets.Length; i++)
         {
             string assetPath = NormalizeAssetPath(importedAssets[i]);
-            if (!IsSupportedImageAsset(assetPath) || !TryFindOriginalAssetPath(assetPath, out _))
+            if (!IsSupportedImageAsset(assetPath))
             {
                 continue;
             }
@@ -288,17 +303,30 @@ public class ProjectImageDuplicateImportResolver : AssetPostprocessor
         isProcessing = true;
         try
         {
+            List<DuplicateImportResolution> resolutions =
+                ResolveDuplicateImports(candidatePaths);
             for (int i = 0; i < candidatePaths.Length; i++)
             {
+                string candidatePath = NormalizeAssetPath(candidatePaths[i]);
+                DuplicateImportResolution resolution = FindResolution(
+                    resolutions,
+                    candidatePath);
+                if (resolution == null)
+                {
+                    continue;
+                }
+
                 try
                 {
-                    TryResolveDuplicateImport(candidatePaths[i]);
+                    TryResolveDuplicateImport(
+                        resolution.DuplicateAssetPath,
+                        resolution.OriginalAssetPath);
                 }
                 catch (Exception exception)
                 {
                     Debug.LogError(
                         "Unable to resolve duplicate Project image import: " +
-                        candidatePaths[i] +
+                        candidatePath +
                         "\n" +
                         exception);
                 }
@@ -313,11 +341,63 @@ public class ProjectImageDuplicateImportResolver : AssetPostprocessor
         AssetDatabase.Refresh();
     }
 
-    private static void TryResolveDuplicateImport(string duplicateAssetPath)
+    private static List<DuplicateImportResolution> ResolveDuplicateImports(
+        string[] candidatePaths)
+    {
+        List<DuplicateImportResolution> resolutions = new List<DuplicateImportResolution>();
+        HashSet<string> resolvedDuplicatePaths =
+            new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        for (int i = 0; i < candidatePaths.Length; i++)
+        {
+            string duplicateAssetPath = NormalizeAssetPath(candidatePaths[i]);
+            if (TryFindOriginalAssetPath(
+                    duplicateAssetPath,
+                    out string originalAssetPath))
+            {
+                resolutions.Add(
+                    new DuplicateImportResolution
+                    {
+                        DuplicateAssetPath = duplicateAssetPath,
+                        OriginalAssetPath = originalAssetPath
+                    });
+                resolvedDuplicatePaths.Add(duplicateAssetPath);
+            }
+        }
+
+        AddShiftedNumberBatchResolutions(
+            candidatePaths,
+            resolvedDuplicatePaths,
+            resolutions);
+        return resolutions;
+    }
+
+    private static DuplicateImportResolution FindResolution(
+        List<DuplicateImportResolution> resolutions,
+        string duplicateAssetPath)
+    {
+        for (int i = 0; i < resolutions.Count; i++)
+        {
+            if (string.Equals(
+                    resolutions[i].DuplicateAssetPath,
+                    duplicateAssetPath,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                return resolutions[i];
+            }
+        }
+
+        return null;
+    }
+
+    private static void TryResolveDuplicateImport(
+        string duplicateAssetPath,
+        string originalAssetPath)
     {
         duplicateAssetPath = NormalizeAssetPath(duplicateAssetPath);
+        originalAssetPath = NormalizeAssetPath(originalAssetPath);
         if (!IsSupportedImageAsset(duplicateAssetPath)
-            || !TryFindOriginalAssetPath(duplicateAssetPath, out string originalAssetPath)
+            || !IsSupportedImageAsset(originalAssetPath)
             || !File.Exists(AssetPathToAbsolutePath(duplicateAssetPath))
             || !File.Exists(AssetPathToAbsolutePath(originalAssetPath)))
         {
@@ -348,6 +428,181 @@ public class ProjectImageDuplicateImportResolver : AssetPostprocessor
         {
             Debug.LogWarning("Unable to delete duplicate imported image: " + duplicateAssetPath);
         }
+    }
+
+    private static void AddShiftedNumberBatchResolutions(
+        string[] candidatePaths,
+        HashSet<string> resolvedDuplicatePaths,
+        List<DuplicateImportResolution> resolutions)
+    {
+        List<NumberedAssetRecord> records = new List<NumberedAssetRecord>();
+        for (int i = 0; i < candidatePaths.Length; i++)
+        {
+            string candidatePath = NormalizeAssetPath(candidatePaths[i]);
+            if (resolvedDuplicatePaths.Contains(candidatePath))
+            {
+                continue;
+            }
+
+            if (TryParseNumberedAsset(candidatePath, out NumberedAssetRecord record))
+            {
+                records.Add(record);
+            }
+        }
+
+        for (int i = 0; i < records.Count; i++)
+        {
+            NumberedAssetRecord first = records[i];
+            List<NumberedAssetRecord> group = new List<NumberedAssetRecord>();
+            for (int j = 0; j < records.Count; j++)
+            {
+                NumberedAssetRecord current = records[j];
+                if (string.Equals(first.Directory, current.Directory, StringComparison.OrdinalIgnoreCase)
+                    && string.Equals(first.Extension, current.Extension, StringComparison.OrdinalIgnoreCase)
+                    && string.Equals(first.Prefix, current.Prefix, StringComparison.Ordinal))
+                {
+                    group.Add(current);
+                }
+            }
+
+            if (group.Count < 2 || !ReferenceEquals(first, group[0]))
+            {
+                continue;
+            }
+
+            group.Sort((left, right) => left.Number.CompareTo(right.Number));
+            List<NumberedAssetRecord> originals =
+                FindPreviousNumberedAssetsForBatch(group);
+            if (originals.Count != group.Count)
+            {
+                continue;
+            }
+
+            originals.Sort((left, right) => left.Number.CompareTo(right.Number));
+            for (int j = 0; j < group.Count; j++)
+            {
+                resolutions.Add(
+                    new DuplicateImportResolution
+                    {
+                        DuplicateAssetPath = group[j].AssetPath,
+                        OriginalAssetPath = originals[j].AssetPath
+                    });
+                resolvedDuplicatePaths.Add(group[j].AssetPath);
+            }
+        }
+    }
+
+    private static List<NumberedAssetRecord> FindPreviousNumberedAssetsForBatch(
+        List<NumberedAssetRecord> importedBatch)
+    {
+        List<NumberedAssetRecord> originals = new List<NumberedAssetRecord>();
+        if (importedBatch == null || importedBatch.Count < 2)
+        {
+            return originals;
+        }
+
+        NumberedAssetRecord first = importedBatch[0];
+        if (!IsConsecutiveNumberedBatch(importedBatch))
+        {
+            return originals;
+        }
+
+        int minImportedNumber = importedBatch[0].Number;
+        string absoluteDirectory = AssetPathToAbsolutePath(first.Directory);
+        if (!Directory.Exists(absoluteDirectory))
+        {
+            return originals;
+        }
+
+        string[] files = Directory.GetFiles(absoluteDirectory, "*" + first.Extension);
+        for (int i = 0; i < files.Length; i++)
+        {
+            string assetPath = AbsolutePathToAssetPath(files[i]);
+            if (string.IsNullOrEmpty(assetPath)
+                || !TryParseNumberedAsset(assetPath, out NumberedAssetRecord record)
+                || record.Number >= minImportedNumber
+                || !string.Equals(record.Directory, first.Directory, StringComparison.OrdinalIgnoreCase)
+                || !string.Equals(record.Extension, first.Extension, StringComparison.OrdinalIgnoreCase)
+                || !string.Equals(record.Prefix, first.Prefix, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            originals.Add(record);
+        }
+
+        originals.Sort((left, right) => right.Number.CompareTo(left.Number));
+        if (originals.Count < importedBatch.Count)
+        {
+            originals.Clear();
+            return originals;
+        }
+
+        originals.RemoveRange(importedBatch.Count, originals.Count - importedBatch.Count);
+        originals.Sort((left, right) => left.Number.CompareTo(right.Number));
+        if (!IsConsecutiveNumberedBatch(originals))
+        {
+            originals.Clear();
+        }
+
+        return originals;
+    }
+
+    private static bool IsConsecutiveNumberedBatch(List<NumberedAssetRecord> records)
+    {
+        if (records == null || records.Count == 0)
+        {
+            return false;
+        }
+
+        records.Sort((left, right) => left.Number.CompareTo(right.Number));
+        for (int i = 1; i < records.Count; i++)
+        {
+            if (records[i].Number != records[i - 1].Number + 1)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static bool TryParseNumberedAsset(
+        string assetPath,
+        out NumberedAssetRecord record)
+    {
+        record = null;
+        assetPath = NormalizeAssetPath(assetPath);
+        if (!IsSupportedImageAsset(assetPath))
+        {
+            return false;
+        }
+
+        string directory = NormalizeAssetPath(Path.GetDirectoryName(assetPath));
+        string extension = Path.GetExtension(assetPath);
+        string fileNameWithoutExtension = Path.GetFileNameWithoutExtension(assetPath);
+        if (string.IsNullOrEmpty(directory)
+            || string.IsNullOrEmpty(extension)
+            || string.IsNullOrEmpty(fileNameWithoutExtension))
+        {
+            return false;
+        }
+
+        Match match = Regex.Match(fileNameWithoutExtension, @"^(.*?)([1-9][0-9]*)$");
+        if (!match.Success || !int.TryParse(match.Groups[2].Value, out int number))
+        {
+            return false;
+        }
+
+        record = new NumberedAssetRecord
+        {
+            AssetPath = assetPath,
+            Directory = directory,
+            Extension = extension,
+            Prefix = match.Groups[1].Value,
+            Number = number
+        };
+        return true;
     }
 
     private static bool TryFindOriginalAssetPath(
@@ -443,6 +698,26 @@ public class ProjectImageDuplicateImportResolver : AssetPostprocessor
     {
         string projectRoot = Path.GetDirectoryName(Application.dataPath);
         return Path.GetFullPath(Path.Combine(projectRoot, assetPath));
+    }
+
+    private static string AbsolutePathToAssetPath(string absolutePath)
+    {
+        if (string.IsNullOrEmpty(absolutePath))
+        {
+            return null;
+        }
+
+        string projectRoot = Path.GetFullPath(Path.GetDirectoryName(Application.dataPath));
+        string fullPath = Path.GetFullPath(absolutePath);
+        if (!fullPath.StartsWith(projectRoot, StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        string relativePath = fullPath.Substring(projectRoot.Length).TrimStart(
+            Path.DirectorySeparatorChar,
+            Path.AltDirectorySeparatorChar);
+        return NormalizeAssetPath(relativePath);
     }
 
     private static string GetSelectedProjectFolderPath()
