@@ -105,7 +105,7 @@ public class ProjectImageDuplicateImportResolver : AssetPostprocessor
         for (int i = 0; i < guids.Length; i++)
         {
             string assetPath = NormalizeAssetPath(AssetDatabase.GUIDToAssetPath(guids[i]));
-            if (IsSupportedImageAsset(assetPath) && TryFindOriginalAssetPath(assetPath, out _))
+            if (IsSupportedImageAsset(assetPath))
             {
                 candidatePaths.Add(assetPath);
             }
