@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Reflection;
+using System.Security.Cryptography;
 using System.Text.RegularExpressions;
 using UnityEditor;
 using UnityEngine;
@@ -26,29 +28,54 @@ public class ProjectImageDuplicateImportResolver : AssetPostprocessor
     private static readonly HashSet<string> PendingAssetPaths =
         new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-    private class NumberedAssetRecord
-    {
-        public string AssetPath;
-        public string Directory;
-        public string Extension;
-        public string Prefix;
-        public int Number;
-    }
-
     private class DuplicateImportResolution
     {
         public string DuplicateAssetPath;
         public string OriginalAssetPath;
     }
 
+    private class PendingExternalProjectDrop
+    {
+        public List<string> ExternalImagePaths;
+        public string TargetFolder;
+        public HashSet<string> ExistingTargetAssetPaths;
+        public double Time;
+    }
+
+    private const double PendingExternalProjectDropSeconds = 30d;
+
     private static bool isDelayCallRegistered;
     private static bool isProcessing;
+    private static PendingExternalProjectDrop pendingExternalProjectDrop;
 
     [InitializeOnLoadMethod]
     private static void InitProjectImageDuplicateImportResolver()
     {
         EditorApplication.projectWindowItemOnGUI -= HandleProjectWindowExternalImageDrag;
         EditorApplication.projectWindowItemOnGUI += HandleProjectWindowExternalImageDrag;
+        EditorApplication.update -= TrackProjectWindowExternalImageDrag;
+        EditorApplication.update += TrackProjectWindowExternalImageDrag;
+    }
+
+    private static void TrackProjectWindowExternalImageDrag()
+    {
+        List<string> externalImagePaths = new List<string>();
+        if (!TryGetExternalImagePaths(externalImagePaths)
+            || !IsMouseOverProjectWindow())
+        {
+            return;
+        }
+
+        string targetFolder = GetActiveProjectFolderPath();
+        if (string.IsNullOrEmpty(targetFolder)
+            || !targetFolder.StartsWith(UIAssetRoot, StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        pendingExternalProjectDrop = CreatePendingExternalProjectDrop(
+            externalImagePaths,
+            targetFolder);
     }
 
     private static void HandleProjectWindowExternalImageDrag(string guid, Rect selectionRect)
@@ -73,6 +100,10 @@ public class ProjectImageDuplicateImportResolver : AssetPostprocessor
         {
             return;
         }
+
+        pendingExternalProjectDrop = CreatePendingExternalProjectDrop(
+            externalImagePaths,
+            targetFolder);
 
         DragAndDrop.visualMode = DragAndDropVisualMode.Copy;
         if (currentEvent.type == EventType.DragPerform)
@@ -245,6 +276,37 @@ public class ProjectImageDuplicateImportResolver : AssetPostprocessor
         AssetDatabase.ImportAsset(assetPath, ImportAssetOptions.ForceSynchronousImport);
     }
 
+    private static PendingExternalProjectDrop CreatePendingExternalProjectDrop(
+        List<string> externalImagePaths,
+        string targetFolder)
+    {
+        PendingExternalProjectDrop pendingDrop = new PendingExternalProjectDrop
+        {
+            ExternalImagePaths = new List<string>(externalImagePaths),
+            TargetFolder = NormalizeAssetPath(targetFolder),
+            ExistingTargetAssetPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase),
+            Time = EditorApplication.timeSinceStartup
+        };
+
+        for (int i = 0; i < externalImagePaths.Count; i++)
+        {
+            string fileName = Path.GetFileName(externalImagePaths[i]);
+            if (string.IsNullOrEmpty(fileName))
+            {
+                continue;
+            }
+
+            string targetAssetPath = NormalizeAssetPath(targetFolder + "/" + fileName);
+            if (AssetDatabase.LoadMainAssetAtPath(targetAssetPath) != null
+                || File.Exists(AssetPathToAbsolutePath(targetAssetPath)))
+            {
+                pendingDrop.ExistingTargetAssetPaths.Add(targetAssetPath);
+            }
+        }
+
+        return pendingDrop;
+    }
+
     private static void OnPostprocessAllAssets(
         string[] importedAssets,
         string[] deletedAssets,
@@ -348,9 +410,19 @@ public class ProjectImageDuplicateImportResolver : AssetPostprocessor
         HashSet<string> resolvedDuplicatePaths =
             new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
+        AddExactExternalDropResolutions(
+            candidatePaths,
+            resolvedDuplicatePaths,
+            resolutions);
+
         for (int i = 0; i < candidatePaths.Length; i++)
         {
             string duplicateAssetPath = NormalizeAssetPath(candidatePaths[i]);
+            if (resolvedDuplicatePaths.Contains(duplicateAssetPath))
+            {
+                continue;
+            }
+
             if (TryFindOriginalAssetPath(
                     duplicateAssetPath,
                     out string originalAssetPath))
@@ -365,11 +437,93 @@ public class ProjectImageDuplicateImportResolver : AssetPostprocessor
             }
         }
 
-        AddShiftedNumberBatchResolutions(
-            candidatePaths,
-            resolvedDuplicatePaths,
-            resolutions);
         return resolutions;
+    }
+
+    private static void AddExactExternalDropResolutions(
+        string[] candidatePaths,
+        HashSet<string> resolvedDuplicatePaths,
+        List<DuplicateImportResolution> resolutions)
+    {
+        PendingExternalProjectDrop pendingDrop = pendingExternalProjectDrop;
+        if (pendingDrop == null
+            || EditorApplication.timeSinceStartup - pendingDrop.Time >
+                PendingExternalProjectDropSeconds)
+        {
+            return;
+        }
+
+        string targetFolder = NormalizeAssetPath(pendingDrop.TargetFolder);
+        for (int i = 0; i < pendingDrop.ExternalImagePaths.Count; i++)
+        {
+            string externalPath = pendingDrop.ExternalImagePaths[i];
+            string fileName = Path.GetFileName(externalPath);
+            if (string.IsNullOrEmpty(fileName))
+            {
+                continue;
+            }
+
+            string originalAssetPath = NormalizeAssetPath(targetFolder + "/" + fileName);
+            if (!pendingDrop.ExistingTargetAssetPaths.Contains(originalAssetPath))
+            {
+                continue;
+            }
+
+            string duplicateAssetPath = FindImportedDuplicateForExternalFile(
+                externalPath,
+                originalAssetPath,
+                candidatePaths,
+                resolvedDuplicatePaths);
+            if (string.IsNullOrEmpty(duplicateAssetPath))
+            {
+                continue;
+            }
+
+            resolutions.Add(
+                new DuplicateImportResolution
+                {
+                    DuplicateAssetPath = duplicateAssetPath,
+                    OriginalAssetPath = originalAssetPath
+                });
+            resolvedDuplicatePaths.Add(duplicateAssetPath);
+        }
+    }
+
+    private static string FindImportedDuplicateForExternalFile(
+        string externalPath,
+        string originalAssetPath,
+        string[] candidatePaths,
+        HashSet<string> resolvedDuplicatePaths)
+    {
+        string externalHash = ComputeFileHash(externalPath);
+        if (string.IsNullOrEmpty(externalHash))
+        {
+            return null;
+        }
+
+        string originalFolder = NormalizeAssetPath(Path.GetDirectoryName(originalAssetPath));
+        for (int i = 0; i < candidatePaths.Length; i++)
+        {
+            string candidatePath = NormalizeAssetPath(candidatePaths[i]);
+            if (resolvedDuplicatePaths.Contains(candidatePath)
+                || string.Equals(candidatePath, originalAssetPath, StringComparison.OrdinalIgnoreCase)
+                || !string.Equals(
+                    NormalizeAssetPath(Path.GetDirectoryName(candidatePath)),
+                    originalFolder,
+                    StringComparison.OrdinalIgnoreCase)
+                || !IsSupportedImageAsset(candidatePath))
+            {
+                continue;
+            }
+
+            string candidateHash = ComputeFileHash(AssetPathToAbsolutePath(candidatePath));
+            if (string.Equals(candidateHash, externalHash, StringComparison.OrdinalIgnoreCase))
+            {
+                return candidatePath;
+            }
+        }
+
+        return null;
     }
 
     private static DuplicateImportResolution FindResolution(
@@ -428,181 +582,6 @@ public class ProjectImageDuplicateImportResolver : AssetPostprocessor
         {
             Debug.LogWarning("Unable to delete duplicate imported image: " + duplicateAssetPath);
         }
-    }
-
-    private static void AddShiftedNumberBatchResolutions(
-        string[] candidatePaths,
-        HashSet<string> resolvedDuplicatePaths,
-        List<DuplicateImportResolution> resolutions)
-    {
-        List<NumberedAssetRecord> records = new List<NumberedAssetRecord>();
-        for (int i = 0; i < candidatePaths.Length; i++)
-        {
-            string candidatePath = NormalizeAssetPath(candidatePaths[i]);
-            if (resolvedDuplicatePaths.Contains(candidatePath))
-            {
-                continue;
-            }
-
-            if (TryParseNumberedAsset(candidatePath, out NumberedAssetRecord record))
-            {
-                records.Add(record);
-            }
-        }
-
-        for (int i = 0; i < records.Count; i++)
-        {
-            NumberedAssetRecord first = records[i];
-            List<NumberedAssetRecord> group = new List<NumberedAssetRecord>();
-            for (int j = 0; j < records.Count; j++)
-            {
-                NumberedAssetRecord current = records[j];
-                if (string.Equals(first.Directory, current.Directory, StringComparison.OrdinalIgnoreCase)
-                    && string.Equals(first.Extension, current.Extension, StringComparison.OrdinalIgnoreCase)
-                    && string.Equals(first.Prefix, current.Prefix, StringComparison.Ordinal))
-                {
-                    group.Add(current);
-                }
-            }
-
-            if (group.Count < 2 || !ReferenceEquals(first, group[0]))
-            {
-                continue;
-            }
-
-            group.Sort((left, right) => left.Number.CompareTo(right.Number));
-            List<NumberedAssetRecord> originals =
-                FindPreviousNumberedAssetsForBatch(group);
-            if (originals.Count != group.Count)
-            {
-                continue;
-            }
-
-            originals.Sort((left, right) => left.Number.CompareTo(right.Number));
-            for (int j = 0; j < group.Count; j++)
-            {
-                resolutions.Add(
-                    new DuplicateImportResolution
-                    {
-                        DuplicateAssetPath = group[j].AssetPath,
-                        OriginalAssetPath = originals[j].AssetPath
-                    });
-                resolvedDuplicatePaths.Add(group[j].AssetPath);
-            }
-        }
-    }
-
-    private static List<NumberedAssetRecord> FindPreviousNumberedAssetsForBatch(
-        List<NumberedAssetRecord> importedBatch)
-    {
-        List<NumberedAssetRecord> originals = new List<NumberedAssetRecord>();
-        if (importedBatch == null || importedBatch.Count < 2)
-        {
-            return originals;
-        }
-
-        NumberedAssetRecord first = importedBatch[0];
-        if (!IsConsecutiveNumberedBatch(importedBatch))
-        {
-            return originals;
-        }
-
-        int minImportedNumber = importedBatch[0].Number;
-        string absoluteDirectory = AssetPathToAbsolutePath(first.Directory);
-        if (!Directory.Exists(absoluteDirectory))
-        {
-            return originals;
-        }
-
-        string[] files = Directory.GetFiles(absoluteDirectory, "*" + first.Extension);
-        for (int i = 0; i < files.Length; i++)
-        {
-            string assetPath = AbsolutePathToAssetPath(files[i]);
-            if (string.IsNullOrEmpty(assetPath)
-                || !TryParseNumberedAsset(assetPath, out NumberedAssetRecord record)
-                || record.Number >= minImportedNumber
-                || !string.Equals(record.Directory, first.Directory, StringComparison.OrdinalIgnoreCase)
-                || !string.Equals(record.Extension, first.Extension, StringComparison.OrdinalIgnoreCase)
-                || !string.Equals(record.Prefix, first.Prefix, StringComparison.Ordinal))
-            {
-                continue;
-            }
-
-            originals.Add(record);
-        }
-
-        originals.Sort((left, right) => right.Number.CompareTo(left.Number));
-        if (originals.Count < importedBatch.Count)
-        {
-            originals.Clear();
-            return originals;
-        }
-
-        originals.RemoveRange(importedBatch.Count, originals.Count - importedBatch.Count);
-        originals.Sort((left, right) => left.Number.CompareTo(right.Number));
-        if (!IsConsecutiveNumberedBatch(originals))
-        {
-            originals.Clear();
-        }
-
-        return originals;
-    }
-
-    private static bool IsConsecutiveNumberedBatch(List<NumberedAssetRecord> records)
-    {
-        if (records == null || records.Count == 0)
-        {
-            return false;
-        }
-
-        records.Sort((left, right) => left.Number.CompareTo(right.Number));
-        for (int i = 1; i < records.Count; i++)
-        {
-            if (records[i].Number != records[i - 1].Number + 1)
-            {
-                return false;
-            }
-        }
-
-        return true;
-    }
-
-    private static bool TryParseNumberedAsset(
-        string assetPath,
-        out NumberedAssetRecord record)
-    {
-        record = null;
-        assetPath = NormalizeAssetPath(assetPath);
-        if (!IsSupportedImageAsset(assetPath))
-        {
-            return false;
-        }
-
-        string directory = NormalizeAssetPath(Path.GetDirectoryName(assetPath));
-        string extension = Path.GetExtension(assetPath);
-        string fileNameWithoutExtension = Path.GetFileNameWithoutExtension(assetPath);
-        if (string.IsNullOrEmpty(directory)
-            || string.IsNullOrEmpty(extension)
-            || string.IsNullOrEmpty(fileNameWithoutExtension))
-        {
-            return false;
-        }
-
-        Match match = Regex.Match(fileNameWithoutExtension, @"^(.*?)([1-9][0-9]*)$");
-        if (!match.Success || !int.TryParse(match.Groups[2].Value, out int number))
-        {
-            return false;
-        }
-
-        record = new NumberedAssetRecord
-        {
-            AssetPath = assetPath,
-            Directory = directory,
-            Extension = extension,
-            Prefix = match.Groups[1].Value,
-            Number = number
-        };
-        return true;
     }
 
     private static bool TryFindOriginalAssetPath(
@@ -718,6 +697,76 @@ public class ProjectImageDuplicateImportResolver : AssetPostprocessor
             Path.DirectorySeparatorChar,
             Path.AltDirectorySeparatorChar);
         return NormalizeAssetPath(relativePath);
+    }
+
+    private static string ComputeFileHash(string path)
+    {
+        if (string.IsNullOrEmpty(path) || !File.Exists(path))
+        {
+            return null;
+        }
+
+        using (SHA256 sha256 = SHA256.Create())
+        using (FileStream stream = File.OpenRead(path))
+        {
+            byte[] hashBytes = sha256.ComputeHash(stream);
+            return BitConverter.ToString(hashBytes).Replace("-", string.Empty);
+        }
+    }
+
+    private static bool IsMouseOverProjectWindow()
+    {
+        EditorWindow mouseOverWindow = EditorWindow.mouseOverWindow;
+        if (mouseOverWindow == null)
+        {
+            return false;
+        }
+
+        Type projectBrowserType = Type.GetType("UnityEditor.ProjectBrowser,UnityEditor");
+        return projectBrowserType != null && projectBrowserType.IsInstanceOfType(mouseOverWindow);
+    }
+
+    private static string GetActiveProjectFolderPath()
+    {
+        Type projectBrowserType = Type.GetType("UnityEditor.ProjectBrowser,UnityEditor");
+        if (projectBrowserType == null)
+        {
+            return GetSelectedProjectFolderPath();
+        }
+
+        object projectBrowser = null;
+        FieldInfo lastInteractedBrowserField = projectBrowserType.GetField(
+            "s_LastInteractedProjectBrowser",
+            BindingFlags.Static | BindingFlags.NonPublic);
+        if (lastInteractedBrowserField != null)
+        {
+            projectBrowser = lastInteractedBrowserField.GetValue(null);
+        }
+
+        if (projectBrowser == null && EditorWindow.mouseOverWindow != null
+            && projectBrowserType.IsInstanceOfType(EditorWindow.mouseOverWindow))
+        {
+            projectBrowser = EditorWindow.mouseOverWindow;
+        }
+
+        if (projectBrowser != null)
+        {
+            MethodInfo getActiveFolderPathMethod = projectBrowserType.GetMethod(
+                "GetActiveFolderPath",
+                BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+            if (getActiveFolderPathMethod != null)
+            {
+                string activeFolderPath = NormalizeAssetPath(
+                    getActiveFolderPathMethod.Invoke(projectBrowser, null) as string);
+                if (!string.IsNullOrEmpty(activeFolderPath)
+                    && AssetDatabase.IsValidFolder(activeFolderPath))
+                {
+                    return activeFolderPath;
+                }
+            }
+        }
+
+        return GetSelectedProjectFolderPath();
     }
 
     private static string GetSelectedProjectFolderPath()
