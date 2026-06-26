@@ -210,22 +210,37 @@ public class ProjectImageDuplicateImportResolver : AssetPostprocessor
             return false;
         }
 
-        string baseName = StripUnityDuplicateSuffix(fileNameWithoutExtension);
-        if (string.IsNullOrEmpty(baseName)
-            || string.Equals(baseName, fileNameWithoutExtension, StringComparison.Ordinal))
+        if (!TryResolveOriginalBaseName(
+                directory,
+                extension,
+                fileNameWithoutExtension,
+                out string baseName))
         {
             return false;
         }
 
-        string candidatePath = NormalizeAssetPath(directory + "/" + baseName + extension);
-        if (AssetDatabase.LoadMainAssetAtPath(candidatePath) == null
-            && !File.Exists(AssetPathToAbsolutePath(candidatePath)))
-        {
-            return false;
-        }
-
-        originalAssetPath = candidatePath;
+        originalAssetPath = NormalizeAssetPath(directory + "/" + baseName + extension);
         return true;
+    }
+
+    private static bool TryResolveOriginalBaseName(
+        string directory,
+        string extension,
+        string fileNameWithoutExtension,
+        out string baseName)
+    {
+        baseName = StripUnityDuplicateSuffix(fileNameWithoutExtension);
+        if (!string.IsNullOrEmpty(baseName)
+            && !string.Equals(baseName, fileNameWithoutExtension, StringComparison.Ordinal)
+            && AssetExists(directory, baseName, extension))
+        {
+            return true;
+        }
+
+        baseName = DecrementTrailingNumber(fileNameWithoutExtension);
+        return !string.IsNullOrEmpty(baseName)
+            && !string.Equals(baseName, fileNameWithoutExtension, StringComparison.Ordinal)
+            && AssetExists(directory, baseName, extension);
     }
 
     private static string StripUnityDuplicateSuffix(string fileNameWithoutExtension)
@@ -249,6 +264,32 @@ public class ProjectImageDuplicateImportResolver : AssetPostprocessor
         }
 
         return fileNameWithoutExtension;
+    }
+
+    private static string DecrementTrailingNumber(string fileNameWithoutExtension)
+    {
+        Match match = Regex.Match(fileNameWithoutExtension, @"^(.*?)([1-9][0-9]*)$");
+        if (!match.Success)
+        {
+            return fileNameWithoutExtension;
+        }
+
+        string prefix = match.Groups[1].Value;
+        string numberText = match.Groups[2].Value;
+        if (!int.TryParse(numberText, out int number) || number <= 0)
+        {
+            return fileNameWithoutExtension;
+        }
+
+        return prefix + (number - 1).ToString(new string('0', numberText.Length));
+    }
+
+    private static bool AssetExists(string directory, string fileNameWithoutExtension, string extension)
+    {
+        string candidatePath = NormalizeAssetPath(
+            directory + "/" + fileNameWithoutExtension + extension);
+        return AssetDatabase.LoadMainAssetAtPath(candidatePath) != null
+            || File.Exists(AssetPathToAbsolutePath(candidatePath));
     }
 
     private static bool IsSupportedImageAsset(string assetPath)
