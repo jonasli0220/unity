@@ -111,7 +111,8 @@ public class UICreator
         }
 
         PrefabStage prefabStage = PrefabStageUtility.GetCurrentPrefabStage();
-        if (!IsUIPrefabStage(prefabStage))
+        bool isLiveBoard = UIDesignBoardLiveScene.IsActive;
+        if (!IsUIPrefabStage(prefabStage) && !isLiveBoard)
         {
             ResetRightClickState();
             return;
@@ -166,7 +167,8 @@ public class UICreator
         }
 
         RectTransform parent = ResolveSpriteDropParent();
-        if (parent == null)
+        if (parent == null ||
+            (isLiveBoard && !UIDesignBoardLiveScene.IsEditableObject(parent.gameObject)))
         {
             return;
         }
@@ -326,9 +328,10 @@ public class UICreator
         Vector2 size,
         params Type[] additionalComponentTypes)
     {
-        if (!IsUIPrefabStage(prefabStage) ||
-            parent == null ||
-            !IsInsidePrefabStage(parent, prefabStage))
+        if (parent == null ||
+            !IsInsideCurrentEditingContext(parent, prefabStage) ||
+            (UIDesignBoardLiveScene.IsActive &&
+             !UIDesignBoardLiveScene.IsEditableObject(parent.gameObject)))
         {
             return null;
         }
@@ -374,7 +377,11 @@ public class UICreator
 
         Undo.RegisterFullObjectHierarchyUndo(parent.gameObject, undoName);
         Undo.CollapseUndoOperations(Undo.GetCurrentGroup());
-        EditorSceneManager.MarkSceneDirty(prefabStage.scene);
+        Scene editedScene = prefabStage != null ? prefabStage.scene : parent.gameObject.scene;
+        if (editedScene.IsValid())
+        {
+            EditorSceneManager.MarkSceneDirty(editedScene);
+        }
         Selection.activeGameObject = createdObject;
         SceneView.RepaintAll();
     }
@@ -468,7 +475,9 @@ public class UICreator
         }
 
         RectTransform parent = ResolveSpriteDropParent();
-        if (parent == null)
+        if (parent == null ||
+            (UIDesignBoardLiveScene.IsActive &&
+             !UIDesignBoardLiveScene.IsEditableObject(parent.gameObject)))
         {
             ClearSpriteDragPreview(sceneView);
             return;
@@ -1553,13 +1562,4 @@ public class UICreator
         return obj;
     }
 
-    [MenuItem("Assets/UI/AnimationCilp")]
-    static AnimationClip CreateAnimationCilp()
-    {
-        AnimationClip clip = new AnimationClip();
-        clip.wrapMode = WrapMode.Once;
-        string path = AssetDatabase.GetAssetPath(Selection.activeObject) + "/" + "NewAnimation.anim";
-        AssetDatabase.CreateAsset(clip, path);
-        return clip;
-    }
 }

@@ -2,7 +2,7 @@
 
 ## Scope
 
-This directory contains the Unity Editor phase-1 design board for browsing and organizing many UI prefab artboards on an infinite canvas.
+This directory contains the Unity Editor design board for browsing, organizing, and editing many UI prefab artboards through an infinite board and a temporary Live Board scene.
 
 ## Placement
 
@@ -15,14 +15,29 @@ This directory contains the Unity Editor phase-1 design board for browsing and o
 - Board state is local editor data, not game source data.
 - Persist board state under the Unity project `Library/Dragon/UIDesignBoard`.
 - Do not store board JSON, generated thumbnails, screenshots, or logs under `Assets/`.
-- The tool may read UI prefab assets under `Assets/Content/UI/Prefab`, but phase 1 must not modify prefabs, scenes, sprites, animations, or generated gameplay resources.
+- The virtual board may read UI prefab assets under `Assets/Content/UI/Prefab` but must not modify source assets.
+- Live Board may modify source prefabs only after an explicit user action such as `Apply`.
+- Never save the temporary Live Board scene under `Assets/`; it is rebuildable editor state, not game content.
 
 ## Interaction Rules
 
-- The board is a navigation and organization surface. Opening a card should open the real prefab asset in Unity Prefab Mode.
+- The virtual board remains the navigation and organization surface. `Open` opens the real prefab asset in Unity Prefab Mode; `Live` opens or focuses its editable instance in Scene view.
 - Treat each card as an artboard that points to one source prefab through GUID and asset path.
-- Preserve simple designer-first actions: add selected prefab, search prefab, focus selected card, ping/open prefab, remove card.
-- Keep the canvas virtual and editor-only. Do not create a giant Unity Canvas or instantiate all prefabs in the active scene for phase 1.
+- Preserve simple designer-first actions: add selected prefab, search prefab, focus selected card, ping/open prefab, live edit, apply/revert, remove card.
+- Keep the virtual board editor-only. Do not instantiate board content into a gameplay scene.
+
+## Live Board Rules
+
+- Build Live Board in a dedicated temporary additive scene. Do not reuse or dirty the user's gameplay scene.
+- Each artboard is a real prefab instance under an editor-created world-space Canvas wrapper.
+- Store artboard placement on the wrapper, not on the prefab root, so moving an artboard never becomes a prefab override.
+- Environment-only Canvas normalization, its automatic RectTransform changes, and zero-scale root preview correction must be restored before applying prefab overrides and reapplied afterward.
+- Preserve every prefab object's source Layer. Live Board must not use layer changes as a preview mechanism.
+- Direct selection, RectTransform editing, Inspector editing, inline TMP editing, and existing Sprite drag-to-UI should work inside a Live Board prefab instance.
+- Structural edits belong inside the prefab instance. Do not allow quick-create or Sprite drops onto the board wrapper itself.
+- Applying or reverting is always scoped to one artboard unless the user explicitly chooses an all-artboard action.
+- Removing or closing an artboard with unapplied changes must ask before discarding work.
+- Live Board state is disposable. Reopening it reconstructs instances from board JSON plus current prefab assets.
 
 ## Preview Rules
 
