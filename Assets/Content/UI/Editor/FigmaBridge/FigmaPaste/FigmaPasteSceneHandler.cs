@@ -101,7 +101,9 @@ internal static class FigmaPasteSceneHandler
             return;
         }
 
-        if (payload == null || (!payload.HasImage && !payload.HasText))
+        FigmaPasteSvgRectangle svgRectangle;
+        bool hasSvgRectangle = FigmaPasteSvgShape.TryParseRectangle(payload, out svgRectangle);
+        if (payload == null || (!payload.HasImage && !hasSvgRectangle && !payload.HasText))
         {
             return;
         }
@@ -129,6 +131,10 @@ internal static class FigmaPasteSceneHandler
             }
 
             pasted = PasteImage(sceneView, prefabStage, parent, payload);
+        }
+        else if (hasSvgRectangle)
+        {
+            pasted = PasteSvgRectangle(sceneView, prefabStage, parent, svgRectangle);
         }
         else if (payload.HasText)
         {
@@ -207,6 +213,46 @@ internal static class FigmaPasteSceneHandler
 
         FinalizeCreatedObject(parent, imageObject, undoName, undoGroup, prefabStage);
         ShowSceneNotification(sceneView, "Pasted image: " + sprite.name);
+        return true;
+    }
+
+    private static bool PasteSvgRectangle(
+        SceneView sceneView,
+        PrefabStage prefabStage,
+        RectTransform parent,
+        FigmaPasteSvgRectangle rectangle)
+    {
+        if (rectangle == null || rectangle.Size.x <= 0f || rectangle.Size.y <= 0f)
+        {
+            ShowSceneNotification(sceneView, "Clipboard SVG rectangle could not be parsed.");
+            return false;
+        }
+
+        const string undoName = "Paste Figma SVG Rectangle";
+        Vector3 worldPosition = GetPasteWorldPosition(sceneView, parent);
+
+        Undo.IncrementCurrentGroup();
+        int undoGroup = Undo.GetCurrentGroup();
+        Undo.SetCurrentGroupName(undoName);
+
+        GameObject imageObject = ObjectFactory.CreateGameObject(
+            "rectangle",
+            typeof(RectTransform),
+            typeof(CanvasRenderer),
+            typeof(SgrUnity.SgrImage));
+        RectTransform rectTransform = imageObject.GetComponent<RectTransform>();
+        Undo.SetTransformParent(rectTransform, parent, undoName);
+        GameObjectUtility.EnsureUniqueNameForSibling(imageObject);
+
+        InitializeRectTransform(rectTransform, worldPosition, rectangle.Size);
+        imageObject.layer = parent.gameObject.layer;
+
+        SgrUnity.SgrImage image = imageObject.GetComponent<SgrUnity.SgrImage>();
+        image.raycastTarget = false;
+        image.color = rectangle.FillColor;
+
+        FinalizeCreatedObject(parent, imageObject, undoName, undoGroup, prefabStage);
+        ShowSceneNotification(sceneView, "Pasted rectangle");
         return true;
     }
 

@@ -150,6 +150,7 @@ This is not intended to be pixel-perfect runtime parity. The practical target is
 - Figma Paste phase 1 is intentionally narrower than restore/import:
   - It intercepts Scene-view `Ctrl+V` only when clipboard content and UI parent are both valid.
   - Clipboard images import into the active UI prefab's lowercase `resource` folder and paste as `SgrImage`.
+  - A single filled Figma rectangle may paste from SVG/HTML clipboard data as a solid-color `SgrImage`.
   - Clipboard text pastes as `MultiLanguageTMPText` with the project default TMP font.
   - Clipboard inspection output lives under `Library/Dragon/FigmaPaste`.
   - It does not reconstruct Figma frame/group hierarchy yet; collect clipboard reports before designing phase 2.
