@@ -77,6 +77,7 @@ This is not intended to be pixel-perfect runtime parity. The practical target is
 - Image export helper: `Assets/Content/UI/Editor/FigmaBridge/FigmaBridgeImageExporter.cs`
 - One-click local sync server: `Assets/Content/UI/Editor/FigmaBridge/FigmaBridgeLocalSyncServer.cs`
 - Figma plugin: `Assets/Content/UI/Editor/FigmaBridge/FigmaPlugin`
+- Figma paste shortcut: `Assets/Content/UI/Editor/FigmaBridge/FigmaPaste`
 - Package export root: `Assets/Content/UI/FigmaBridgeExports`
 
 ## Current Tool Behavior
@@ -84,6 +85,9 @@ This is not intended to be pixel-perfect runtime parity. The practical target is
 - Entry point: `Tools/UI/Figma Bridge/Open Exporter`
 - Restore entry point: `Tools/UI/Figma Bridge/Import Figma Restore JSON...`
 - Sample validation entry point: `Tools/UI/Figma Bridge/Samples/Export Common And Plant Samples`
+- Figma paste entry points:
+  - `Tools/UI/Figma Bridge/Figma Paste/Enable Scene Ctrl+V Paste`
+  - `Tools/UI/Figma Bridge/Figma Paste/Inspect Clipboard`
 - Agent command bridge: write `*.request.json` under `Assets/Content/UI/FigmaBridgeCommands`; Unity writes matching `*.response.json`.
 - Project context menu:
   - `Assets/UI/Figma Bridge/Export Selected Prefab to Figma Component Library`
@@ -143,6 +147,12 @@ This is not intended to be pixel-perfect runtime parity. The practical target is
   - `import_restore`
 - PowerShell must read exported manifest JSON as UTF-8, otherwise Chinese text can be mis-decoded and `ConvertFrom-Json` may report a false parse error.
 - For Unity-prefab-to-Figma-component-library work, do not build a separate simplified MCP renderer. MCP/local sync can trigger, transport, or validate, but the actual Figma node creation should reuse `FigmaPlugin/code.js` importer behavior so text, RectTransform, node visibility, Layout Group, LayoutElement, ContentSizeFitter, image fills, and shared plugin data stay consistent with manual package import.
+- Figma Paste phase 1 is intentionally narrower than restore/import:
+  - It intercepts Scene-view `Ctrl+V` only when clipboard content and UI parent are both valid.
+  - Clipboard images import into the active UI prefab's lowercase `resource` folder and paste as `SgrImage`.
+  - Clipboard text pastes as `MultiLanguageTMPText` with the project default TMP font.
+  - Clipboard inspection output lives under `Library/Dragon/FigmaPaste`.
+  - It does not reconstruct Figma frame/group hierarchy yet; collect clipboard reports before designing phase 2.
 
 ## Development Conventions
 
