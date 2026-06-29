@@ -187,6 +187,7 @@ This is not intended to be pixel-perfect runtime parity. The practical target is
 - When the user drops onto Project-window whitespace and Unity's native import creates numbered duplicates, use the recorded external drag filenames and file hashes to resolve only exact same-name replacements. Never map `name_5.png` back to `name_2.png` merely because the numbers are consecutive.
 - Keep the older post-import numbered-duplicate resolver only as a best-effort cleanup for simple Unity-created suffixes such as `name1.png`, `name 1.png`, or `name_1.png` when no exact external drag context is available.
 - Replacement prompts should show the number of replaceable images detected in the current drop/import batch. When more than one replacement is detected, offer `全部替换（N）`; choosing it applies only to the current batch and must not persist as a global preference.
+- Closing a replacement prompt with the window close button or cancel action must behave like `跳过`; it must never trigger single replace or replace-all.
 - Provide `UITools/处理当前UI文件夹同名图片副本` for manually resolving simple numbered duplicates that were created before the Project-window drop interceptor existed.
 
 ## Scene UI Quick-Create Convention

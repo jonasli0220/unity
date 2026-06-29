@@ -636,10 +636,10 @@ public class ProjectImageDuplicateImportResolver : AssetPostprocessor
             "替换同名图片？",
             message + "\n\n本次拖动识别到 " + replaceCount + " 张可替换图片。",
             "替换已有资源",
-            "全部替换（" + replaceCount + "）",
-            "跳过");
+            "跳过",
+            "全部替换（" + replaceCount + "）");
 
-        if (option == 1)
+        if (option == 2)
         {
             return ReplacePromptDecision.ReplaceAll;
         }
