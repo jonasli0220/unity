@@ -42,6 +42,13 @@ public class ProjectImageDuplicateImportResolver : AssetPostprocessor
         public double Time;
     }
 
+    private enum ReplacePromptDecision
+    {
+        Replace,
+        ReplaceAll,
+        Skip
+    }
+
     private const double PendingExternalProjectDropSeconds = 30d;
 
     private static bool isDelayCallRegistered;
@@ -224,11 +231,19 @@ public class ProjectImageDuplicateImportResolver : AssetPostprocessor
         }
 
         isProcessing = true;
+        bool replaceAll = false;
+        int replaceCount = CountExistingExternalImageTargets(
+            externalImagePaths,
+            targetFolder);
         try
         {
             for (int i = 0; i < externalImagePaths.Count; i++)
             {
-                ImportExternalImageToProjectFolder(externalImagePaths[i], targetFolder);
+                ImportExternalImageToProjectFolder(
+                    externalImagePaths[i],
+                    targetFolder,
+                    replaceCount,
+                    ref replaceAll);
             }
         }
         finally
@@ -240,7 +255,11 @@ public class ProjectImageDuplicateImportResolver : AssetPostprocessor
         AssetDatabase.Refresh();
     }
 
-    private static void ImportExternalImageToProjectFolder(string externalPath, string targetFolder)
+    private static void ImportExternalImageToProjectFolder(
+        string externalPath,
+        string targetFolder,
+        int replaceCount,
+        ref bool replaceAll)
     {
         string fileName = Path.GetFileName(externalPath);
         if (string.IsNullOrEmpty(fileName))
@@ -253,16 +272,19 @@ public class ProjectImageDuplicateImportResolver : AssetPostprocessor
         bool assetExists = AssetDatabase.LoadMainAssetAtPath(assetPath) != null
             || File.Exists(absoluteAssetPath);
 
-        if (assetExists
-            && !EditorUtility.DisplayDialog(
-                "替换同名图片？",
+        if (assetExists && !replaceAll)
+        {
+            ReplacePromptDecision decision = ShowReplacePrompt(
                 "Project 中已经存在同名图片：\n\n" +
                 assetPath +
                 "\n\n是否用当前拖入的图片替换它？\n确认后会保留已有资源 GUID。",
-                "替换已有资源",
-                "跳过"))
-        {
-            return;
+                replaceCount);
+            if (decision == ReplacePromptDecision.Skip)
+            {
+                return;
+            }
+
+            replaceAll = decision == ReplacePromptDecision.ReplaceAll;
         }
 
         if (!string.Equals(
@@ -274,6 +296,35 @@ public class ProjectImageDuplicateImportResolver : AssetPostprocessor
         }
 
         AssetDatabase.ImportAsset(assetPath, ImportAssetOptions.ForceSynchronousImport);
+    }
+
+    private static int CountExistingExternalImageTargets(
+        List<string> externalImagePaths,
+        string targetFolder)
+    {
+        int count = 0;
+        if (externalImagePaths == null || string.IsNullOrEmpty(targetFolder))
+        {
+            return count;
+        }
+
+        for (int i = 0; i < externalImagePaths.Count; i++)
+        {
+            string fileName = Path.GetFileName(externalImagePaths[i]);
+            if (string.IsNullOrEmpty(fileName))
+            {
+                continue;
+            }
+
+            string assetPath = NormalizeAssetPath(targetFolder + "/" + fileName);
+            if (AssetDatabase.LoadMainAssetAtPath(assetPath) != null
+                || File.Exists(AssetPathToAbsolutePath(assetPath)))
+            {
+                count++;
+            }
+        }
+
+        return count;
     }
 
     private static PendingExternalProjectDrop CreatePendingExternalProjectDrop(
@@ -367,28 +418,25 @@ public class ProjectImageDuplicateImportResolver : AssetPostprocessor
         {
             List<DuplicateImportResolution> resolutions =
                 ResolveDuplicateImports(candidatePaths);
-            for (int i = 0; i < candidatePaths.Length; i++)
+            bool replaceAll = false;
+            int replaceCount = resolutions.Count;
+            for (int i = 0; i < resolutions.Count; i++)
             {
-                string candidatePath = NormalizeAssetPath(candidatePaths[i]);
-                DuplicateImportResolution resolution = FindResolution(
-                    resolutions,
-                    candidatePath);
-                if (resolution == null)
-                {
-                    continue;
-                }
+                DuplicateImportResolution resolution = resolutions[i];
 
                 try
                 {
                     TryResolveDuplicateImport(
                         resolution.DuplicateAssetPath,
-                        resolution.OriginalAssetPath);
+                        resolution.OriginalAssetPath,
+                        replaceCount,
+                        ref replaceAll);
                 }
                 catch (Exception exception)
                 {
                     Debug.LogError(
                         "Unable to resolve duplicate Project image import: " +
-                        candidatePath +
+                        resolution.DuplicateAssetPath +
                         "\n" +
                         exception);
                 }
@@ -526,27 +574,11 @@ public class ProjectImageDuplicateImportResolver : AssetPostprocessor
         return null;
     }
 
-    private static DuplicateImportResolution FindResolution(
-        List<DuplicateImportResolution> resolutions,
-        string duplicateAssetPath)
-    {
-        for (int i = 0; i < resolutions.Count; i++)
-        {
-            if (string.Equals(
-                    resolutions[i].DuplicateAssetPath,
-                    duplicateAssetPath,
-                    StringComparison.OrdinalIgnoreCase))
-            {
-                return resolutions[i];
-            }
-        }
-
-        return null;
-    }
-
     private static void TryResolveDuplicateImport(
         string duplicateAssetPath,
-        string originalAssetPath)
+        string originalAssetPath,
+        int replaceCount,
+        ref bool replaceAll)
     {
         duplicateAssetPath = NormalizeAssetPath(duplicateAssetPath);
         originalAssetPath = NormalizeAssetPath(originalAssetPath);
@@ -558,18 +590,20 @@ public class ProjectImageDuplicateImportResolver : AssetPostprocessor
             return;
         }
 
-        bool shouldReplace = EditorUtility.DisplayDialog(
-            "替换同名图片？",
-            "Project 中检测到同名图片导入：\n\n" +
-            "已有资源：\n" + originalAssetPath + "\n\n" +
-            "刚导入的序号副本：\n" + duplicateAssetPath + "\n\n" +
-            "是否用刚导入的图片替换已有资源？\n确认后会保留已有资源 GUID，并删除这个序号副本。",
-            "替换已有资源",
-            "保留序号副本");
-
-        if (!shouldReplace)
+        if (!replaceAll)
         {
-            return;
+            ReplacePromptDecision decision = ShowReplacePrompt(
+                "Project 中检测到同名图片导入：\n\n" +
+                "已有资源：\n" + originalAssetPath + "\n\n" +
+                "刚导入的序号副本：\n" + duplicateAssetPath + "\n\n" +
+                "是否用刚导入的图片替换已有资源？\n确认后会保留已有资源 GUID，并删除这个序号副本。",
+                replaceCount);
+            if (decision == ReplacePromptDecision.Skip)
+            {
+                return;
+            }
+
+            replaceAll = decision == ReplacePromptDecision.ReplaceAll;
         }
 
         string duplicateAbsolutePath = AssetPathToAbsolutePath(duplicateAssetPath);
@@ -582,6 +616,35 @@ public class ProjectImageDuplicateImportResolver : AssetPostprocessor
         {
             Debug.LogWarning("Unable to delete duplicate imported image: " + duplicateAssetPath);
         }
+    }
+
+    private static ReplacePromptDecision ShowReplacePrompt(string message, int replaceCount)
+    {
+        replaceCount = Mathf.Max(1, replaceCount);
+        if (replaceCount <= 1)
+        {
+            return EditorUtility.DisplayDialog(
+                "替换同名图片？",
+                message,
+                "替换已有资源",
+                "跳过")
+                ? ReplacePromptDecision.Replace
+                : ReplacePromptDecision.Skip;
+        }
+
+        int option = EditorUtility.DisplayDialogComplex(
+            "替换同名图片？",
+            message + "\n\n本次拖动识别到 " + replaceCount + " 张可替换图片。",
+            "替换已有资源",
+            "全部替换（" + replaceCount + "）",
+            "跳过");
+
+        if (option == 1)
+        {
+            return ReplacePromptDecision.ReplaceAll;
+        }
+
+        return option == 0 ? ReplacePromptDecision.Replace : ReplacePromptDecision.Skip;
     }
 
     private static bool TryFindOriginalAssetPath(

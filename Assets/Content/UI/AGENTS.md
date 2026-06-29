@@ -186,6 +186,7 @@ This is not intended to be pixel-perfect runtime parity. The practical target is
 - Multiple-file drops such as `name_2.png`, `name_3.png`, and `name_4.png` must be matched by exact filename only; do not infer relationships by decrementing numeric suffixes because those names can be intentional sequence assets.
 - When the user drops onto Project-window whitespace and Unity's native import creates numbered duplicates, use the recorded external drag filenames and file hashes to resolve only exact same-name replacements. Never map `name_5.png` back to `name_2.png` merely because the numbers are consecutive.
 - Keep the older post-import numbered-duplicate resolver only as a best-effort cleanup for simple Unity-created suffixes such as `name1.png`, `name 1.png`, or `name_1.png` when no exact external drag context is available.
+- Replacement prompts should show the number of replaceable images detected in the current drop/import batch. When more than one replacement is detected, offer `全部替换（N）`; choosing it applies only to the current batch and must not persist as a global preference.
 - Provide `UITools/处理当前UI文件夹同名图片副本` for manually resolving simple numbered duplicates that were created before the Project-window drop interceptor existed.
 
 ## Scene UI Quick-Create Convention
