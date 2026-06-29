@@ -27,6 +27,7 @@ Unity Editor design board for organizing many UI prefab artboards on a virtual i
 - `Apply` writes the selected artboard's overrides to its source prefab.
 - `Revert` discards the selected artboard's unapplied overrides.
 - `Close Live` checks for unapplied work before closing the temporary scene.
+- Entering Play Mode closes Live Board first, with an apply/discard prompt when there are unapplied changes.
 - The Live Board scene is never saved under `Assets/` and never becomes gameplay content.
 
 ## Data Storage
