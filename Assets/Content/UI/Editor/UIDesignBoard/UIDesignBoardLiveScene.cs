@@ -65,8 +65,6 @@ internal static class UIDesignBoardLiveScene
         Selection.selectionChanged += OnSelectionChanged;
         EditorSceneManager.sceneClosed -= OnSceneClosed;
         EditorSceneManager.sceneClosed += OnSceneClosed;
-        EditorApplication.playModeStateChanged -= OnPlayModeStateChanged;
-        EditorApplication.playModeStateChanged += OnPlayModeStateChanged;
         EditorApplication.delayCall += RestoreOpenBoardEnvironment;
     }
 
@@ -385,72 +383,6 @@ internal static class UIDesignBoardLiveScene
         };
         message = "Live Board closed.";
         SetStatus(message);
-        NotifyStateChanged();
-        return true;
-    }
-
-    private static void OnPlayModeStateChanged(PlayModeStateChange state)
-    {
-        if (state != PlayModeStateChange.ExitingEditMode)
-        {
-            return;
-        }
-
-        if (!TryGetLiveScene(out Scene scene, out GameObject boardRoot))
-        {
-            return;
-        }
-
-        if (!CloseBeforePlay(scene, boardRoot, out string message))
-        {
-            EditorApplication.isPlaying = false;
-        }
-
-        if (!string.IsNullOrEmpty(message))
-        {
-            SetStatus(message);
-        }
-    }
-
-    private static bool CloseBeforePlay(Scene scene, GameObject boardRoot, out string message)
-    {
-        message = string.Empty;
-        List<string> changedGuids = CollectChangedArtboardGuids(boardRoot);
-        if (changedGuids.Count > 0)
-        {
-            int choice = EditorUtility.DisplayDialogComplex(
-                "Live Board Has Changes",
-                "Live Board is an editor-only temporary scene and cannot enter Play Mode. "
-                + changedGuids.Count + " artboard(s) have unapplied changes.",
-                "Apply All and Enter Play",
-                "Cancel Play",
-                "Discard and Enter Play");
-            if (choice == 1)
-            {
-                message = "Play canceled. Live Board remains open.";
-                return false;
-            }
-
-            if (choice == 0)
-            {
-                for (int i = 0; i < changedGuids.Count; i++)
-                {
-                    if (!ApplyArtboard(changedGuids[i], out message))
-                    {
-                        return false;
-                    }
-                }
-            }
-        }
-
-        Selection.activeObject = null;
-        SetFallbackActiveScene(scene);
-        if (scene.IsValid() && scene.isLoaded)
-        {
-            EditorSceneManager.CloseScene(scene, true);
-        }
-
-        message = "Live Board closed before Play Mode.";
         NotifyStateChanged();
         return true;
     }
