@@ -152,6 +152,7 @@ This is not intended to be pixel-perfect runtime parity. The practical target is
   - Clipboard images import into the active UI prefab's lowercase `resource` folder and paste as `SgrImage`.
   - A single filled Figma rectangle may paste from SVG/HTML clipboard data as a solid-color `SgrImage`.
   - Clipboard text pastes as `MultiLanguageTMPText` with the project default TMP font.
+  - Unsupported Figma/design clipboard content is consumed with a Scene-view notification so Unity does not paste stale Unity objects.
   - Clipboard inspection output lives under `Library/Dragon/FigmaPaste`.
   - It does not reconstruct Figma frame/group hierarchy yet; collect clipboard reports before designing phase 2.
 

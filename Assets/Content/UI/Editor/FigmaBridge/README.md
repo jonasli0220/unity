@@ -46,7 +46,8 @@ Current behavior:
 - Single filled Figma rectangles can paste from SVG/HTML clipboard data as solid-color `SgrImage` nodes with matching width and height.
 - Clipboard text is pasted as project TMP text using `MultiLanguageTMPText` and the default `uifont` asset when available.
 - `Inspect Clipboard` writes diagnostic reports under `Library/Dragon/FigmaPaste` and saves a probe PNG when the clipboard exposes an image.
-- Unsupported clipboard content is not consumed, so Unity's native paste can continue.
+- Unsupported ordinary clipboard content is not consumed, so Unity's native paste can continue.
+- Unsupported Figma/design clipboard content is consumed with a Scene-view notification so Unity does not paste an unrelated object from its own internal clipboard.
 
 Out of scope for phase 1: Figma frame/group hierarchy reconstruction, Auto Layout conversion, general SVG rendering, and plugin-enhanced structured copy.
 

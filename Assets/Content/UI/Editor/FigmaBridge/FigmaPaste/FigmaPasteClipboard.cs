@@ -17,6 +17,7 @@ internal sealed class FigmaPasteClipboardPayload
     public byte[] ImagePngBytes;
     public int ImageWidth;
     public int ImageHeight;
+    public bool LooksLikeFigmaContent;
     public readonly List<FigmaPasteClipboardFormatInfo> Formats =
         new List<FigmaPasteClipboardFormatInfo>();
     public readonly List<string> FileDrops = new List<string>();
@@ -94,6 +95,11 @@ internal static class FigmaPasteClipboard
                 Text = EditorGUIUtility.systemCopyBuffer
             };
 #endif
+            if (payload != null)
+            {
+                payload.LooksLikeFigmaContent = LooksLikeFigmaPayload(payload);
+            }
+
             return payload != null;
         }
         catch (Exception ex)
@@ -150,6 +156,7 @@ internal static class FigmaPasteClipboard
         }
 
         builder.AppendLine("Has Image: " + payload.HasImage);
+        builder.AppendLine("Looks Like Figma Content: " + payload.LooksLikeFigmaContent);
         if (payload.HasImage)
         {
             builder.AppendLine("Image Source Format: " + payload.ImageSourceFormat);
@@ -219,6 +226,56 @@ internal static class FigmaPasteClipboard
         }
 
         return compact.Substring(0, MaxTextPreviewLength) + "...";
+    }
+
+    private static bool LooksLikeFigmaPayload(FigmaPasteClipboardPayload payload)
+    {
+        if (payload == null)
+        {
+            return false;
+        }
+
+        for (int i = 0; i < payload.Formats.Count; i++)
+        {
+            string name = payload.Formats[i].Name;
+            if (ContainsIgnoreCase(name, "figma"))
+            {
+                return true;
+            }
+
+            if (!string.IsNullOrEmpty(payload.Svg) &&
+                (EqualsIgnoreCase(name, "image/svg+xml") ||
+                 EqualsIgnoreCase(name, "SVG") ||
+                 EqualsIgnoreCase(name, "text/svg")))
+            {
+                return true;
+            }
+
+            if (!string.IsNullOrEmpty(payload.Html) &&
+                (EqualsIgnoreCase(name, "HTML Format") ||
+                 EqualsIgnoreCase(name, "text/html")) &&
+                ContainsIgnoreCase(payload.Html, "<svg"))
+            {
+                return true;
+            }
+        }
+
+        return ContainsIgnoreCase(payload.Html, "figma")
+            || ContainsIgnoreCase(payload.Svg, "figma")
+            || ContainsIgnoreCase(payload.Text, "figma")
+            || ContainsIgnoreCase(payload.Svg, "<svg")
+            || ContainsIgnoreCase(payload.Text, "<svg");
+    }
+
+    private static bool ContainsIgnoreCase(string value, string fragment)
+    {
+        return !string.IsNullOrEmpty(value) &&
+               value.IndexOf(fragment, StringComparison.OrdinalIgnoreCase) >= 0;
+    }
+
+    private static bool EqualsIgnoreCase(string left, string right)
+    {
+        return string.Equals(left, right, StringComparison.OrdinalIgnoreCase);
     }
 
 #if UNITY_EDITOR_WIN

@@ -21,7 +21,8 @@ This directory contains the first-stage Unity Editor paste workflow for content 
 
 - Scene paste is a designer-first shortcut for an active UI prefab editing context.
 - Only intercept paste when the clipboard has supported content and a valid UI parent can be resolved.
-- Let Unity's native paste continue when the clipboard content is unsupported or the editing context is invalid.
+- Let Unity's native paste continue when ordinary clipboard content is unsupported or the editing context is invalid.
+- If the clipboard looks like Figma/design data but the current content is unsupported, consume the paste and show an actionable Scene notification so Unity does not paste a stale Unity object from its own clipboard.
 - Preserve a single Undo step for created UI hierarchy nodes.
 - Prefer visible, actionable Scene view notifications over modal dialogs during paste.
 

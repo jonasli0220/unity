@@ -103,8 +103,22 @@ internal static class FigmaPasteSceneHandler
 
         FigmaPasteSvgRectangle svgRectangle;
         bool hasSvgRectangle = FigmaPasteSvgShape.TryParseRectangle(payload, out svgRectangle);
-        if (payload == null || (!payload.HasImage && !hasSvgRectangle && !payload.HasText))
+        bool hasPlainText = HasPasteablePlainText(payload);
+        if (payload == null)
         {
+            return;
+        }
+
+        if (!payload.HasImage && !hasSvgRectangle && !hasPlainText)
+        {
+            if (payload.LooksLikeFigmaContent)
+            {
+                ShowSceneNotification(
+                    sceneView,
+                    "Unsupported Figma clipboard content. Use Inspect Clipboard or copy a single image, text, or filled rectangle.");
+                ConsumePasteEvent(currentEvent);
+            }
+
             return;
         }
 
@@ -114,6 +128,11 @@ internal static class FigmaPasteSceneHandler
         if (!TryResolvePasteParent(prefabStage, out parent, out parentMessage))
         {
             ShowSceneNotification(sceneView, parentMessage);
+            if (payload.LooksLikeFigmaContent)
+            {
+                ConsumePasteEvent(currentEvent);
+            }
+
             return;
         }
 
@@ -125,8 +144,7 @@ internal static class FigmaPasteSceneHandler
                 ShowSceneNotification(
                     sceneView,
                     "Image paste needs an open UI Prefab Stage so the PNG can be saved to resource.");
-                currentEvent.Use();
-                lastHandledPasteTime = EditorApplication.timeSinceStartup;
+                ConsumePasteEvent(currentEvent);
                 return;
             }
 
@@ -136,15 +154,14 @@ internal static class FigmaPasteSceneHandler
         {
             pasted = PasteSvgRectangle(sceneView, prefabStage, parent, svgRectangle);
         }
-        else if (payload.HasText)
+        else if (hasPlainText)
         {
             pasted = PasteText(sceneView, prefabStage, parent, payload.Text);
         }
 
         if (pasted)
         {
-            currentEvent.Use();
-            lastHandledPasteTime = EditorApplication.timeSinceStartup;
+            ConsumePasteEvent(currentEvent);
         }
     }
 
@@ -172,6 +189,35 @@ internal static class FigmaPasteSceneHandler
                currentEvent.keyCode == KeyCode.V &&
                (currentEvent.control || currentEvent.command) &&
                !currentEvent.alt;
+    }
+
+    private static void ConsumePasteEvent(Event currentEvent)
+    {
+        if (currentEvent != null)
+        {
+            currentEvent.Use();
+        }
+
+        lastHandledPasteTime = EditorApplication.timeSinceStartup;
+    }
+
+    private static bool HasPasteablePlainText(FigmaPasteClipboardPayload payload)
+    {
+        if (payload == null || !payload.HasText)
+        {
+            return false;
+        }
+
+        string trimmed = payload.Text.TrimStart();
+        return !StartsWithIgnoreCase(trimmed, "<svg") &&
+               !StartsWithIgnoreCase(trimmed, "<html") &&
+               !StartsWithIgnoreCase(trimmed, "<!doctype");
+    }
+
+    private static bool StartsWithIgnoreCase(string value, string prefix)
+    {
+        return !string.IsNullOrEmpty(value) &&
+               value.StartsWith(prefix, StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool PasteImage(
