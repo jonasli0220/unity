@@ -456,12 +456,8 @@ internal static class FigmaPasteSceneHandler
         RectTransform selectedRect = selectedTransform as RectTransform;
         if (selectedRect != null && IsInsideCurrentEditingContext(selectedRect, prefabStage))
         {
-            if (!UIDesignBoardLiveScene.IsActive ||
-                UIDesignBoardLiveScene.IsEditableObject(selectedRect.gameObject))
-            {
-                parent = selectedRect;
-                return true;
-            }
+            parent = selectedRect;
+            return true;
         }
 
         if (IsUIPrefabStage(prefabStage))
@@ -483,12 +479,6 @@ internal static class FigmaPasteSceneHandler
             {
                 return true;
             }
-        }
-
-        if (UIDesignBoardLiveScene.IsActive)
-        {
-            message = "Select an editable RectTransform inside a Live Board artboard before pasting.";
-            return false;
         }
 
         message = "Open a UI prefab and select a UI parent before pasting.";
@@ -518,8 +508,7 @@ internal static class FigmaPasteSceneHandler
             return IsInsidePrefabStage(transform, prefabStage);
         }
 
-        return UIDesignBoardLiveScene.IsActive &&
-               UIDesignBoardLiveScene.IsEditableObject(transform.gameObject);
+        return false;
     }
 
     private static bool IsInsidePrefabStage(Transform transform, PrefabStage prefabStage)

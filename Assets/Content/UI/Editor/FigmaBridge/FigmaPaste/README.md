@@ -27,7 +27,7 @@ Phase 1 of Figma-to-Unity paste support.
 ## Rules
 
 - Paste is only intercepted when there is a valid UI prefab editing parent.
-- Image paste imports assets only in UI Prefab Stage, because Live Board does not have an unambiguous prefab-local `resource` destination yet.
+- Image paste imports assets only in UI Prefab Stage, where the prefab-local `resource` destination is unambiguous.
 - Unsupported ordinary clipboard content is not consumed, so Unity's native paste can still run.
 - Unsupported Figma/design clipboard content is consumed with a Scene-view notification, preventing Unity from pasting an unrelated object from its own internal clipboard.
 - Structural Figma frame/group reconstruction is intentionally out of scope for phase 1; the rectangle path is only a single-shape convenience case.
