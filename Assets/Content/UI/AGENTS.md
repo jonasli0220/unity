@@ -1,4 +1,4 @@
-# UI Workspace Agent Context
+﻿# UI Workspace Agent Context
 
 This file is the handoff context for Codex agents working from `Assets/Content/UI`. Keep detailed Figma Bridge usage notes in `Editor/FigmaBridge/README.md`; keep this file focused on durable project background and development conventions.
 
@@ -96,13 +96,14 @@ This is not intended to be pixel-perfect runtime parity. The practical target is
 - Export input is the selected prefab asset. The tool exports the whole prefab, not manually selected modules.
 - Export output contains `manifest.json`, `source/source_info.txt`, `source/nested_prefabs.txt`, and `images/`.
 - The Figma plugin has a fixed `Target page` field, defaulting to `unity组件库`. Prefab/component imports should be created on that page, creating the page if needed.
-- One-click component-library sync uses a local Unity HTTP server at `http://localhost:18732`. Unity queues the latest exported component package, persists the queue at `C:\tmp\FigmaBridgeLocalSync\latest.json`, and the Figma plugin auto-fetches `/latest` when `Auto import latest Unity export` is enabled. This is only a transport layer; imported nodes must still be created by `FigmaPlugin/code.js`.
-- The Figma plugin manifest must include `http://localhost:18732` in `networkAccess.allowedDomains` with a reasoning. Do not leave `allowedDomains` as `["none"]` for this workflow; the UI may silently fail to fetch the local Unity package.
-- Current development plugin name/id marker is `Unity Figma Bridge Importer v18733`. If Figma shows an older title, it is running a cached development plugin. The plugin UI must not assume `localStorage` is available because Figma may run it from a `data:` URL.
+- The Figma plugin is locked to the `Dragon-通用组件` Figma file (`eteWowFyYB3NHQWsMjI2iP`) before prefab/color imports mutate the document. If it is run from another Figma file, it must error before creating `unity组件库` there.
+- One-click component-library sync uses a local Unity HTTP server at `http://localhost:18733`, with fallback ports `18734-18736` when the default port is occupied or unhealthy. Unity queues the latest exported component package, persists the queue at `C:\tmp\FigmaBridgeLocalSync\latest.json`, and the Figma plugin auto-fetches `/latest` when `Auto import latest Unity export` is enabled. This is only a transport layer; imported nodes must still be created by `FigmaPlugin/code.js`.
+- The Figma plugin manifest must include `http://localhost:18733` through `http://localhost:18736` in `networkAccess.allowedDomains` with a reasoning. Do not leave `allowedDomains` as `["none"]` for this workflow; the UI may silently fail to fetch the local Unity package.
+- Current development plugin name/id marker is `Unity Figma Bridge Importer v18741`. If Figma shows an older title, it is running a cached development plugin. The plugin UI must not assume `localStorage` is available because Figma may run it from a `data:` URL.
 - Unity stores the component-library target page in EditorPrefs, defaulting to `unity组件库`. The Figma plugin stores its local target-page field in localStorage, but auto import should prefer the target page sent by Unity for the queued package.
 - `Frame` mode is for screens/layouts. Nested prefab roots import as Figma components plus placed instances and carry source info.
 - `Component` mode is for reusable UI components. Nested prefabs are expanded inline instead of becoming extra Figma components. Inactive descendants inside those nested prefab roots are skipped to avoid redundant hidden content.
-- Nodes named `vx` or starting with `vx_` are excluded by default. These are usually visual-effect or shader-helper overlays and can cover exported button art in Figma as solid fills.
+- Image-bearing `vx` / `vx_` nodes are kept so selected-state art is not lost. The default filter only skips image-less effect nodes or subtrees, such as particle-only `vx_` nodes that cannot be represented as editable Figma image layers.
 - `EditorOnly` tagged nodes can be excluded.
 - Empty Raycast graphics should not create visible fills.
 - `activeSelf` is preserved. Inactive Unity nodes import as hidden Figma nodes unless intentionally skipped by component-mode nested prefab cleanup.
@@ -114,6 +115,7 @@ This is not intended to be pixel-perfect runtime parity. The practical target is
 - Figma display font size matches the Unity font size; the original Unity font size remains in the manifest.
 - Sliced/9-slice images export as already-stretched PNG previews at the node RectTransform size. The manifest preserves the original sprite path, GUID, border, and RectTransform data for future Unity restore.
 - During Figma import, source metadata should be stored with Figma shared plugin data under namespace `unity.figmaBridge`. Keep read fallback for old private plugin data when possible, but write new data to shared plugin data so Figma MCP scripts and the desktop plugin can both read it.
+- Re-importing a Unity prefab package should update an existing Figma root with the same `prefabGuid` or `prefabPath` instead of creating a duplicate. Preserve the existing Figma root node identity and x/y position, then rebuild Unity-owned children through `FigmaPlugin/code.js`.
 - Image-bearing nodes should also store sprite source data in shared plugin data:
   - `figmaBridgeGraphics` keeps graphic/sprite source references.
   - `figmaBridgeImageSource` keeps the original sprite source plus the imported Figma `imageHash`.
@@ -123,11 +125,14 @@ This is not intended to be pixel-perfect runtime parity. The practical target is
   - Figma import maps horizontal/vertical layout groups to Auto Layout and maps grid layout to Auto Layout wrap when possible.
   - Children managed by a parent Layout Group should not use RectTransform anchoredPosition for Figma x/y; Auto Layout should place them.
   - `LayoutElement.ignoreLayout = true` children should stay absolute-positioned. Convert their RectTransform against the parent RectTransform directly, without adding or subtracting Layout Group padding.
+- If a Layout Group has direct `ignoreLayout` children, do not convert that parent to Figma Auto Layout; keep the group absolute so background/overlay nodes do not become layout items.
   - Figma plugin data keys are `figmaBridgeLayoutGroup`, `figmaBridgeLayoutElement`, and `figmaBridgeContentSizeFitter`.
   - Future Figma-to-Unity restore should recreate Unity layout components from plugin data before applying RectTransform to non-layout-managed nodes.
 - RectTransform data should remain source-of-truth metadata: anchors, pivot, sizeDelta, anchoredPosition, localScale, rotation, and rect.
 - Figma import maps anchors to constraints and stores the full Unity payload in shared plugin data.
-- Negative RectTransform scale should map to Figma mirroring.
+- Unity RectTransform `localScale` should be baked into Figma visual width/height and position because Figma does not reliably preserve scale factors inside `relativeTransform`; preserve the original Unity RectTransform size and independent scale in shared plugin data. Negative scale should still mirror the node.
+- The importer should write the independent scale to shared plugin data key `figmaBridgeUnityScale` in addition to the full RectTransform payload.
+- The Figma EX right-side inspector can expose selected-node Unity metadata: original Unity RectTransform size, editable Unity scale X/Y/Z fields, `figmaBridgeUnityScale`, `figmaBridgeNode.rectTransform.localScale`, and the visible Figma preview transform should stay in sync.
 - Z rotation should apply around the Unity pivot using Figma `relativeTransform`.
 - The old `Figma Bridge Validation` report was removed because it was not useful for the user's desired validation level.
 - Figma-to-Unity restore is currently a conservative copy workflow:
@@ -149,6 +154,8 @@ This is not intended to be pixel-perfect runtime parity. The practical target is
 - For Unity-prefab-to-Figma-component-library work, do not build a separate simplified MCP renderer. MCP/local sync can trigger, transport, or validate, but the actual Figma node creation should reuse `FigmaPlugin/code.js` importer behavior so text, RectTransform, node visibility, Layout Group, LayoutElement, ContentSizeFitter, image fills, and shared plugin data stay consistent with manual package import.
 - Figma Paste phase 1 is intentionally narrower than restore/import:
   - It intercepts Scene-view `Ctrl+V` only when clipboard content and UI parent are both valid.
+  - If native Figma Ctrl+C exposes only private `figma`/`figmeta` buffers, use the Figma plugin button `Copy Selection for Unity Paste`; Unity reads that structured JSON marker from the clipboard.
+  - Plugin enhanced-copy JSON supports flat rectangle/image/text paste first.
   - Clipboard images, including SVG-embedded `data:image` nodes, import into the active UI prefab's lowercase `resource` folder and paste as `SgrImage`.
   - A single filled Figma rectangle may paste from SVG/HTML clipboard data as a solid-color `SgrImage`.
   - Clipboard text pastes as `MultiLanguageTMPText` with the project default TMP font.
@@ -247,3 +254,6 @@ When continuing Figma Bridge development in a new conversation, first verify:
 5. Does the manifest still preserve enough data for future Figma-to-Unity restore?
 6. Does `Export Selection for Unity` produce restore JSON, and does Unity import create a restored prefab copy plus report without touching the source prefab?
 7. Does sample validation finish without missing sprite source metadata warnings?
+
+
+

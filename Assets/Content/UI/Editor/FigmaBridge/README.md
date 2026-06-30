@@ -19,6 +19,7 @@ Keep Figma Bridge notes here unless the project gains a shared UI tooling docume
 - `Tools/UI/Figma Bridge/Samples/Export Common And Plant Samples`
 - `Tools/UI/Figma Bridge/Figma Paste/Enable Scene Ctrl+V Paste`
 - `Tools/UI/Figma Bridge/Figma Paste/Inspect Clipboard`
+- Figma plugin button: `Copy Selection for Unity Paste`
 - Project window context menu: `Assets/UI/Figma Bridge/Export Selected Prefab to Figma Component Library`
 - Project window context menu: `Assets/UI/Figma Bridge/Export Selected Prefab as Frame`
 - Project window context menu: `Assets/UI/Figma Bridge/Export Selected Prefab as Component`
@@ -36,12 +37,14 @@ Keep Figma Bridge notes here unless the project gains a shared UI tooling docume
 
 Figma Paste is a lightweight Scene-view paste shortcut under `FigmaPaste/`. It is separate from the package importer and only covers the first practical paste layer:
 
-1. Copy an image or text from Figma.
-2. Focus a Unity Scene view while editing a UI prefab under `Assets/Content/UI/Prefab`.
-3. Press `Ctrl+V`.
+1. For native clipboard image/SVG/text data, copy from Figma.
+2. If native Ctrl+C exposes only private Figma `data-buffer` HTML, use the Figma plugin button `Copy Selection for Unity Paste`.
+3. Focus a Unity Scene view while editing a UI prefab under `Assets/Content/UI/Prefab`.
+4. Press `Ctrl+V`.
 
 Current behavior:
 
+- Plugin enhanced-copy JSON can paste solid rectangles, image-filled selections, and text selections.
 - Clipboard images, including SVG-embedded `data:image` nodes, are imported as PNG files into the active prefab's lowercase `resource` folder, configured as single Sprites, then pasted as `SgrImage` nodes.
 - Single filled Figma rectangles can paste from SVG/HTML clipboard data as solid-color `SgrImage` nodes with matching width and height.
 - Clipboard text is pasted as project TMP text using `MultiLanguageTMPText` and the default `uifont` asset when available.
@@ -49,7 +52,7 @@ Current behavior:
 - Unsupported ordinary clipboard content is not consumed, so Unity's native paste can continue.
 - Unsupported Figma/design clipboard content is consumed with a Scene-view notification so Unity does not paste an unrelated object from its own internal clipboard.
 
-Out of scope for phase 1: Figma frame/group hierarchy reconstruction, Auto Layout conversion, general SVG rendering, and plugin-enhanced structured copy.
+Out of scope for phase 1: Figma frame/group hierarchy reconstruction, Auto Layout conversion, and general SVG rendering.
 
 ### Component Library One-Click Sync
 
@@ -70,7 +73,7 @@ Configuration:
 - The latest queued package is persisted at `C:\tmp\FigmaBridgeLocalSync\latest.json`, so Unity domain reloads after asset refresh do not lose the pending import.
 - Unity local sync self-checks `/status` before publishing. If `18733` is occupied by a stale non-responsive listener, Unity starts on the next available fallback port and the Figma plugin probes the same port range before fetching `/latest`.
 - The Figma development plugin manifest must allow `http://localhost:18733` through `http://localhost:18736` in `networkAccess.allowedDomains` with a reasoning. Keeping `allowedDomains` as `["none"]` can leave the plugin UI stuck at `Waiting for package...`.
-- The current development plugin appears as `Unity Figma Bridge Importer v18740`. If the plugin window title does not include `v18740`, Figma is still running an older cached development plugin.
+- The current development plugin appears as `Unity Figma Bridge Importer v18741`. If the plugin window title does not include `v18741`, Figma is still running an older cached development plugin.
 - Figma plugin UI runs from a `data:` URL, so `localStorage` may be disabled. Use in-memory storage fallback in `ui.html` for target page and last package state.
 - If Figma reports blocked local network access, allow the plugin to access `http://localhost:18733` through `http://localhost:18736`.
 
@@ -262,8 +265,9 @@ After changing exporter or importer behavior:
 After changing Figma Paste:
 
 1. Run `Tools/UI/Figma Bridge/Figma Paste/Inspect Clipboard` after copying text and image content from Figma.
-2. Open a UI prefab under `Assets/Content/UI/Prefab`, select a UI parent in Scene view, copy Figma text, and press `Ctrl+V`.
-3. Copy a Figma image, press `Ctrl+V`, then confirm the PNG appears under the prefab-local `resource` folder and the created `SgrImage` has Undo support.
+2. In the Figma plugin, click `Copy Selection for Unity Paste` for a filled rectangle and an image-filled node.
+3. Open a UI prefab under `Assets/Content/UI/Prefab`, select a UI parent in Scene view, then press `Ctrl+V`.
+4. Confirm image PNGs appear under the prefab-local `resource` folder and created UI nodes have Undo support.
 
 For broader sample coverage, run `Tools/UI/Figma Bridge/Samples/Export Common And Plant Samples`. It exports top-level prefabs from:
 

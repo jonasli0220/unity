@@ -1,0 +1,503 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    body {
+      margin: 0;
+      padding: 16px;
+      font: 12px Inter, Arial, sans-serif;
+      color: #1f2933;
+    }
+    h1 {
+      margin: 0 0 12px;
+      font-size: 14px;
+      line-height: 20px;
+    }
+    p {
+      margin: 0 0 12px;
+      line-height: 18px;
+      color: #52606d;
+    }
+    input[type="text"],
+    input[type="file"] {
+      display: block;
+      width: 100%;
+      margin: 8px 0 12px;
+      box-sizing: border-box;
+    }
+    label {
+      display: block;
+      margin-top: 10px;
+      font-weight: 600;
+      color: #334e68;
+    }
+    .row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin: 10px 0 12px;
+      font-weight: 600;
+      color: #334e68;
+    }
+    .row input {
+      margin: 0;
+    }
+    .actions {
+      display: grid;
+      gap: 8px;
+    }
+    button {
+      width: 100%;
+      height: 32px;
+      border: 0;
+      border-radius: 6px;
+      color: white;
+      background: #2563eb;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    button:disabled {
+      background: #9aa5b1;
+      cursor: default;
+    }
+    button.secondary {
+      color: #1f2933;
+      background: #d9e2ec;
+    }
+    #status {
+      margin-top: 12px;
+      white-space: pre-wrap;
+      color: #334e68;
+    }
+    .version {
+      margin: -6px 0 12px;
+      color: #9aa5b1;
+      font-size: 11px;
+      line-height: 16px;
+    }
+  </style>
+</head>
+<body>
+  <h1>Unity Figma Bridge Importer v18741</h1>
+  <div class="version">Build 2026-06-30 v18741. Locked file: Dragon-通用组件</div>
+  <p>Select a package folder, or keep auto import enabled and export from Unity.</p>
+  <label for="targetPage">Target page</label>
+  <input id="targetPage" type="text" value="unity&#32452;&#20214;&#24211;">
+  <label class="row" for="autoImport">
+    <input id="autoImport" type="checkbox" checked>
+    <span>Auto import latest Unity export</span>
+  </label>
+  <input id="folder" type="file" webkitdirectory directory multiple>
+  <div class="actions">
+    <button id="import" disabled>Import / Sync Package</button>
+    <button id="importAndExport" class="secondary" disabled>Import + Export Unity Restore JSON</button>
+    <button id="checkUnity" class="secondary">Check Unity Export Now</button>
+    <button id="exportUnity">Export Selection for Unity</button>
+    <button id="copyUnityPaste" class="secondary">Copy Selection for Unity Paste</button>
+  </div>
+  <div id="status">Plugin UI v18741 loaded. Starting local sync check...</div>
+
+  <script>
+    const statusNode = document.getElementById('status');
+    window.addEventListener('error', (event) => {
+      statusNode.textContent = `Plugin UI script error:\n${event.message || event.error || event}`;
+    });
+    window.addEventListener('unhandledrejection', (event) => {
+      statusNode.textContent = `Plugin UI async error:\n${event.reason && event.reason.message ? event.reason.message : event.reason}`;
+    });
+
+    const LOCAL_SYNC_URLS = [
+      'http://localhost:18733',
+      'http://localhost:18734',
+      'http://localhost:18735',
+      'http://localhost:18736'
+    ];
+    const LOCAL_SYNC_STATUS_TIMEOUT_MS = 2500;
+    const LOCAL_SYNC_LATEST_TIMEOUT_MS = 20000;
+    let activeLocalSyncUrl = LOCAL_SYNC_URLS[0];
+    const folderInput = document.getElementById('folder');
+    const targetPageInput = document.getElementById('targetPage');
+    const autoImportInput = document.getElementById('autoImport');
+    const importButton = document.getElementById('import');
+    const importAndExportButton = document.getElementById('importAndExport');
+    const checkUnityButton = document.getElementById('checkUnity');
+    const exportUnityButton = document.getElementById('exportUnity');
+    const copyUnityPasteButton = document.getElementById('copyUnityPaste');
+    let selectedFiles = [];
+    let autoImportInFlight = false;
+    let activeAutoPackage = null;
+    const targetPageStorageKey = 'unityFigmaBridgeTargetPage';
+    const autoImportStorageKey = 'unityFigmaBridgeAutoImport';
+    const lastAutoPackageStorageKey = 'unityFigmaBridgeLastAutoPackageId';
+    const failedAutoPackageStorageKey = 'unityFigmaBridgeFailedAutoPackageId';
+    const memoryStorage = {};
+    const storage = createStorage();
+
+    targetPageInput.value = storage.getItem(targetPageStorageKey) || targetPageInput.value;
+    autoImportInput.checked = storage.getItem(autoImportStorageKey) !== 'false';
+
+    targetPageInput.addEventListener('change', () => {
+      storage.setItem(targetPageStorageKey, targetPageInput.value.trim());
+    });
+
+    autoImportInput.addEventListener('change', () => {
+      storage.setItem(autoImportStorageKey, autoImportInput.checked ? 'true' : 'false');
+      if (autoImportInput.checked) {
+        checkLocalSync(false);
+      }
+    });
+
+    folderInput.addEventListener('change', () => {
+      selectedFiles = Array.from(folderInput.files || []);
+      const manifest = findManifest(selectedFiles);
+      importButton.disabled = !manifest;
+      importAndExportButton.disabled = !manifest;
+      statusNode.textContent = manifest
+        ? `Ready: ${manifest.webkitRelativePath || manifest.name}`
+        : 'manifest.json was not found in the selected folder.';
+    });
+
+    importButton.addEventListener('click', async () => {
+      await importPackage(false);
+    });
+
+    importAndExportButton.addEventListener('click', async () => {
+      await importPackage(true);
+    });
+
+    checkUnityButton.addEventListener('click', async () => {
+      await checkLocalSync(true);
+    });
+
+    exportUnityButton.addEventListener('click', () => {
+      statusNode.textContent = 'Collecting selected Figma Bridge node...';
+      parent.postMessage({ pluginMessage: { type: 'export-selection' } }, '*');
+    });
+
+    copyUnityPasteButton.addEventListener('click', () => {
+      statusNode.textContent = 'Copying selected Figma nodes for Unity Scene paste...';
+      parent.postMessage({ pluginMessage: { type: 'copy-selection-for-unity-paste' } }, '*');
+    });
+
+    window.onmessage = async (event) => {
+      const message = event.data.pluginMessage;
+      if (!message) return;
+      if (message.type === 'export-restore-package') {
+        downloadJson(message.payload);
+        statusNode.textContent = 'Downloaded Figma-to-Unity restore package.';
+        return;
+      }
+      if (message.type === 'unity-paste-clipboard') {
+        try {
+          await copyTextToClipboard(message.text || '');
+          statusNode.textContent = `${message.summary || 'Copied for Unity Scene paste.'}\nFocus Unity Scene and press Ctrl+V.`;
+        } catch (error) {
+          statusNode.textContent = `Clipboard write failed:\n${error.message || error}`;
+        }
+        return;
+      }
+      statusNode.textContent = message.text || '';
+      if (message.type === 'done') {
+        if (activeAutoPackage && activeAutoPackage.packageId) {
+          storage.setItem(lastAutoPackageStorageKey, activeAutoPackage.packageId);
+          storage.removeItem(failedAutoPackageStorageKey);
+          acknowledgeLocalSync(activeAutoPackage.packageId);
+        }
+        finishAutoImport();
+        importButton.disabled = false;
+        importAndExportButton.disabled = false;
+      } else if (message.type === 'error') {
+        if (activeAutoPackage && activeAutoPackage.packageId) {
+          storage.setItem(failedAutoPackageStorageKey, activeAutoPackage.packageId);
+        }
+        finishAutoImport();
+        importButton.disabled = false;
+        importAndExportButton.disabled = false;
+      }
+    };
+
+    setTimeout(() => checkLocalSync(true), 300);
+    setInterval(() => checkLocalSync(false), 2500);
+
+    async function importPackage(exportRestoreAfterImport) {
+      importButton.disabled = true;
+      importAndExportButton.disabled = true;
+      try {
+        statusNode.textContent = 'Reading package...';
+        const payload = await buildPayload(selectedFiles);
+        const targetPageName = targetPageInput.value.trim();
+        storage.setItem(targetPageStorageKey, targetPageName);
+        payload.options = { exportRestoreAfterImport, targetPageName };
+        statusNode.textContent = exportRestoreAfterImport
+          ? 'Sending package to Figma, restore JSON will download after import...'
+          : 'Sending package to Figma...';
+        parent.postMessage({ pluginMessage: { type: 'import-package', payload } }, '*');
+      } catch (error) {
+        statusNode.textContent = `Import failed before Figma step:\n${error.message || error}`;
+        importButton.disabled = false;
+        importAndExportButton.disabled = false;
+      }
+    }
+
+    async function checkLocalSync(force) {
+      if (autoImportInFlight || (!force && !autoImportInput.checked)) {
+        return;
+      }
+
+      autoImportInFlight = true;
+      try {
+        const syncUrl = await resolveLocalSyncUrl(force);
+        if (force) {
+          statusNode.textContent = `Checking ${syncUrl}/latest...`;
+        }
+        const response = await fetchWithTimeout(`${syncUrl}/latest`, { cache: 'no-store' }, LOCAL_SYNC_LATEST_TIMEOUT_MS);
+        if (!response.ok) {
+          throw new Error(`Local sync server returned ${response.status}.`);
+        }
+
+        const data = await response.json();
+        if (!data.hasPackage) {
+          if (force) {
+            statusNode.textContent = `Unity local sync is connected.\nNo queued package yet.\n${syncUrl}`;
+          }
+          finishAutoImport();
+          return;
+        }
+
+        const packageId = data.packageId || '';
+        if (!force && packageId && packageId === storage.getItem(lastAutoPackageStorageKey)) {
+          statusNode.textContent = `Latest Unity export was already imported.\n${data.prefabName || data.prefabPath || packageId}`;
+          finishAutoImport();
+          return;
+        }
+        if (!force && packageId && packageId === storage.getItem(failedAutoPackageStorageKey)) {
+          statusNode.textContent = `Latest Unity export failed previously. Click Check Unity Export Now to retry.\n${data.prefabName || data.prefabPath || packageId}`;
+          finishAutoImport();
+          return;
+        }
+
+        await importLocalSyncPackage(data);
+      } catch (error) {
+        statusNode.textContent = `Unity local sync is not reachable.\nURLs:\n${LOCAL_SYNC_URLS.join('\n')}\nRun Unity, then export a prefab with the component-library menu.\n${error.message || error}`;
+        finishAutoImport();
+      }
+    }
+
+    async function resolveLocalSyncUrl(force) {
+      const urls = getOrderedLocalSyncUrls();
+      let lastError = null;
+      for (const url of urls) {
+        try {
+          if (force) {
+            statusNode.textContent = `Checking ${url}/status...`;
+          }
+          const response = await fetchWithTimeout(`${url}/status`, { cache: 'no-store' }, LOCAL_SYNC_STATUS_TIMEOUT_MS);
+          if (response.ok) {
+            activeLocalSyncUrl = url;
+            return url;
+          }
+          lastError = new Error(`${url}/status returned ${response.status}.`);
+        } catch (error) {
+          lastError = error;
+        }
+      }
+
+      throw lastError || new Error('No Unity local sync port responded.');
+    }
+
+    function getOrderedLocalSyncUrls() {
+      const urls = [activeLocalSyncUrl];
+      LOCAL_SYNC_URLS.forEach((url) => {
+        if (urls.indexOf(url) < 0) {
+          urls.push(url);
+        }
+      });
+      return urls;
+    }
+
+    async function importLocalSyncPackage(data) {
+      activeAutoPackage = data;
+      importButton.disabled = true;
+      importAndExportButton.disabled = true;
+      try {
+        const targetPageName = (data.targetPageName || targetPageInput.value || '').trim();
+        if (targetPageName) {
+          targetPageInput.value = targetPageName;
+          storage.setItem(targetPageStorageKey, targetPageName);
+        }
+
+        const payload = buildPayloadFromLocalSync(data);
+        payload.options = {
+          exportRestoreAfterImport: false,
+          targetPageName,
+          packageId: data.packageId || '',
+          source: 'local-sync'
+        };
+        statusNode.textContent = `Auto importing ${data.prefabName || data.prefabPath || 'Unity package'}...`;
+        parent.postMessage({ pluginMessage: { type: 'import-package', payload } }, '*');
+      } catch (error) {
+        statusNode.textContent = `Auto import failed before Figma step:\n${error.message || error}`;
+        if (data.packageId) {
+          storage.setItem(failedAutoPackageStorageKey, data.packageId);
+        }
+        finishAutoImport();
+        importButton.disabled = false;
+        importAndExportButton.disabled = false;
+      }
+    }
+
+    function finishAutoImport() {
+      autoImportInFlight = false;
+      activeAutoPackage = null;
+    }
+
+    async function fetchWithTimeout(url, options, timeoutMs) {
+      if (typeof AbortController === 'undefined') {
+        return fetch(url, options);
+      }
+
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
+      try {
+        return await fetch(url, Object.assign({}, options, { signal: controller.signal }));
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+
+    function createStorage() {
+      try {
+        const probeKey = '__unityFigmaBridgeStorageProbe';
+        window.localStorage.setItem(probeKey, '1');
+        window.localStorage.removeItem(probeKey);
+        return window.localStorage;
+      } catch (error) {
+        return {
+          getItem(key) {
+            return Object.prototype.hasOwnProperty.call(memoryStorage, key) ? memoryStorage[key] : null;
+          },
+          setItem(key, value) {
+            memoryStorage[key] = String(value);
+          },
+          removeItem(key) {
+            delete memoryStorage[key];
+          }
+        };
+      }
+    }
+
+    function findManifest(files) {
+      return files.find(file => normalizePath(file.webkitRelativePath || file.name).endsWith('/manifest.json')) ||
+        files.find(file => file.name === 'manifest.json');
+    }
+
+    async function buildPayload(files) {
+      const manifestFile = findManifest(files);
+      if (!manifestFile) {
+        throw new Error('manifest.json was not found.');
+      }
+
+      const manifest = JSON.parse(await manifestFile.text());
+      const imageMap = {};
+
+      if (manifest.root) {
+        for (const file of files) {
+          const relativePath = normalizePath(file.webkitRelativePath || file.name);
+          const imageIndex = relativePath.indexOf('/images/');
+          if (imageIndex < 0 || !relativePath.toLowerCase().endsWith('.png')) {
+            continue;
+          }
+
+          const packagePath = relativePath.slice(imageIndex + 1);
+          const buffer = await file.arrayBuffer();
+          imageMap[packagePath] = Array.from(new Uint8Array(buffer));
+        }
+      }
+
+      return { manifest, imageMap };
+    }
+
+    function buildPayloadFromLocalSync(data) {
+      if (!data || !data.manifest) {
+        throw new Error('Local sync package did not include a manifest.');
+      }
+
+      const imageMap = {};
+      const sourceImageMap = data.imageMap || {};
+      Object.keys(sourceImageMap).forEach(key => {
+        imageMap[normalizePath(key)] = base64ToByteArray(sourceImageMap[key]);
+      });
+
+      return { manifest: data.manifest, imageMap };
+    }
+
+    function base64ToByteArray(base64) {
+      const binary = atob(base64 || '');
+      const bytes = new Array(binary.length);
+      for (let i = 0; i < binary.length; i++) {
+        bytes[i] = binary.charCodeAt(i);
+      }
+      return bytes;
+    }
+
+    function normalizePath(path) {
+      return String(path || '').replace(/\\/g, '/');
+    }
+
+    function acknowledgeLocalSync(packageId) {
+      fetch(`${activeLocalSyncUrl}/ack?id=${encodeURIComponent(packageId)}`, { method: 'POST' }).catch(() => {});
+    }
+
+    async function copyTextToClipboard(text) {
+      if (!text) {
+        throw new Error('No clipboard text was generated.');
+      }
+
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        try {
+          await navigator.clipboard.writeText(text);
+          return;
+        } catch (error) {
+          // Fall through to the textarea copy path below.
+        }
+      }
+
+      const textarea = document.createElement('textarea');
+      textarea.value = text;
+      textarea.setAttribute('readonly', 'readonly');
+      textarea.style.position = 'fixed';
+      textarea.style.left = '-9999px';
+      textarea.style.top = '0';
+      document.body.appendChild(textarea);
+      textarea.focus();
+      textarea.select();
+      try {
+        if (!document.execCommand('copy')) {
+          throw new Error('document.execCommand copy returned false.');
+        }
+      } finally {
+        textarea.remove();
+      }
+    }
+
+    function downloadJson(payload) {
+      const name = payload && payload.source && payload.source.prefabPath
+        ? payload.source.prefabPath.split('/').pop().replace(/\.prefab$/i, '')
+        : 'figma_bridge';
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = `${name}_figma_restore.json`;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(url);
+    }
+  </script>
+</body>
+</html>
+
+
+

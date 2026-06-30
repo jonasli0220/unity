@@ -260,7 +260,8 @@ internal static class FigmaPasteClipboard
             }
         }
 
-        return ContainsIgnoreCase(payload.Html, "figma")
+        return FigmaPasteStructuredPayload.LooksLikeStructuredPayload(payload.Text)
+            || ContainsIgnoreCase(payload.Html, "figma")
             || ContainsIgnoreCase(payload.Svg, "figma")
             || ContainsIgnoreCase(payload.Text, "figma")
             || ContainsIgnoreCase(payload.Svg, "<svg")

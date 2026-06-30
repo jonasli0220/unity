@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using TMPro;
 using UnityEditor;
@@ -101,21 +102,25 @@ internal static class FigmaPasteSceneHandler
             return;
         }
 
-        FigmaPasteSvgRectangle svgRectangle;
-        bool hasSvgRectangle = FigmaPasteSvgShape.TryParseRectangle(payload, out svgRectangle);
-        bool hasPlainText = HasPasteablePlainText(payload);
         if (payload == null)
         {
             return;
         }
 
-        if (!payload.HasImage && !hasSvgRectangle && !hasPlainText)
+        FigmaPasteStructuredPackage structuredPayload;
+        bool hasStructuredPayload =
+            FigmaPasteStructuredPayload.TryParse(payload.Text, out structuredPayload);
+        FigmaPasteSvgRectangle svgRectangle;
+        bool hasSvgRectangle = FigmaPasteSvgShape.TryParseRectangle(payload, out svgRectangle);
+        bool hasPlainText = !hasStructuredPayload && HasPasteablePlainText(payload);
+
+        if (!hasStructuredPayload && !payload.HasImage && !hasSvgRectangle && !hasPlainText)
         {
             if (payload.LooksLikeFigmaContent)
             {
                 ShowSceneNotification(
                     sceneView,
-                    "Unsupported Figma clipboard content. Use Inspect Clipboard or copy a single image, text, or filled rectangle.");
+                    "Unsupported Figma clipboard content. Use the Figma plugin Copy Selection for Unity Paste button.");
                 ConsumePasteEvent(currentEvent);
             }
 
@@ -137,7 +142,26 @@ internal static class FigmaPasteSceneHandler
         }
 
         bool pasted = false;
-        if (payload.HasImage)
+        if (hasStructuredPayload)
+        {
+            if (FigmaPasteStructuredPayload.HasImageNode(structuredPayload) &&
+                !IsUIPrefabStage(prefabStage))
+            {
+                ShowSceneNotification(
+                    sceneView,
+                    "Image paste needs an open UI Prefab Stage so the PNG can be saved to resource.");
+                ConsumePasteEvent(currentEvent);
+                return;
+            }
+
+            pasted = PasteStructuredPayload(sceneView, prefabStage, parent, structuredPayload);
+            if (!pasted)
+            {
+                ConsumePasteEvent(currentEvent);
+                return;
+            }
+        }
+        else if (payload.HasImage)
         {
             if (!IsUIPrefabStage(prefabStage))
             {
@@ -208,6 +232,11 @@ internal static class FigmaPasteSceneHandler
             return false;
         }
 
+        if (FigmaPasteStructuredPayload.LooksLikeStructuredPayload(payload.Text))
+        {
+            return false;
+        }
+
         string trimmed = payload.Text.TrimStart();
         return !StartsWithIgnoreCase(trimmed, "<svg") &&
                !StartsWithIgnoreCase(trimmed, "<html") &&
@@ -260,6 +289,310 @@ internal static class FigmaPasteSceneHandler
         FinalizeCreatedObject(parent, imageObject, undoName, undoGroup, prefabStage);
         ShowSceneNotification(sceneView, "Pasted image: " + sprite.name);
         return true;
+    }
+
+    private static bool PasteStructuredPayload(
+        SceneView sceneView,
+        PrefabStage prefabStage,
+        RectTransform parent,
+        FigmaPasteStructuredPackage package)
+    {
+        List<FigmaPasteStructuredNode> nodes = GetSupportedStructuredNodes(package);
+        if (nodes.Count == 0)
+        {
+            ShowSceneNotification(sceneView, "No supported rectangle, image, or text in the Figma selection.");
+            return false;
+        }
+
+        const string undoName = "Paste Figma Structured Selection";
+        Vector3 worldPosition = GetPasteWorldPosition(sceneView, parent);
+        bool useContainer = nodes.Count > 1;
+
+        Undo.IncrementCurrentGroup();
+        int undoGroup = Undo.GetCurrentGroup();
+        Undo.SetCurrentGroupName(undoName);
+
+        RectTransform pasteParent = parent;
+        GameObject finalSelectionObject = null;
+        Vector2 selectionSize = FigmaPasteStructuredPayload.GetSelectionSize(package);
+        if (useContainer)
+        {
+            GameObject containerObject = ObjectFactory.CreateGameObject(
+                "figma_selection",
+                typeof(RectTransform));
+            RectTransform container = containerObject.GetComponent<RectTransform>();
+            Undo.SetTransformParent(container, parent, undoName);
+            GameObjectUtility.EnsureUniqueNameForSibling(containerObject);
+            InitializeRectTransform(container, worldPosition, selectionSize);
+            containerObject.layer = parent.gameObject.layer;
+            pasteParent = container;
+            finalSelectionObject = containerObject;
+        }
+
+        int pastedCount = 0;
+        for (int i = 0; i < nodes.Count; i++)
+        {
+            GameObject createdObject = CreateStructuredNode(
+                prefabStage,
+                pasteParent,
+                nodes[i],
+                useContainer ? pasteParent.position : worldPosition,
+                undoName);
+            if (createdObject == null)
+            {
+                continue;
+            }
+
+            RectTransform rectTransform = createdObject.transform as RectTransform;
+            if (useContainer && rectTransform != null)
+            {
+                rectTransform.anchoredPosition =
+                    CalculateStructuredChildPosition(nodes[i], selectionSize);
+            }
+
+            finalSelectionObject = useContainer ? finalSelectionObject : createdObject;
+            pastedCount++;
+        }
+
+        if (pastedCount == 0)
+        {
+            if (useContainer && finalSelectionObject != null)
+            {
+                UnityEngine.Object.DestroyImmediate(finalSelectionObject);
+            }
+
+            Undo.CollapseUndoOperations(undoGroup);
+            ShowSceneNotification(sceneView, "Figma selection could not be pasted.");
+            return false;
+        }
+
+        FinalizeCreatedObject(parent, finalSelectionObject, undoName, undoGroup, prefabStage);
+        ShowSceneNotification(
+            sceneView,
+            pastedCount == 1 ? "Pasted Figma selection" : "Pasted Figma selection: " + pastedCount + " nodes");
+        return true;
+    }
+
+    private static List<FigmaPasteStructuredNode> GetSupportedStructuredNodes(
+        FigmaPasteStructuredPackage package)
+    {
+        List<FigmaPasteStructuredNode> nodes = new List<FigmaPasteStructuredNode>();
+        if (package == null || package.nodes == null)
+        {
+            return nodes;
+        }
+
+        for (int i = 0; i < package.nodes.Length; i++)
+        {
+            FigmaPasteStructuredNode node = package.nodes[i];
+            if (FigmaPasteStructuredPayload.IsRectangleNode(node) ||
+                FigmaPasteStructuredPayload.IsImageNode(node) ||
+                FigmaPasteStructuredPayload.IsTextNode(node))
+            {
+                nodes.Add(node);
+            }
+        }
+
+        return nodes;
+    }
+
+    private static GameObject CreateStructuredNode(
+        PrefabStage prefabStage,
+        RectTransform parent,
+        FigmaPasteStructuredNode node,
+        Vector3 worldPosition,
+        string undoName)
+    {
+        if (FigmaPasteStructuredPayload.IsImageNode(node))
+        {
+            return CreateStructuredImage(prefabStage, parent, node, worldPosition, undoName);
+        }
+
+        if (FigmaPasteStructuredPayload.IsRectangleNode(node))
+        {
+            return CreateStructuredRectangle(parent, node, worldPosition, undoName);
+        }
+
+        if (FigmaPasteStructuredPayload.IsTextNode(node))
+        {
+            return CreateStructuredText(parent, node, worldPosition, undoName);
+        }
+
+        return null;
+    }
+
+    private static GameObject CreateStructuredImage(
+        PrefabStage prefabStage,
+        RectTransform parent,
+        FigmaPasteStructuredNode node,
+        Vector3 worldPosition,
+        string undoName)
+    {
+        byte[] pngBytes;
+        int imageWidth;
+        int imageHeight;
+        if (!FigmaPasteStructuredPayload.TryGetImagePng(
+            node,
+            out pngBytes,
+            out imageWidth,
+            out imageHeight))
+        {
+            return null;
+        }
+
+        Sprite sprite = ImportPngForPrefab(prefabStage, pngBytes, node.name);
+        if (sprite == null)
+        {
+            return null;
+        }
+
+        GameObject imageObject = ObjectFactory.CreateGameObject(
+            MakeObjectName(node.name, "image"),
+            typeof(RectTransform),
+            typeof(CanvasRenderer),
+            typeof(SgrUnity.SgrImage));
+        RectTransform rectTransform = imageObject.GetComponent<RectTransform>();
+        Undo.SetTransformParent(rectTransform, parent, undoName);
+        GameObjectUtility.EnsureUniqueNameForSibling(imageObject);
+
+        Vector2 size = FigmaPasteStructuredPayload.GetNodeSize(node);
+        if (size.x <= 1f && imageWidth > 0)
+        {
+            size.x = imageWidth;
+        }
+
+        if (size.y <= 1f && imageHeight > 0)
+        {
+            size.y = imageHeight;
+        }
+
+        InitializeRectTransform(rectTransform, worldPosition, size);
+        ApplyStructuredRotation(rectTransform, node);
+        imageObject.layer = parent.gameObject.layer;
+
+        SgrUnity.SgrImage image = imageObject.GetComponent<SgrUnity.SgrImage>();
+        image.sprite = sprite;
+        image.raycastTarget = false;
+        return imageObject;
+    }
+
+    private static GameObject CreateStructuredRectangle(
+        RectTransform parent,
+        FigmaPasteStructuredNode node,
+        Vector3 worldPosition,
+        string undoName)
+    {
+        GameObject imageObject = ObjectFactory.CreateGameObject(
+            MakeObjectName(node.name, "rectangle"),
+            typeof(RectTransform),
+            typeof(CanvasRenderer),
+            typeof(SgrUnity.SgrImage));
+        RectTransform rectTransform = imageObject.GetComponent<RectTransform>();
+        Undo.SetTransformParent(rectTransform, parent, undoName);
+        GameObjectUtility.EnsureUniqueNameForSibling(imageObject);
+
+        InitializeRectTransform(
+            rectTransform,
+            worldPosition,
+            FigmaPasteStructuredPayload.GetNodeSize(node));
+        ApplyStructuredRotation(rectTransform, node);
+        imageObject.layer = parent.gameObject.layer;
+
+        SgrUnity.SgrImage image = imageObject.GetComponent<SgrUnity.SgrImage>();
+        image.raycastTarget = false;
+        image.color = ToUnityColor(node.fill);
+        return imageObject;
+    }
+
+    private static GameObject CreateStructuredText(
+        RectTransform parent,
+        FigmaPasteStructuredNode node,
+        Vector3 worldPosition,
+        string undoName)
+    {
+        string textValue = node.characters ?? string.Empty;
+        GameObject textObject = ObjectFactory.CreateGameObject(
+            MakeObjectName(node.name, "text"),
+            typeof(RectTransform),
+            typeof(CanvasRenderer),
+            typeof(XSolution.XMultilanguage.MultiLanguageTMPText));
+        RectTransform rectTransform = textObject.GetComponent<RectTransform>();
+        Undo.SetTransformParent(rectTransform, parent, undoName);
+        GameObjectUtility.EnsureUniqueNameForSibling(textObject);
+
+        Vector2 size = FigmaPasteStructuredPayload.GetNodeSize(node);
+        if (size.x <= 1f || size.y <= 1f)
+        {
+            size = EstimateTextSize(textValue);
+        }
+
+        InitializeRectTransform(rectTransform, worldPosition, size);
+        ApplyStructuredRotation(rectTransform, node);
+        textObject.layer = parent.gameObject.layer;
+
+        XSolution.XMultilanguage.MultiLanguageTMPText tmp =
+            textObject.GetComponent<XSolution.XMultilanguage.MultiLanguageTMPText>();
+        tmp.raycastTarget = false;
+        tmp.text = textValue;
+        tmp.fontSize = node.fontSize > 0f ? node.fontSize : 32f;
+        tmp.alignment = TextAlignmentOptions.Center;
+        tmp.color = ToUnityColor(node.fill);
+        TMP_FontAsset defaultFont = AssetDatabase.LoadAssetAtPath<TMP_FontAsset>(DefaultTMPFontPath);
+        if (defaultFont != null)
+        {
+            tmp.font = defaultFont;
+        }
+
+        return textObject;
+    }
+
+    private static Vector2 CalculateStructuredChildPosition(
+        FigmaPasteStructuredNode node,
+        Vector2 selectionSize)
+    {
+        Vector2 size = FigmaPasteStructuredPayload.GetNodeSize(node);
+        float centerX = node.x + size.x * 0.5f;
+        float centerY = node.y + size.y * 0.5f;
+        return new Vector2(
+            centerX - selectionSize.x * 0.5f,
+            selectionSize.y * 0.5f - centerY);
+    }
+
+    private static void ApplyStructuredRotation(
+        RectTransform rectTransform,
+        FigmaPasteStructuredNode node)
+    {
+        if (rectTransform == null || node == null || Mathf.Approximately(node.rotation, 0f))
+        {
+            return;
+        }
+
+        rectTransform.localRotation = Quaternion.Euler(0f, 0f, -node.rotation);
+    }
+
+    private static Color ToUnityColor(FigmaPasteStructuredColor color)
+    {
+        if (color == null)
+        {
+            return Color.white;
+        }
+
+        return new Color(
+            Mathf.Clamp01(color.r),
+            Mathf.Clamp01(color.g),
+            Mathf.Clamp01(color.b),
+            Mathf.Clamp01(color.a));
+    }
+
+    private static string MakeObjectName(string value, string fallback)
+    {
+        string name = string.IsNullOrEmpty(value) ? fallback : value.Trim();
+        if (string.IsNullOrEmpty(name))
+        {
+            return fallback;
+        }
+
+        return name.Length > 80 ? name.Substring(0, 80) : name;
     }
 
     private static bool PasteSvgRectangle(
@@ -402,8 +735,19 @@ internal static class FigmaPasteSceneHandler
         PrefabStage prefabStage,
         FigmaPasteClipboardPayload payload)
     {
+        return ImportPngForPrefab(
+            prefabStage,
+            payload != null ? payload.ImagePngBytes : null,
+            "figma_clipboard");
+    }
+
+    private static Sprite ImportPngForPrefab(
+        PrefabStage prefabStage,
+        byte[] pngBytes,
+        string sourceName)
+    {
         string targetFolder = GetCurrentPrefabResourceFolder(prefabStage);
-        if (string.IsNullOrEmpty(targetFolder))
+        if (string.IsNullOrEmpty(targetFolder) || pngBytes == null || pngBytes.Length == 0)
         {
             return null;
         }
@@ -416,16 +760,49 @@ internal static class FigmaPasteSceneHandler
         }
 
         string assetPath = AssetDatabase.GenerateUniqueAssetPath(
-            targetFolder + "/figma_clipboard_" + DateTime.Now.ToString("yyyyMMdd_HHmmss") + ".png");
+            targetFolder + "/" + MakeImageAssetBaseName(sourceName) + "_" +
+            DateTime.Now.ToString("yyyyMMdd_HHmmss") + ".png");
         string absolutePath = AssetPathToAbsolutePath(assetPath);
 
-        File.WriteAllBytes(absolutePath, payload.ImagePngBytes);
+        File.WriteAllBytes(absolutePath, pngBytes);
         AssetDatabase.ImportAsset(assetPath, ImportAssetOptions.ForceSynchronousImport);
         ConfigureImportedSprite(assetPath);
         AssetDatabase.SaveAssets();
         AssetDatabase.Refresh();
 
         return AssetDatabase.LoadAssetAtPath<Sprite>(assetPath);
+    }
+
+    private static string MakeImageAssetBaseName(string sourceName)
+    {
+        string name = string.IsNullOrEmpty(sourceName) ? "figma_clipboard" : sourceName.Trim();
+        if (string.IsNullOrEmpty(name))
+        {
+            name = "figma_clipboard";
+        }
+
+        char[] invalidCharacters = Path.GetInvalidFileNameChars();
+        char[] characters = name.ToCharArray();
+        for (int i = 0; i < characters.Length; i++)
+        {
+            if (Array.IndexOf(invalidCharacters, characters[i]) >= 0)
+            {
+                characters[i] = '_';
+            }
+        }
+
+        name = new string(characters).Trim();
+        if (name.Length > 48)
+        {
+            name = name.Substring(0, 48);
+        }
+
+        if (!name.StartsWith("figma_", StringComparison.OrdinalIgnoreCase))
+        {
+            name = "figma_" + name;
+        }
+
+        return name;
     }
 
     private static void ConfigureImportedSprite(string assetPath)

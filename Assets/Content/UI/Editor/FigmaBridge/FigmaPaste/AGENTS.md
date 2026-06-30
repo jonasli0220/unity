@@ -28,7 +28,8 @@ This directory contains the first-stage Unity Editor paste workflow for content 
 
 ## Phase 1 Boundary
 
-- Supported paste targets: clipboard image or SVG-embedded data image to `SgrImage`, single filled SVG rectangle to solid-color `SgrImage`, clipboard plain text to project TMP text.
+- Supported paste targets: Figma plugin enhanced-copy JSON for rectangles, images, and text; clipboard image or SVG-embedded data image to `SgrImage`; single filled SVG rectangle to solid-color `SgrImage`; clipboard plain text to project TMP text.
 - Supported diagnostics: list clipboard formats and save a PNG probe image when available.
 - Do not attempt structural Figma group/frame reconstruction here yet; only the single-rectangle SVG shortcut is allowed in phase 1.
-- Do not assume Figma's private clipboard formats are stable; record them through the inspector first.
+- Do not assume Figma's private clipboard formats are stable; native Figma `data-buffer` HTML is diagnostic-only unless Figma also exposes public image/SVG/text data.
+- When native Figma Ctrl+C exposes only private `figma`/`figmeta` buffers, use the Figma plugin's `Copy Selection for Unity Paste` button to write the supported JSON marker into the system clipboard.

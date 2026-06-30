@@ -1,0 +1,25 @@
+{
+    "name":  "Unity Figma Bridge Importer v18741",
+    "id":  "1478965320198467215",
+    "api":  "1.0.0",
+    "main":  "code.js",
+    "ui":  "ui.html",
+    "editorType":  [
+                       "figma"
+                   ],
+    "networkAccess":  {
+                          "allowedDomains":  [
+                                                 "http://localhost:18733",
+                                                 "http://localhost:18734",
+                                                 "http://localhost:18735",
+                                                 "http://localhost:18736"
+                                             ],
+                          "reasoning":  "Connects to the Unity Editor on localhost to import the latest exported UI prefab package.",
+                          "devAllowedDomains":  [
+                                                    "http://localhost:18733",
+                                                    "http://localhost:18734",
+                                                    "http://localhost:18735",
+                                                    "http://localhost:18736"
+                                                ]
+                      }
+}

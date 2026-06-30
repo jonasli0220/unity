@@ -9,6 +9,11 @@ Phase 1 of Figma-to-Unity paste support.
 
 ## What Works Now
 
+- In Figma, run the development plugin and click `Copy Selection for Unity Paste`, then focus a Unity Scene view while editing a UI prefab and press `Ctrl+V`.
+  - This is the reliable path for current Figma Desktop native selections because native Ctrl+C may expose only Figma private `data-buffer` HTML.
+  - Single rectangles with solid fills paste as solid-color `SgrImage` nodes.
+  - Image-filled selections paste as PNG-backed `SgrImage` nodes under the prefab-local `resource` folder.
+  - Text selections paste as project TMP text.
 - Copy an image from Figma, focus a Unity Scene view while editing a UI prefab, then press `Ctrl+V`.
   - Direct clipboard images and SVG-embedded `data:image` nodes are saved as PNG under the prefab-local `resource` folder.
   - Unity imports it as a single Sprite.
@@ -30,8 +35,9 @@ Phase 1 of Figma-to-Unity paste support.
 - Image paste imports assets only in UI Prefab Stage, where the prefab-local `resource` destination is unambiguous.
 - Unsupported ordinary clipboard content is not consumed, so Unity's native paste can still run.
 - Unsupported Figma/design clipboard content is consumed with a Scene-view notification, preventing Unity from pasting an unrelated object from its own internal clipboard.
+- Native Figma Ctrl+C private `figma`/`figmeta` buffers are not parsed. Use the plugin copy button when `Inspect Clipboard` shows only `HTML Format` with `data-buffer`.
 - Structural Figma frame/group reconstruction is intentionally out of scope for phase 1; the rectangle path is only a single-shape convenience case.
 
 ## Next Phase
 
-Use the clipboard reports to decide whether Figma exposes usable SVG/HTML/JSON data directly. If not, add a Figma plugin enhanced-copy channel that sends structured selection data to Unity.
+Extend the plugin enhanced-copy channel from flat supported nodes to hierarchy-aware frame/group reconstruction and RectTransform adaptation.
