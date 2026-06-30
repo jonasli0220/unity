@@ -2,7 +2,6 @@ using System.Reflection;
 using UnityEditor;
 using UnityEditor.SceneManagement;
 using UnityEngine;
-using UnityEngine.SceneManagement;
 using UnityEngine.UI;
 using TMPro;
 
@@ -44,18 +43,6 @@ internal static class DirectVisibleUISelection
     private static int inlineTextUndoGroup = -1;
     private static bool shouldFocusInlineTextEditor;
     private static GUIStyle inlineTextAreaStyle;
-
-    private struct UIEditingContext
-    {
-        public PrefabStage PrefabStage;
-        public GameObject Root;
-        public Scene Scene;
-
-        public bool IsLiveBoard
-        {
-            get { return PrefabStage == null && UIDesignBoardLiveScene.IsActive; }
-        }
-    }
 
     static DirectVisibleUISelection()
     {
@@ -281,13 +268,14 @@ internal static class DirectVisibleUISelection
             return false;
         }
 
-        if (!TryGetEditingContext(out UIEditingContext context))
+        PrefabStage prefabStage = PrefabStageUtility.GetCurrentPrefabStage();
+        if (!IsUIPrefabStage(prefabStage))
         {
             return false;
         }
 
         TMP_Text targetText =
-            PickTopmostVisibleUIText(context, currentEvent.mousePosition);
+            PickTopmostVisibleUIText(prefabStage, currentEvent.mousePosition);
         if (targetText == null)
         {
             return false;
@@ -310,8 +298,9 @@ internal static class DirectVisibleUISelection
             return false;
         }
 
-        if (!TryGetEditingContext(out UIEditingContext context) ||
-            !IsEditableUIObjectInContext(targetText.gameObject, context))
+        PrefabStage prefabStage = PrefabStageUtility.GetCurrentPrefabStage();
+        if (!IsUIPrefabStage(prefabStage) ||
+            !IsEditableUIObjectInStage(targetText.gameObject, prefabStage))
         {
             return false;
         }
@@ -341,7 +330,7 @@ internal static class DirectVisibleUISelection
 
         GUIUtility.hotControl = 0;
         GUIUtility.keyboardControl = 0;
-        SelectPickedUIObject(targetText.gameObject, context);
+        SelectPickedUIObject(targetText.gameObject, prefabStage);
         if (sceneView != null)
         {
             SetHoveredObject(targetText.gameObject, sceneView);
@@ -434,9 +423,10 @@ internal static class DirectVisibleUISelection
         PrefabUtility.RecordPrefabInstancePropertyModifications(inlineEditingText);
         EditorUtility.SetDirty(inlineEditingText);
 
-        if (TryGetEditingContext(out UIEditingContext context) && context.Scene.IsValid())
+        PrefabStage prefabStage = PrefabStageUtility.GetCurrentPrefabStage();
+        if (prefabStage != null)
         {
-            EditorSceneManager.MarkSceneDirty(context.Scene);
+            EditorSceneManager.MarkSceneDirty(prefabStage.scene);
         }
 
         sceneView.Repaint();
@@ -632,17 +622,18 @@ internal static class DirectVisibleUISelection
             return;
         }
 
-        if (!TryGetEditingContext(out UIEditingContext context))
+        PrefabStage prefabStage = PrefabStageUtility.GetCurrentPrefabStage();
+        if (!IsUIPrefabStage(prefabStage))
         {
             SetHoveredObject(null, sceneView);
             return;
         }
 
         GameObject pickedObject =
-            PickTopmostVisibleUIObject(context, currentEvent.mousePosition);
+            PickTopmostVisibleUIObject(prefabStage, currentEvent.mousePosition);
 
         SetHoveredObject(
-            IsEditableUIObjectInContext(pickedObject, context) ? pickedObject : null,
+            IsEditableUIObjectInStage(pickedObject, prefabStage) ? pickedObject : null,
             sceneView);
     }
 
@@ -656,14 +647,15 @@ internal static class DirectVisibleUISelection
             return;
         }
 
-        if (!TryGetEditingContext(out UIEditingContext context))
+        PrefabStage prefabStage = PrefabStageUtility.GetCurrentPrefabStage();
+        if (!IsUIPrefabStage(prefabStage))
         {
             return;
         }
 
         GameObject pickedObject =
-            PickTopmostVisibleUIObject(context, currentEvent.mousePosition);
-        if (!IsEditableUIObjectInContext(pickedObject, context))
+            PickTopmostVisibleUIObject(prefabStage, currentEvent.mousePosition);
+        if (!IsEditableUIObjectInStage(pickedObject, prefabStage))
         {
             return;
         }
@@ -721,11 +713,12 @@ internal static class DirectVisibleUISelection
             return false;
         }
 
-        if (!TryGetEditingContext(out UIEditingContext context) ||
-            !IsEditableUIObjectInContext(pressedObject, context) ||
+        PrefabStage prefabStage = PrefabStageUtility.GetCurrentPrefabStage();
+        if (!IsUIPrefabStage(prefabStage) ||
+            !IsEditableUIObjectInStage(pressedObject, prefabStage) ||
             !IsSceneVisibleAndPickable(pressedObject) ||
             (!useLayoutPreview &&
-             IsBlockedByActiveSceneControl(pressedObject, context)))
+             IsBlockedByActiveSceneControl(pressedObject, prefabStage)))
         {
             return false;
         }
@@ -756,7 +749,7 @@ internal static class DirectVisibleUISelection
 
         GUIUtility.hotControl = directDragControlId;
         GUIUtility.keyboardControl = 0;
-        SelectPickedUIObject(pressedObject, context);
+        SelectPickedUIObject(pressedObject, prefabStage);
         EditorApplication.RepaintHierarchyWindow();
         sceneView.Repaint();
         return true;
@@ -797,10 +790,10 @@ internal static class DirectVisibleUISelection
         PrefabUtility.RecordPrefabInstancePropertyModifications(draggedRectTransform);
         EditorUtility.SetDirty(draggedRectTransform);
 
-        Scene editedScene = draggedRectTransform.gameObject.scene;
-        if (editedScene.IsValid())
+        PrefabStage prefabStage = PrefabStageUtility.GetCurrentPrefabStage();
+        if (prefabStage != null)
         {
-            EditorSceneManager.MarkSceneDirty(editedScene);
+            EditorSceneManager.MarkSceneDirty(prefabStage.scene);
         }
 
         sceneView.Repaint();
@@ -979,24 +972,25 @@ internal static class DirectVisibleUISelection
             return;
         }
 
-        if (!TryGetEditingContext(out UIEditingContext context))
+        PrefabStage prefabStage = PrefabStageUtility.GetCurrentPrefabStage();
+        if (!IsUIPrefabStage(prefabStage))
         {
             return;
         }
 
-        GameObject pickedObject = PickTopmostVisibleUIObject(context, currentEvent.mousePosition);
-        if (!IsEditableUIObjectInContext(pickedObject, context))
+        GameObject pickedObject = PickTopmostVisibleUIObject(prefabStage, currentEvent.mousePosition);
+        if (!IsEditableUIObjectInStage(pickedObject, prefabStage))
         {
             return;
         }
 
-        if (IsBlockedByActiveSceneControl(pickedObject, context))
+        if (IsBlockedByActiveSceneControl(pickedObject, prefabStage))
         {
             return;
         }
 
         GUIUtility.hotControl = 0;
-        SelectPickedUIObject(pickedObject, context);
+        SelectPickedUIObject(pickedObject, prefabStage);
         SetHoveredObject(pickedObject, sceneView);
         currentEvent.Use();
 
@@ -1004,16 +998,16 @@ internal static class DirectVisibleUISelection
         sceneView.Repaint();
     }
 
-    private static GameObject PickTopmostVisibleUIObject(UIEditingContext context, Vector2 mousePosition)
+    private static GameObject PickTopmostVisibleUIObject(PrefabStage prefabStage, Vector2 mousePosition)
     {
-        if (context.Root == null)
+        if (prefabStage == null || prefabStage.prefabContentsRoot == null)
         {
             return null;
         }
 
         Canvas.ForceUpdateCanvases();
 
-        Graphic[] graphics = context.Root.GetComponentsInChildren<Graphic>(true);
+        Graphic[] graphics = prefabStage.prefabContentsRoot.GetComponentsInChildren<Graphic>(true);
         Graphic bestGraphic = null;
         int bestDepth = int.MinValue;
         int bestHierarchyOrder = int.MinValue;
@@ -1051,10 +1045,10 @@ internal static class DirectVisibleUISelection
     }
 
     private static TMP_Text PickTopmostVisibleUIText(
-        UIEditingContext context,
+        PrefabStage prefabStage,
         Vector2 mousePosition)
     {
-        if (context.Root == null)
+        if (prefabStage == null || prefabStage.prefabContentsRoot == null)
         {
             return null;
         }
@@ -1063,13 +1057,13 @@ internal static class DirectVisibleUISelection
             Selection.activeGameObject != null
                 ? Selection.activeGameObject.GetComponent<TMP_Text>()
                 : null;
-        if (IsSelectableVisibleUIText(selectedText, context, mousePosition))
+        if (IsSelectableVisibleUIText(selectedText, prefabStage, mousePosition))
         {
             return selectedText;
         }
 
         TMP_Text[] texts =
-            context.Root.GetComponentsInChildren<TMP_Text>(true);
+            prefabStage.prefabContentsRoot.GetComponentsInChildren<TMP_Text>(true);
         TMP_Text bestText = null;
         int bestDepth = int.MinValue;
         int bestHierarchyOrder = int.MinValue;
@@ -1078,7 +1072,7 @@ internal static class DirectVisibleUISelection
         for (int i = 0; i < texts.Length; i++)
         {
             TMP_Text text = texts[i];
-            if (!IsSelectableVisibleUIText(text, context, mousePosition))
+            if (!IsSelectableVisibleUIText(text, prefabStage, mousePosition))
             {
                 continue;
             }
@@ -1105,12 +1099,12 @@ internal static class DirectVisibleUISelection
 
     private static bool IsSelectableVisibleUIText(
         TMP_Text text,
-        UIEditingContext context,
+        PrefabStage prefabStage,
         Vector2 mousePosition)
     {
         Graphic graphic = text as Graphic;
         return graphic != null &&
-               IsEditableUIObjectInContext(text.gameObject, context) &&
+               IsEditableUIObjectInStage(text.gameObject, prefabStage) &&
                IsSelectableVisibleGraphic(graphic) &&
                RectTransformContainsGuiPoint(text.rectTransform, mousePosition);
     }
@@ -1283,15 +1277,15 @@ internal static class DirectVisibleUISelection
 
     private static void SelectPickedUIObject(
         GameObject pickedObject,
-        UIEditingContext context)
+        PrefabStage prefabStage)
     {
         GameObject prefabInstanceRoot = PrefabUtility.GetNearestPrefabInstanceRoot(pickedObject);
         Object selectionContext =
             prefabInstanceRoot != null &&
             prefabInstanceRoot != pickedObject &&
-            IsEditableUIObjectInContext(prefabInstanceRoot, context)
+            IsEditableUIObjectInStage(prefabInstanceRoot, prefabStage)
                 ? prefabInstanceRoot
-                : context.Root;
+                : prefabStage.prefabContentsRoot;
 
         Selection.SetActiveObjectWithContext(pickedObject, selectionContext);
         EditorGUIUtility.PingObject(pickedObject);
@@ -1299,7 +1293,7 @@ internal static class DirectVisibleUISelection
 
     private static bool IsBlockedByActiveSceneControl(
         GameObject pickedObject,
-        UIEditingContext context)
+        PrefabStage prefabStage)
     {
         int hotControl = GUIUtility.hotControl;
         if (hotControl == 0 || IsDefaultSceneSelectionControlActive())
@@ -1313,7 +1307,7 @@ internal static class DirectVisibleUISelection
         GameObject activeObject = Selection.activeGameObject;
         bool canClickThroughLayoutRoot =
             activeObject != pickedObject &&
-            IsEditableUIObjectInContext(activeObject, context) &&
+            IsEditableUIObjectInStage(activeObject, prefabStage) &&
             activeObject.GetComponent<Graphic>() == null;
 
         return !canClickThroughLayoutRoot;
@@ -1330,35 +1324,6 @@ internal static class DirectVisibleUISelection
         return value is int controlId &&
                controlId != 0 &&
                GUIUtility.hotControl == controlId;
-    }
-
-    private static bool TryGetEditingContext(out UIEditingContext context)
-    {
-        context = default;
-        PrefabStage prefabStage = PrefabStageUtility.GetCurrentPrefabStage();
-        if (IsUIPrefabStage(prefabStage))
-        {
-            context = new UIEditingContext
-            {
-                PrefabStage = prefabStage,
-                Root = prefabStage.prefabContentsRoot,
-                Scene = prefabStage.scene
-            };
-            return true;
-        }
-
-        if (UIDesignBoardLiveScene.TryGetActiveEditingRoot(out GameObject liveBoardRoot))
-        {
-            context = new UIEditingContext
-            {
-                PrefabStage = null,
-                Root = liveBoardRoot,
-                Scene = liveBoardRoot.scene
-            };
-            return true;
-        }
-
-        return false;
     }
 
     private static bool IsUIPrefabStage(PrefabStage prefabStage)
@@ -1390,26 +1355,6 @@ internal static class DirectVisibleUISelection
         Transform prefabRoot = prefabStage.prefabContentsRoot.transform;
         Transform pickedTransform = pickedObject.transform;
         return pickedTransform == prefabRoot || pickedTransform.IsChildOf(prefabRoot);
-    }
-
-    private static bool IsEditableUIObjectInContext(
-        GameObject pickedObject,
-        UIEditingContext context)
-    {
-        if (pickedObject == null ||
-            pickedObject.GetComponent<RectTransform>() == null ||
-            context.Root == null ||
-            pickedObject.scene != context.Scene)
-        {
-            return false;
-        }
-
-        if (context.IsLiveBoard)
-        {
-            return UIDesignBoardLiveScene.IsEditableObject(pickedObject);
-        }
-
-        return IsEditableUIObjectInStage(pickedObject, context.PrefabStage);
     }
 
     private static bool IsSceneVisibleAndPickable(GameObject target)

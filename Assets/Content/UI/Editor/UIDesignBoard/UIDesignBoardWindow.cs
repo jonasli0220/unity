@@ -22,7 +22,6 @@ public class UIDesignBoardWindow : EditorWindow
     private const float MinZoom = 0.25f;
     private const float MaxZoom = 2.5f;
     private const string MenuPath = "Tools/UI/UI Design Board/Open";
-    private const string OpenLiveMenuPath = "Tools/UI/UI Design Board/Open Live Board";
     private const string AddSelectedMenuPath = "Tools/UI/UI Design Board/Add Selected Prefabs";
     private const string AssetAddSelectedMenuPath = "Assets/UI Design Board/Add Selected Prefabs to Board";
     private const string SearchControlName = "UIDesignBoard.Search";
@@ -67,14 +66,6 @@ public class UIDesignBoardWindow : EditorWindow
         window.Show();
     }
 
-    [MenuItem(OpenLiveMenuPath, false, 2321)]
-    private static void OpenLiveFromMenu()
-    {
-        Open();
-        UIDesignBoardWindow window = GetWindow<UIDesignBoardWindow>("UI Design Board");
-        window.OpenLiveBoard();
-    }
-
     [MenuItem(AddSelectedMenuPath, false, 2321)]
     private static void AddSelectedPrefabsFromToolsMenu()
     {
@@ -108,8 +99,6 @@ public class UIDesignBoardWindow : EditorWindow
 
     private void OnEnable()
     {
-        UIDesignBoardLiveScene.StateChanged -= OnLiveBoardStateChanged;
-        UIDesignBoardLiveScene.StateChanged += OnLiveBoardStateChanged;
         LoadBoard();
         RefreshArtboardPaths();
         LoadSearchIndex(false);
@@ -118,7 +107,6 @@ public class UIDesignBoardWindow : EditorWindow
 
     private void OnDisable()
     {
-        UIDesignBoardLiveScene.StateChanged -= OnLiveBoardStateChanged;
         EditorApplication.delayCall -= ProcessNextPreview;
         EditorApplication.delayCall -= SaveIfDirty;
         previewGenerationScheduled = false;
@@ -129,21 +117,6 @@ public class UIDesignBoardWindow : EditorWindow
 
     private void OnSelectionChange()
     {
-        if (UIDesignBoardLiveScene.TryGetArtboardGuid(Selection.activeGameObject, out string guid))
-        {
-            selectedGuid = guid;
-        }
-
-        Repaint();
-    }
-
-    private void OnLiveBoardStateChanged()
-    {
-        if (UIDesignBoardLiveScene.TryGetArtboardGuid(Selection.activeGameObject, out string guid))
-        {
-            selectedGuid = guid;
-        }
-
         Repaint();
     }
 
@@ -171,25 +144,12 @@ public class UIDesignBoardWindow : EditorWindow
                 AddSelectedPrefabsToBoard();
             }
 
-            if (GUILayout.Button(
-                    UIDesignBoardLiveScene.IsOpen ? "Sync Live" : "Live Edit",
-                    EditorStyles.toolbarButton,
-                    GUILayout.Width(68f)))
-            {
-                OpenLiveBoard();
-            }
-
             using (new EditorGUI.DisabledScope(string.IsNullOrEmpty(selectedGuid)))
             {
                 if (GUILayout.Button("Focus", EditorStyles.toolbarButton, GUILayout.Width(54f)))
                 {
                     pendingFocusGuid = selectedGuid;
                     Repaint();
-                }
-
-                if (GUILayout.Button("Live", EditorStyles.toolbarButton, GUILayout.Width(44f)))
-                {
-                    FocusLiveArtboard(selectedGuid);
                 }
             }
 
@@ -208,28 +168,6 @@ public class UIDesignBoardWindow : EditorWindow
 
             GUILayout.Space(8f);
             GUILayout.Label("Zoom " + Mathf.RoundToInt(board.Zoom * 100f) + "%", EditorStyles.miniLabel, GUILayout.Width(72f));
-
-            using (new EditorGUI.DisabledScope(!UIDesignBoardLiveScene.IsOpen || string.IsNullOrEmpty(selectedGuid)))
-            {
-                if (GUILayout.Button("Apply", EditorStyles.toolbarButton, GUILayout.Width(48f)))
-                {
-                    ApplyLiveArtboard(selectedGuid);
-                }
-
-                if (GUILayout.Button("Revert", EditorStyles.toolbarButton, GUILayout.Width(52f)))
-                {
-                    RevertLiveArtboard(selectedGuid);
-                }
-            }
-
-            using (new EditorGUI.DisabledScope(!UIDesignBoardLiveScene.IsOpen))
-            {
-                if (GUILayout.Button("Close Live", EditorStyles.toolbarButton, GUILayout.Width(70f)))
-                {
-                    UIDesignBoardLiveScene.Close(out statusText);
-                }
-            }
-
             GUILayout.FlexibleSpace();
 
             if (!string.IsNullOrEmpty(statusText))
@@ -413,11 +351,6 @@ public class UIDesignBoardWindow : EditorWindow
 
             using (new GUILayout.HorizontalScope())
             {
-                if (GUILayout.Button("Live", GUILayout.Width(44f)))
-                {
-                    FocusLiveArtboard(artboard.Guid);
-                }
-
                 if (GUILayout.Button("Open", GUILayout.Width(52f)))
                 {
                     OpenPrefab(ResolvePrefabPath(artboard));
@@ -571,18 +504,13 @@ public class UIDesignBoardWindow : EditorWindow
 
     private void DrawCardActions(Rect rect, UIDesignArtboard artboard)
     {
-        float buttonWidth = 48f;
-        Rect liveRect = new Rect(rect.x, rect.y, buttonWidth, 22f);
-        Rect openRect = new Rect(liveRect.xMax + 6f, rect.y, buttonWidth, 22f);
+        float buttonWidth = 54f;
+        Rect openRect = new Rect(rect.x, rect.y, buttonWidth, 22f);
         Rect pingRect = new Rect(openRect.xMax + 6f, rect.y, buttonWidth, 22f);
+        Rect copyRect = new Rect(pingRect.xMax + 6f, rect.y, buttonWidth, 22f);
         Rect removeRect = new Rect(rect.xMax - 68f, rect.y, 68f, 22f);
 
         string path = ResolvePrefabPath(artboard);
-        if (GUI.Button(liveRect, "Live"))
-        {
-            FocusLiveArtboard(artboard.Guid);
-        }
-
         if (GUI.Button(openRect, "Open"))
         {
             OpenPrefab(path);
@@ -591,6 +519,12 @@ public class UIDesignBoardWindow : EditorWindow
         if (GUI.Button(pingRect, "Ping"))
         {
             PingPrefab(path);
+        }
+
+        if (GUI.Button(copyRect, "Copy"))
+        {
+            EditorGUIUtility.systemCopyBuffer = path;
+            statusText = "Copied prefab path.";
         }
 
         if (GUI.Button(removeRect, "Remove"))
@@ -602,7 +536,7 @@ public class UIDesignBoardWindow : EditorWindow
     private void DrawCanvasHint(Rect rect)
     {
         Rect hintRect = new Rect(rect.x + 12f, rect.yMax - 28f, rect.width - 24f, 20f);
-        GUI.Label(hintRect, "Mouse wheel zooms. Middle/right drag pans. Drag a card to arrange. Double-click opens its Live artboard.", EditorStyles.miniLabel);
+        GUI.Label(hintRect, "Mouse wheel zooms. Middle/right drag pans. Drag a card to arrange. Double-click a card to open prefab.", EditorStyles.miniLabel);
     }
 
     private void HandleCanvasEvents(Rect canvasRect)
@@ -648,7 +582,7 @@ public class UIDesignBoardWindow : EditorWindow
 
                     if (current.clickCount == 2)
                     {
-                        FocusLiveArtboard(hit.Guid);
+                        OpenPrefab(ResolvePrefabPath(hit));
                         current.Use();
                     }
 
@@ -682,7 +616,6 @@ public class UIDesignBoardWindow : EditorWindow
                 if (artboard != null)
                 {
                     artboard.Position = LocalToCanvas(localMouse) - dragOffsetCanvas;
-                    UIDesignBoardLiveScene.UpdateArtboardPosition(artboard.Guid, artboard.Position);
                     MarkDirty();
                     current.Use();
                     Repaint();
@@ -766,74 +699,6 @@ public class UIDesignBoardWindow : EditorWindow
         Repaint();
     }
 
-    private void OpenLiveBoard()
-    {
-        EnsureBoard();
-        SaveIfDirty();
-        UIDesignBoardLiveScene.OpenOrSync(
-            CreateLiveItems(),
-            selectedGuid,
-            out statusText);
-        Repaint();
-    }
-
-    private void FocusLiveArtboard(string guid)
-    {
-        if (string.IsNullOrEmpty(guid))
-        {
-            return;
-        }
-
-        selectedGuid = guid;
-        if (!UIDesignBoardLiveScene.IsOpen)
-        {
-            UIDesignBoardLiveScene.OpenOrSync(
-                CreateLiveItems(),
-                guid,
-                out statusText);
-        }
-        else
-        {
-            UIDesignBoardLiveScene.FocusArtboard(guid, out statusText);
-        }
-
-        Repaint();
-    }
-
-    private void ApplyLiveArtboard(string guid)
-    {
-        UIDesignBoardLiveScene.ApplyArtboard(guid, out statusText);
-        Repaint();
-    }
-
-    private void RevertLiveArtboard(string guid)
-    {
-        UIDesignBoardLiveScene.RevertArtboard(guid, true, out statusText);
-        Repaint();
-    }
-
-    private List<UIDesignBoardLiveItem> CreateLiveItems()
-    {
-        List<UIDesignBoardLiveItem> items = new List<UIDesignBoardLiveItem>();
-        for (int i = 0; i < board.Artboards.Count; i++)
-        {
-            items.Add(CreateLiveItem(board.Artboards[i]));
-        }
-
-        return items;
-    }
-
-    private UIDesignBoardLiveItem CreateLiveItem(UIDesignArtboard artboard)
-    {
-        return new UIDesignBoardLiveItem
-        {
-            Guid = artboard.Guid,
-            PrefabPath = ResolvePrefabPath(artboard),
-            Title = GetArtboardTitle(artboard),
-            Position = artboard.Position
-        };
-    }
-
     private void AddOrFocusArtboard(string prefabPath, string route)
     {
         bool added = AddOrFocusArtboard(prefabPath, route, true);
@@ -868,8 +733,6 @@ public class UIDesignBoardWindow : EditorWindow
                 pendingFocusGuid = existing.Guid;
             }
 
-            UIDesignBoardLiveScene.AddOrSyncArtboard(CreateLiveItem(existing));
-
             Repaint();
             return false;
         }
@@ -884,7 +747,6 @@ public class UIDesignBoardWindow : EditorWindow
         };
 
         board.Artboards.Add(artboard);
-        UIDesignBoardLiveScene.AddOrSyncArtboard(CreateLiveItem(artboard));
         selectedGuid = guid;
         if (focus)
         {
@@ -909,12 +771,6 @@ public class UIDesignBoardWindow : EditorWindow
             return;
         }
 
-        if (!UIDesignBoardLiveScene.RemoveArtboard(guid, out string liveMessage))
-        {
-            statusText = liveMessage;
-            return;
-        }
-
         board.Artboards.RemoveAt(index);
         if (selectedGuid == guid)
         {
@@ -922,7 +778,6 @@ public class UIDesignBoardWindow : EditorWindow
         }
 
         MarkDirty();
-        statusText = string.IsNullOrEmpty(liveMessage) ? "Removed artboard." : liveMessage;
         Repaint();
     }
 
