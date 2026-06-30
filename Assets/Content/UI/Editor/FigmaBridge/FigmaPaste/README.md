@@ -1,6 +1,6 @@
 # Figma Paste
 
-Phase 1 of Figma-to-Unity paste support.
+Designer-facing Figma-to-Unity Scene paste support.
 
 ## Entry Points
 
@@ -13,7 +13,10 @@ Phase 1 of Figma-to-Unity paste support.
   - This is the reliable path for current Figma Desktop native selections because native Ctrl+C may expose only Figma private `data-buffer` HTML.
   - Single rectangles with solid fills paste as solid-color `SgrImage` nodes.
   - Image-filled selections paste as PNG-backed `SgrImage` nodes under the prefab-local `resource` folder.
-  - Text selections paste as project TMP text.
+  - Text selections paste as project TMP text and reverse-map the project body/title/number/special-title fonts.
+  - Figma Frame/Group/Component Set nesting is preserved as a RectTransform hierarchy, including nested groups.
+  - Horizontal flips are preserved as negative RectTransform local X scale.
+  - Unity-exported components are restored as Prefab instances when their shared plugin data contains a Prefab path or GUID. Figma component instances resolve their exact main component, so Unity Prefab variants remain variants.
 - Copy an image from Figma, focus a Unity Scene view while editing a UI prefab, then press `Ctrl+V`.
   - Direct clipboard images and SVG-embedded `data:image` nodes are saved as PNG under the prefab-local `resource` folder.
   - Unity imports it as a single Sprite.
@@ -36,8 +39,8 @@ Phase 1 of Figma-to-Unity paste support.
 - Unsupported ordinary clipboard content is not consumed, so Unity's native paste can still run.
 - Unsupported Figma/design clipboard content is consumed with a Scene-view notification, preventing Unity from pasting an unrelated object from its own internal clipboard.
 - Native Figma Ctrl+C private `figma`/`figmeta` buffers are not parsed. Use the plugin copy button when `Inspect Clipboard` shows only `HTML Format` with `data-buffer`.
-- Structural Figma frame/group reconstruction is intentionally out of scope for phase 1; the rectangle path is only a single-shape convenience case.
+- Structured JSON v2 preserves supported hierarchy and remains backward-compatible with v1 clipboard payloads.
 
 ## Next Phase
 
-Extend the plugin enhanced-copy channel from flat supported nodes to hierarchy-aware frame/group reconstruction and RectTransform adaptation.
+Add Auto Layout to Unity Layout Group reconstruction, strokes/effects, rounded-corner assets, and richer anchor/constraint inference for newly created Figma-only nodes.

@@ -3,14 +3,17 @@ using UnityEngine;
 
 internal static class FigmaPasteStructuredPayload
 {
-    public const string Marker = "DRAGON_FIGMA_PASTE_JSON_V1";
+    public const string Marker = "DRAGON_FIGMA_PASTE_JSON_V2";
 
-    private const string Schema = "dragon.figmaPaste.v1";
+    private const string LegacyMarker = "DRAGON_FIGMA_PASTE_JSON_V1";
+    private const string Schema = "dragon.figmaPaste.v2";
+    private const string LegacySchema = "dragon.figmaPaste.v1";
 
     public static bool LooksLikeStructuredPayload(string source)
     {
         return !string.IsNullOrEmpty(source) &&
-               source.IndexOf(Marker, StringComparison.OrdinalIgnoreCase) >= 0;
+               (source.IndexOf(Marker, StringComparison.OrdinalIgnoreCase) >= 0 ||
+                source.IndexOf(LegacyMarker, StringComparison.OrdinalIgnoreCase) >= 0);
     }
 
     public static bool TryParse(
@@ -44,15 +47,7 @@ internal static class FigmaPasteStructuredPayload
             return false;
         }
 
-        for (int i = 0; i < package.nodes.Length; i++)
-        {
-            if (IsImageNode(package.nodes[i]))
-            {
-                return true;
-            }
-        }
-
-        return false;
+        return ContainsNode(package.nodes, IsImageNode);
     }
 
     public static bool IsImageNode(FigmaPasteStructuredNode node)
@@ -71,6 +66,27 @@ internal static class FigmaPasteStructuredPayload
     {
         return node != null &&
                string.Equals(node.kind, "text", StringComparison.OrdinalIgnoreCase);
+    }
+
+    public static bool IsGroupNode(FigmaPasteStructuredNode node)
+    {
+        return node != null &&
+               string.Equals(node.kind, "group", StringComparison.OrdinalIgnoreCase);
+    }
+
+    public static bool IsReferenceNode(FigmaPasteStructuredNode node)
+    {
+        return node != null &&
+               string.Equals(node.kind, "reference", StringComparison.OrdinalIgnoreCase) &&
+               node.source != null &&
+               (!string.IsNullOrEmpty(node.source.prefabPath) ||
+                !string.IsNullOrEmpty(node.source.prefabGuid));
+    }
+
+    public static bool IsSupportedNode(FigmaPasteStructuredNode node)
+    {
+        return IsRectangleNode(node) || IsImageNode(node) || IsTextNode(node) ||
+               IsGroupNode(node) || IsReferenceNode(node);
     }
 
     public static Vector2 GetSelectionSize(FigmaPasteStructuredPackage package)
@@ -152,8 +168,15 @@ internal static class FigmaPasteStructuredPayload
         }
 
         int markerIndex = source.IndexOf(Marker, StringComparison.OrdinalIgnoreCase);
+        string matchedMarker = Marker;
+        if (markerIndex < 0)
+        {
+            markerIndex = source.IndexOf(LegacyMarker, StringComparison.OrdinalIgnoreCase);
+            matchedMarker = LegacyMarker;
+        }
+
         string candidate = markerIndex >= 0
-            ? source.Substring(markerIndex + Marker.Length)
+            ? source.Substring(markerIndex + matchedMarker.Length)
             : source.Trim();
 
         candidate = candidate.TrimStart();
@@ -173,17 +196,35 @@ internal static class FigmaPasteStructuredPayload
     private static bool IsValid(FigmaPasteStructuredPackage package)
     {
         if (package == null ||
-            !string.Equals(package.schema, Schema, StringComparison.OrdinalIgnoreCase) ||
+            (!string.Equals(package.schema, Schema, StringComparison.OrdinalIgnoreCase) &&
+             !string.Equals(package.schema, LegacySchema, StringComparison.OrdinalIgnoreCase)) ||
             package.nodes == null ||
             package.nodes.Length == 0)
         {
             return false;
         }
 
-        for (int i = 0; i < package.nodes.Length; i++)
+        return ContainsNode(package.nodes, IsSupportedNode);
+    }
+
+    private static bool ContainsNode(
+        FigmaPasteStructuredNode[] nodes,
+        Func<FigmaPasteStructuredNode, bool> predicate)
+    {
+        if (nodes == null)
         {
-            FigmaPasteStructuredNode node = package.nodes[i];
-            if (IsRectangleNode(node) || IsImageNode(node) || IsTextNode(node))
+            return false;
+        }
+
+        for (int i = 0; i < nodes.Length; i++)
+        {
+            FigmaPasteStructuredNode node = nodes[i];
+            if (node == null)
+            {
+                continue;
+            }
+
+            if (predicate(node) || ContainsNode(node.children, predicate))
             {
                 return true;
             }
@@ -223,11 +264,33 @@ internal sealed class FigmaPasteStructuredNode
     public float width;
     public float height;
     public float rotation;
+    public float scaleX;
+    public float scaleY;
     public float cornerRadius;
     public FigmaPasteStructuredColor fill;
     public FigmaPasteStructuredImage image;
     public string characters;
     public float fontSize;
+    public string fontFamily;
+    public string fontStyle;
+    public string unityFontName;
+    public string fontPath;
+    public string fontGuid;
+    public string textAlignHorizontal;
+    public string textAlignVertical;
+    public FigmaPasteStructuredSource source;
+    public FigmaPasteStructuredNode[] children;
+}
+
+[Serializable]
+internal sealed class FigmaPasteStructuredSource
+{
+    public string prefabPath;
+    public string prefabGuid;
+    public long sourceLocalId;
+    public string instanceRootPath;
+    public string componentName;
+    public string variantProperties;
 }
 
 [Serializable]

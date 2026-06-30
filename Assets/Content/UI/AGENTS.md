@@ -99,7 +99,7 @@ This is not intended to be pixel-perfect runtime parity. The practical target is
 - The Figma plugin is locked to the `Dragon-通用组件` Figma file (`eteWowFyYB3NHQWsMjI2iP`) before prefab/color imports mutate the document. If it is run from another Figma file, it must error before creating `unity组件库` there.
 - One-click component-library sync uses a local Unity HTTP server at `http://localhost:18733`, with fallback ports `18734-18736` when the default port is occupied or unhealthy. Unity queues the latest exported component package, persists the queue at `C:\tmp\FigmaBridgeLocalSync\latest.json`, and the Figma plugin auto-fetches `/latest` when `Auto import latest Unity export` is enabled. This is only a transport layer; imported nodes must still be created by `FigmaPlugin/code.js`.
 - The Figma plugin manifest must include `http://localhost:18733` through `http://localhost:18736` in `networkAccess.allowedDomains` with a reasoning. Do not leave `allowedDomains` as `["none"]` for this workflow; the UI may silently fail to fetch the local Unity package.
-- Current development plugin name/id marker is `Unity Figma Bridge Importer v18741`. If Figma shows an older title, it is running a cached development plugin. The plugin UI must not assume `localStorage` is available because Figma may run it from a `data:` URL.
+- Current development plugin name/id marker is `Unity Figma Bridge Importer v18742`. If Figma shows an older title, it is running a cached development plugin. The plugin UI must not assume `localStorage` is available because Figma may run it from a `data:` URL.
 - Unity stores the component-library target page in EditorPrefs, defaulting to `unity组件库`. The Figma plugin stores its local target-page field in localStorage, but auto import should prefer the target page sent by Unity for the queued package.
 - `Frame` mode is for screens/layouts. Nested prefab roots import as Figma components plus placed instances and carry source info.
 - `Component` mode is for reusable UI components. Nested prefabs are expanded inline instead of becoming extra Figma components. Inactive descendants inside those nested prefab roots are skipped to avoid redundant hidden content.
@@ -152,16 +152,17 @@ This is not intended to be pixel-perfect runtime parity. The practical target is
   - `import_restore`
 - PowerShell must read exported manifest JSON as UTF-8, otherwise Chinese text can be mis-decoded and `ConvertFrom-Json` may report a false parse error.
 - For Unity-prefab-to-Figma-component-library work, do not build a separate simplified MCP renderer. MCP/local sync can trigger, transport, or validate, but the actual Figma node creation should reuse `FigmaPlugin/code.js` importer behavior so text, RectTransform, node visibility, Layout Group, LayoutElement, ContentSizeFitter, image fills, and shared plugin data stay consistent with manual package import.
-- Figma Paste phase 1 is intentionally narrower than restore/import:
+- Figma Paste uses a focused structured clipboard contract separate from restore/import:
   - It intercepts Scene-view `Ctrl+V` only when clipboard content and UI parent are both valid.
   - If native Figma Ctrl+C exposes only private `figma`/`figmeta` buffers, use the Figma plugin button `Copy Selection for Unity Paste`; Unity reads that structured JSON marker from the clipboard.
-  - Plugin enhanced-copy JSON supports flat rectangle/image/text paste first.
+  - Plugin enhanced-copy JSON v2 preserves nested groups/frames, text font source, horizontal mirror, and Unity Prefab source references while retaining v1 read compatibility.
+  - Unity-exported Figma Components and Instances paste as references to their source Prefabs; an Instance resolves its exact main component so Prefab variants are preserved.
   - Clipboard images, including SVG-embedded `data:image` nodes, import into the active UI prefab's lowercase `resource` folder and paste as `SgrImage`.
   - A single filled Figma rectangle may paste from SVG/HTML clipboard data as a solid-color `SgrImage`.
   - Clipboard text pastes as `MultiLanguageTMPText` with the project default TMP font.
   - Unsupported Figma/design clipboard content is consumed with a Scene-view notification so Unity does not paste stale Unity objects.
   - Clipboard inspection output lives under `Library/Dragon/FigmaPaste`.
-  - It does not reconstruct Figma frame/group hierarchy yet; collect clipboard reports before designing phase 2.
+  - Auto Layout/Layout Group reconstruction, strokes/effects, and full anchor reverse solving remain future work.
 
 ## Development Conventions
 

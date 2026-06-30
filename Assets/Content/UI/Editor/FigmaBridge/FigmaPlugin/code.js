@@ -4,8 +4,8 @@ const DEFAULT_FONT = { family: 'Inter', style: 'Regular' };
 const BRIDGE_NAMESPACE = 'unity.figmaBridge';
 const LOCKED_FIGMA_FILE_KEY = 'eteWowFyYB3NHQWsMjI2iP';
 const LOCKED_FIGMA_FILE_NAME = 'Dragon-通用组件';
-const UNITY_PASTE_SCHEMA = 'dragon.figmaPaste.v1';
-const UNITY_PASTE_MARKER = 'DRAGON_FIGMA_PASTE_JSON_V1';
+const UNITY_PASTE_SCHEMA = 'dragon.figmaPaste.v2';
+const UNITY_PASTE_MARKER = 'DRAGON_FIGMA_PASTE_JSON_V2';
 const loadedFonts = {};
 let availableFontsPromise = null;
 let componentCache = {};
@@ -1310,24 +1310,22 @@ async function buildUnityPasteClipboardPayload() {
     throw new Error('Select one or more Figma nodes first.');
   }
 
+  const selectionBounds = calculateUnityPasteSelectionBounds(selection);
   const nodes = [];
   for (const selectedNode of selection) {
-    await collectUnityPasteNodes(selectedNode, nodes);
+    const pasteNode = await buildUnityPasteNodeTree(selectedNode, selectionBounds, true);
+    if (pasteNode) {
+      nodes.push(pasteNode);
+    }
   }
 
   if (nodes.length === 0) {
-    throw new Error('Selection has no supported solid rectangle, image fill, or text.');
-  }
-
-  const selectionBounds = calculateUnityPasteBounds(nodes);
-  for (const node of nodes) {
-    node.x = roundForPaste(node.x - selectionBounds.x);
-    node.y = roundForPaste(node.y - selectionBounds.y);
+    throw new Error('Selection has no supported UI node or Unity source reference.');
   }
 
   return {
     schema: UNITY_PASTE_SCHEMA,
-    version: 1,
+    version: 2,
     exporter: 'Unity Figma Bridge Importer',
     exportedAt: new Date().toISOString(),
     selection: {
@@ -1340,22 +1338,7 @@ async function buildUnityPasteClipboardPayload() {
   };
 }
 
-async function collectUnityPasteNodes(node, output) {
-  const pasteNode = await tryBuildUnityPasteNode(node);
-  if (pasteNode) {
-    output.push(pasteNode);
-  }
-
-  if (!('children' in node)) {
-    return;
-  }
-
-  for (const child of node.children) {
-    await collectUnityPasteNodes(child, output);
-  }
-}
-
-async function tryBuildUnityPasteNode(node) {
+async function buildUnityPasteNodeTree(node, parentBounds, isSelectionRoot) {
   if (!node || node.visible === false) {
     return null;
   }
@@ -1365,61 +1348,226 @@ async function tryBuildUnityPasteNode(node) {
     return null;
   }
 
+  const size = getUnityPasteNodeSize(node, bounds);
+  const source = await getUnityPasteSource(node);
+  const visual = source ? null : await tryBuildUnityPasteVisual(node, bounds);
+  const children = [];
+  if (!source && 'children' in node) {
+    for (const child of node.children) {
+      const childNode = await buildUnityPasteNodeTree(child, bounds, false);
+      if (childNode) {
+        children.push(childNode);
+      }
+    }
+  }
+
+  if (!source && !visual && children.length === 0) {
+    return null;
+  }
+
+  let x;
+  let y;
+  if (isSelectionRoot) {
+    x = bounds.x - parentBounds.x + (bounds.width - size.width) * 0.5;
+    y = bounds.y - parentBounds.y + (bounds.height - size.height) * 0.5;
+  } else {
+    x = numberOr(node.x, bounds.x - parentBounds.x);
+    y = numberOr(node.y, bounds.y - parentBounds.y);
+  }
+
+  const scale = getUnityPasteScale(node);
+  const pasteNode = {
+    kind: source ? 'reference' : (visual ? visual.kind : 'group'),
+    name: node.name || (source ? 'unity_reference' : 'group'),
+    x: roundForPaste(x),
+    y: roundForPaste(y),
+    width: roundForPaste(size.width),
+    height: roundForPaste(size.height),
+    rotation: roundForPaste(normalizeRotation(numberOr(node.rotation, 0))),
+    scaleX: scale.x,
+    scaleY: scale.y
+  };
+
+  if (source) {
+    pasteNode.source = source;
+  }
+  if (visual) {
+    Object.assign(pasteNode, visual);
+    pasteNode.kind = visual.kind;
+  }
+  if (children.length > 0) {
+    pasteNode.children = children;
+  }
+
+  return pasteNode;
+}
+
+async function tryBuildUnityPasteVisual(node, bounds) {
   if (node.type === 'TEXT') {
     const textFill = findFirstVisibleSolidPaint(node.fills);
+    const textMetadata = readPluginJson(node, 'figmaBridgeText') || {};
+    const fontName = node.fontName && typeof node.fontName === 'object' ? node.fontName : {};
     return {
       kind: 'text',
-      name: node.name || 'text',
-      x: roundForPaste(bounds.x),
-      y: roundForPaste(bounds.y),
-      width: roundForPaste(bounds.width),
-      height: roundForPaste(bounds.height),
-      rotation: roundForPaste(normalizeRotation(numberOr(node.rotation, 0))),
       fill: textFill ? colorFromSolidPaint(textFill) : { r: 1, g: 1, b: 1, a: 1 },
       characters: node.characters || '',
-      fontSize: typeof node.fontSize === 'number' ? roundForPaste(node.fontSize) : 32
+      fontSize: typeof node.fontSize === 'number' ? roundForPaste(node.fontSize) : 32,
+      fontFamily: textMetadata.figmaFontName || fontName.family || '',
+      fontStyle: fontName.style || textMetadata.fontStyle || '',
+      unityFontName: textMetadata.fontName || '',
+      fontPath: textMetadata.fontPath || '',
+      fontGuid: textMetadata.fontGuid || '',
+      textAlignHorizontal: node.textAlignHorizontal || '',
+      textAlignVertical: node.textAlignVertical || ''
     };
   }
 
   const imagePaint = findFirstVisibleImagePaint(node.fills);
   if (imagePaint) {
-    const imageBytes = await node.exportAsync({
-      format: 'PNG',
-      constraint: { type: 'SCALE', value: 1 }
-    });
-    return {
-      kind: 'image',
-      name: node.name || 'image',
-      x: roundForPaste(bounds.x),
-      y: roundForPaste(bounds.y),
-      width: roundForPaste(bounds.width),
-      height: roundForPaste(bounds.height),
-      rotation: roundForPaste(normalizeRotation(numberOr(node.rotation, 0))),
-      image: {
-        mimeType: 'image/png',
-        base64: byteArrayToBase64(imageBytes),
-        width: Math.max(1, Math.round(bounds.width)),
-        height: Math.max(1, Math.round(bounds.height))
-      }
-    };
+    return await buildUnityPasteImageVisual(node, bounds);
   }
 
   const solidPaint = findFirstVisibleSolidPaint(node.fills);
-  if (solidPaint) {
+  if (solidPaint && (node.type === 'RECTANGLE' || node.type === 'FRAME')) {
     return {
       kind: 'rectangle',
-      name: node.name || 'rectangle',
-      x: roundForPaste(bounds.x),
-      y: roundForPaste(bounds.y),
-      width: roundForPaste(bounds.width),
-      height: roundForPaste(bounds.height),
-      rotation: roundForPaste(normalizeRotation(numberOr(node.rotation, 0))),
       cornerRadius: typeof node.cornerRadius === 'number' ? roundForPaste(node.cornerRadius) : 0,
       fill: colorFromSolidPaint(solidPaint)
     };
   }
 
+  if (solidPaint || findFirstVisiblePaint(node.strokes)) {
+    return await buildUnityPasteImageVisual(node, bounds);
+  }
+
   return null;
+}
+
+async function buildUnityPasteImageVisual(node, bounds) {
+  const imageBytes = await exportUnityPasteVisualPng(node);
+  return {
+    kind: 'image',
+    image: {
+      mimeType: 'image/png',
+      base64: byteArrayToBase64(imageBytes),
+      width: Math.max(1, Math.round(bounds.width)),
+      height: Math.max(1, Math.round(bounds.height))
+    }
+  };
+}
+
+async function exportUnityPasteVisualPng(node) {
+  let exportNode = node;
+  let clone = null;
+  if ('children' in node && node.children.length > 0 && typeof node.clone === 'function') {
+    clone = node.clone();
+    clone.visible = true;
+    if ('children' in clone) {
+      for (const child of clone.children.slice()) {
+        child.remove();
+      }
+    }
+    exportNode = clone;
+  }
+
+  try {
+    return await exportNode.exportAsync({
+      format: 'PNG',
+      constraint: { type: 'SCALE', value: 1 }
+    });
+  } finally {
+    if (clone) {
+      clone.remove();
+    }
+  }
+}
+
+async function getUnityPasteSource(node) {
+  const candidates = [node];
+  const mainComponent = await getUnityPasteMainComponent(node);
+  if (mainComponent) {
+    candidates.push(mainComponent);
+  }
+
+  for (const candidate of candidates) {
+    const rootSource = readPluginJson(candidate, 'figmaBridgeSource') || null;
+    const bridgeNode = readPluginJson(candidate, 'figmaBridgeNode') || {};
+    const prefabReference = bridgeNode.prefabReference || null;
+    const source = rootSource || (prefabReference && prefabReference.isPrefabInstanceRoot
+      ? {
+          prefabPath: prefabReference.sourcePrefabPath || '',
+          prefabGuid: prefabReference.sourcePrefabGuid || '',
+          sourceLocalId: prefabReference.sourceLocalId || 0,
+          instanceRootPath: prefabReference.instanceRootPath || ''
+        }
+      : null);
+    if (source && (source.prefabPath || source.prefabGuid)) {
+      return {
+        prefabPath: source.prefabPath || '',
+        prefabGuid: source.prefabGuid || '',
+        sourceLocalId: source.sourceLocalId || 0,
+        instanceRootPath: source.instanceRootPath || '',
+        componentName: candidate.name || node.name || '',
+        variantProperties: getUnityPasteVariantProperties(node, candidate)
+      };
+    }
+  }
+
+  return null;
+}
+
+async function getUnityPasteMainComponent(node) {
+  if (!node || node.type !== 'INSTANCE') {
+    return null;
+  }
+
+  if (typeof node.getMainComponentAsync === 'function') {
+    try {
+      return await node.getMainComponentAsync();
+    } catch (error) {
+      return null;
+    }
+  }
+
+  try {
+    return node.mainComponent || null;
+  } catch (error) {
+    return null;
+  }
+}
+
+function getUnityPasteVariantProperties(node, component) {
+  const raw = (node && node.componentProperties) || (component && component.variantProperties) || null;
+  if (!raw) {
+    return '';
+  }
+
+  const values = {};
+  for (const key of Object.keys(raw)) {
+    const entry = raw[key];
+    values[key] = entry && typeof entry === 'object' && 'value' in entry ? entry.value : entry;
+  }
+  return JSON.stringify(values);
+}
+
+function getUnityPasteNodeSize(node, bounds) {
+  return {
+    width: positiveNumber(node && node.width) || bounds.width,
+    height: positiveNumber(node && node.height) || bounds.height
+  };
+}
+
+function getUnityPasteScale(node) {
+  const transform = node && node.relativeTransform;
+  if (!Array.isArray(transform) || !Array.isArray(transform[0]) || !Array.isArray(transform[1])) {
+    return { x: 1, y: 1 };
+  }
+
+  const a = numberOr(transform[0][0], 1);
+  const c = numberOr(transform[0][1], 0);
+  const b = numberOr(transform[1][0], 0);
+  const d = numberOr(transform[1][1], 1);
+  return { x: a * d - b * c < 0 ? -1 : 1, y: 1 };
 }
 
 function getUnityPasteNodeBounds(node) {
@@ -1471,6 +1619,20 @@ function findFirstVisibleSolidPaint(fills) {
   return null;
 }
 
+function findFirstVisiblePaint(paints) {
+  if (!Array.isArray(paints)) {
+    return null;
+  }
+
+  for (const paint of paints) {
+    if (paint && paint.visible !== false && numberOr(paint.opacity, 1) > 0) {
+      return paint;
+    }
+  }
+
+  return null;
+}
+
 function colorFromSolidPaint(paint) {
   const color = paint && paint.color ? paint.color : {};
   return {
@@ -1481,16 +1643,25 @@ function colorFromSolidPaint(paint) {
   };
 }
 
-function calculateUnityPasteBounds(nodes) {
+function calculateUnityPasteSelectionBounds(nodes) {
   let minX = Infinity;
   let minY = Infinity;
   let maxX = -Infinity;
   let maxY = -Infinity;
   for (const node of nodes) {
-    minX = Math.min(minX, node.x);
-    minY = Math.min(minY, node.y);
-    maxX = Math.max(maxX, node.x + node.width);
-    maxY = Math.max(maxY, node.y + node.height);
+    const bounds = getUnityPasteNodeBounds(node);
+    if (!bounds) {
+      continue;
+    }
+    minX = Math.min(minX, bounds.x);
+    minY = Math.min(minY, bounds.y);
+    maxX = Math.max(maxX, bounds.x + bounds.width);
+    maxY = Math.max(maxY, bounds.y + bounds.height);
+  }
+
+  if (!Number.isFinite(minX) || !Number.isFinite(minY) ||
+      !Number.isFinite(maxX) || !Number.isFinite(maxY)) {
+    throw new Error('The selected Figma nodes do not have measurable bounds.');
   }
 
   return {
@@ -1506,8 +1677,30 @@ function formatUnityPasteClipboardText(payload) {
 }
 
 function buildUnityPasteSummary(payload) {
-  const count = payload && Array.isArray(payload.nodes) ? payload.nodes.length : 0;
-  return `Copied ${count} Figma node${count === 1 ? '' : 's'} for Unity Scene paste.`;
+  const stats = countUnityPasteNodes(payload && payload.nodes);
+  const referenceText = stats.references > 0 ? `, ${stats.references} Unity reference${stats.references === 1 ? '' : 's'}` : '';
+  return `Copied ${stats.total} Figma node${stats.total === 1 ? '' : 's'}${referenceText} for Unity Scene paste.`;
+}
+
+function countUnityPasteNodes(nodes) {
+  const stats = { total: 0, references: 0 };
+  if (!Array.isArray(nodes)) {
+    return stats;
+  }
+
+  for (const node of nodes) {
+    if (!node) {
+      continue;
+    }
+    stats.total += 1;
+    if (node.kind === 'reference') {
+      stats.references += 1;
+    }
+    const childStats = countUnityPasteNodes(node.children);
+    stats.total += childStats.total;
+    stats.references += childStats.references;
+  }
+  return stats;
 }
 
 function byteArrayToBase64(bytes) {

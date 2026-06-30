@@ -18,6 +18,12 @@ internal static class FigmaPasteSceneHandler
     private const string UIPrefabFolderMarker = "/Content/UI/Prefab/";
     private const string DefaultTMPFontPath =
         "Assets/Content/UI/Mutilanguage/zh-Hans/TMP_Font/uifont.asset";
+    private const string TitleTMPFontPath =
+        "Assets/Content/UI/Mutilanguage/zh-Hans/TMP_Font/uifont_title.asset";
+    private const string SpecialTitleTMPFontPath =
+        "Assets/Content/UI/Mutilanguage/zh-Hans/TMP_Font/uifont_title_special.asset";
+    private const string NumberTMPFontPath =
+        "Assets/Content/UI/TMP_Fonts/uifont_num.asset";
 
     private static Vector2 lastSceneMousePosition;
     private static bool hasSceneMousePosition;
@@ -297,16 +303,15 @@ internal static class FigmaPasteSceneHandler
         RectTransform parent,
         FigmaPasteStructuredPackage package)
     {
-        List<FigmaPasteStructuredNode> nodes = GetSupportedStructuredNodes(package);
-        if (nodes.Count == 0)
+        if (package == null || package.nodes == null || package.nodes.Length == 0)
         {
-            ShowSceneNotification(sceneView, "No supported rectangle, image, or text in the Figma selection.");
+            ShowSceneNotification(sceneView, "No supported Figma nodes in the copied selection.");
             return false;
         }
 
         const string undoName = "Paste Figma Structured Selection";
         Vector3 worldPosition = GetPasteWorldPosition(sceneView, parent);
-        bool useContainer = nodes.Count > 1;
+        bool useContainer = package.nodes.Length > 1;
 
         Undo.IncrementCurrentGroup();
         int undoGroup = Undo.GetCurrentGroup();
@@ -330,14 +335,17 @@ internal static class FigmaPasteSceneHandler
         }
 
         int pastedCount = 0;
-        for (int i = 0; i < nodes.Count; i++)
+        List<string> warnings = new List<string>();
+        for (int i = 0; i < package.nodes.Length; i++)
         {
             GameObject createdObject = CreateStructuredNode(
                 prefabStage,
                 pasteParent,
-                nodes[i],
+                package.nodes[i],
                 useContainer ? pasteParent.position : worldPosition,
-                undoName);
+                undoName,
+                ref pastedCount,
+                warnings);
             if (createdObject == null)
             {
                 continue;
@@ -347,11 +355,10 @@ internal static class FigmaPasteSceneHandler
             if (useContainer && rectTransform != null)
             {
                 rectTransform.anchoredPosition =
-                    CalculateStructuredChildPosition(nodes[i], selectionSize);
+                    CalculateStructuredChildPosition(package.nodes[i], selectionSize);
             }
 
             finalSelectionObject = useContainer ? finalSelectionObject : createdObject;
-            pastedCount++;
         }
 
         if (pastedCount == 0)
@@ -362,38 +369,31 @@ internal static class FigmaPasteSceneHandler
             }
 
             Undo.CollapseUndoOperations(undoGroup);
-            ShowSceneNotification(sceneView, "Figma selection could not be pasted.");
+            for (int i = 0; i < warnings.Count; i++)
+            {
+                Debug.LogWarning("[Figma Paste] " + warnings[i]);
+            }
+            ShowSceneNotification(
+                sceneView,
+                warnings.Count > 0
+                    ? "Unity Prefab source was not found. See Console for the asset path."
+                    : "Figma selection could not be pasted.");
             return false;
         }
 
         FinalizeCreatedObject(parent, finalSelectionObject, undoName, undoGroup, prefabStage);
+        string warningSuffix = warnings.Count > 0
+            ? "; skipped " + warnings.Count + " missing Unity reference(s)"
+            : string.Empty;
         ShowSceneNotification(
             sceneView,
-            pastedCount == 1 ? "Pasted Figma selection" : "Pasted Figma selection: " + pastedCount + " nodes");
+            (pastedCount == 1 ? "Pasted Figma selection" : "Pasted Figma selection: " + pastedCount + " nodes") +
+            warningSuffix);
+        for (int i = 0; i < warnings.Count; i++)
+        {
+            Debug.LogWarning("[Figma Paste] " + warnings[i]);
+        }
         return true;
-    }
-
-    private static List<FigmaPasteStructuredNode> GetSupportedStructuredNodes(
-        FigmaPasteStructuredPackage package)
-    {
-        List<FigmaPasteStructuredNode> nodes = new List<FigmaPasteStructuredNode>();
-        if (package == null || package.nodes == null)
-        {
-            return nodes;
-        }
-
-        for (int i = 0; i < package.nodes.Length; i++)
-        {
-            FigmaPasteStructuredNode node = package.nodes[i];
-            if (FigmaPasteStructuredPayload.IsRectangleNode(node) ||
-                FigmaPasteStructuredPayload.IsImageNode(node) ||
-                FigmaPasteStructuredPayload.IsTextNode(node))
-            {
-                nodes.Add(node);
-            }
-        }
-
-        return nodes;
     }
 
     private static GameObject CreateStructuredNode(
@@ -401,24 +401,177 @@ internal static class FigmaPasteSceneHandler
         RectTransform parent,
         FigmaPasteStructuredNode node,
         Vector3 worldPosition,
+        string undoName,
+        ref int pastedCount,
+        List<string> warnings)
+    {
+        if (node == null || !FigmaPasteStructuredPayload.IsSupportedNode(node))
+        {
+            return null;
+        }
+
+        GameObject createdObject;
+        if (FigmaPasteStructuredPayload.IsReferenceNode(node))
+        {
+            createdObject = CreateStructuredReference(
+                prefabStage,
+                parent,
+                node,
+                worldPosition,
+                undoName,
+                warnings);
+        }
+        else if (FigmaPasteStructuredPayload.IsImageNode(node))
+        {
+            createdObject = CreateStructuredImage(prefabStage, parent, node, worldPosition, undoName);
+        }
+        else if (FigmaPasteStructuredPayload.IsRectangleNode(node))
+        {
+            createdObject = CreateStructuredRectangle(parent, node, worldPosition, undoName);
+        }
+        else if (FigmaPasteStructuredPayload.IsTextNode(node))
+        {
+            createdObject = CreateStructuredText(parent, node, worldPosition, undoName);
+        }
+        else
+        {
+            createdObject = CreateStructuredGroup(parent, node, worldPosition, undoName);
+        }
+
+        if (createdObject == null)
+        {
+            return null;
+        }
+
+        pastedCount++;
+        RectTransform createdRect = createdObject.transform as RectTransform;
+        ApplyStructuredTransform(createdRect, node);
+
+        if (!FigmaPasteStructuredPayload.IsReferenceNode(node) &&
+            createdRect != null &&
+            node.children != null)
+        {
+            Vector2 parentSize = FigmaPasteStructuredPayload.GetNodeSize(node);
+            for (int i = 0; i < node.children.Length; i++)
+            {
+                FigmaPasteStructuredNode childNode = node.children[i];
+                GameObject childObject = CreateStructuredNode(
+                    prefabStage,
+                    createdRect,
+                    childNode,
+                    createdRect.position,
+                    undoName,
+                    ref pastedCount,
+                    warnings);
+                RectTransform childRect = childObject != null
+                    ? childObject.transform as RectTransform
+                    : null;
+                if (childRect != null)
+                {
+                    childRect.anchoredPosition = CalculateStructuredChildPosition(childNode, parentSize);
+                }
+            }
+        }
+
+        return createdObject;
+    }
+
+    private static GameObject CreateStructuredGroup(
+        RectTransform parent,
+        FigmaPasteStructuredNode node,
+        Vector3 worldPosition,
         string undoName)
     {
-        if (FigmaPasteStructuredPayload.IsImageNode(node))
+        GameObject groupObject = ObjectFactory.CreateGameObject(
+            MakeObjectName(node.name, "group"),
+            typeof(RectTransform));
+        RectTransform rectTransform = groupObject.GetComponent<RectTransform>();
+        Undo.SetTransformParent(rectTransform, parent, undoName);
+        GameObjectUtility.EnsureUniqueNameForSibling(groupObject);
+        InitializeRectTransform(
+            rectTransform,
+            worldPosition,
+            FigmaPasteStructuredPayload.GetNodeSize(node));
+        groupObject.layer = parent.gameObject.layer;
+        return groupObject;
+    }
+
+    private static GameObject CreateStructuredReference(
+        PrefabStage prefabStage,
+        RectTransform parent,
+        FigmaPasteStructuredNode node,
+        Vector3 worldPosition,
+        string undoName,
+        List<string> warnings)
+    {
+        string prefabPath = ResolveStructuredPrefabPath(node.source);
+        GameObject prefabAsset = string.IsNullOrEmpty(prefabPath)
+            ? null
+            : AssetDatabase.LoadAssetAtPath<GameObject>(prefabPath);
+        if (prefabAsset == null)
         {
-            return CreateStructuredImage(prefabStage, parent, node, worldPosition, undoName);
+            warnings.Add(
+                MakeObjectName(node.name, "Unity reference") +
+                " source prefab was not found: " +
+                (node.source.prefabPath ?? string.Empty) +
+                " (" + (node.source.prefabGuid ?? string.Empty) + ")");
+            return null;
         }
 
-        if (FigmaPasteStructuredPayload.IsRectangleNode(node))
+        GameObject instance = prefabStage != null
+            ? PrefabUtility.InstantiatePrefab(prefabAsset, prefabStage.scene) as GameObject
+            : PrefabUtility.InstantiatePrefab(prefabAsset) as GameObject;
+        if (instance == null)
         {
-            return CreateStructuredRectangle(parent, node, worldPosition, undoName);
+            warnings.Add("Could not instantiate Unity prefab reference: " + prefabPath);
+            return null;
         }
 
-        if (FigmaPasteStructuredPayload.IsTextNode(node))
+        Undo.RegisterCreatedObjectUndo(instance, undoName);
+        Undo.SetTransformParent(instance.transform, parent, undoName);
+        instance.name = MakeObjectName(node.name, prefabAsset.name);
+        GameObjectUtility.EnsureUniqueNameForSibling(instance);
+
+        RectTransform rectTransform = instance.transform as RectTransform;
+        if (rectTransform == null)
         {
-            return CreateStructuredText(parent, node, worldPosition, undoName);
+            Undo.DestroyObjectImmediate(instance);
+            warnings.Add("Unity prefab reference has no RectTransform: " + prefabPath);
+            return null;
         }
 
-        return null;
+        Vector3 sourceScale = rectTransform.localScale;
+        InitializeRectTransform(
+            rectTransform,
+            worldPosition,
+            FigmaPasteStructuredPayload.GetNodeSize(node));
+        rectTransform.localScale = new Vector3(
+            Mathf.Max(0.0001f, Mathf.Abs(sourceScale.x)),
+            Mathf.Max(0.0001f, Mathf.Abs(sourceScale.y)),
+            Mathf.Max(0.0001f, Mathf.Abs(sourceScale.z)));
+        return instance;
+    }
+
+    private static string ResolveStructuredPrefabPath(FigmaPasteStructuredSource source)
+    {
+        if (source == null)
+        {
+            return string.Empty;
+        }
+
+        string prefabPath = (source.prefabPath ?? string.Empty).Replace('\\', '/');
+        if (!string.IsNullOrEmpty(prefabPath) &&
+            AssetDatabase.LoadAssetAtPath<GameObject>(prefabPath) != null)
+        {
+            return prefabPath;
+        }
+
+        if (!string.IsNullOrEmpty(source.prefabGuid))
+        {
+            prefabPath = AssetDatabase.GUIDToAssetPath(source.prefabGuid).Replace('\\', '/');
+        }
+
+        return prefabPath;
     }
 
     private static GameObject CreateStructuredImage(
@@ -467,7 +620,6 @@ internal static class FigmaPasteSceneHandler
         }
 
         InitializeRectTransform(rectTransform, worldPosition, size);
-        ApplyStructuredRotation(rectTransform, node);
         imageObject.layer = parent.gameObject.layer;
 
         SgrUnity.SgrImage image = imageObject.GetComponent<SgrUnity.SgrImage>();
@@ -495,7 +647,6 @@ internal static class FigmaPasteSceneHandler
             rectTransform,
             worldPosition,
             FigmaPasteStructuredPayload.GetNodeSize(node));
-        ApplyStructuredRotation(rectTransform, node);
         imageObject.layer = parent.gameObject.layer;
 
         SgrUnity.SgrImage image = imageObject.GetComponent<SgrUnity.SgrImage>();
@@ -527,7 +678,6 @@ internal static class FigmaPasteSceneHandler
         }
 
         InitializeRectTransform(rectTransform, worldPosition, size);
-        ApplyStructuredRotation(rectTransform, node);
         textObject.layer = parent.gameObject.layer;
 
         XSolution.XMultilanguage.MultiLanguageTMPText tmp =
@@ -535,12 +685,12 @@ internal static class FigmaPasteSceneHandler
         tmp.raycastTarget = false;
         tmp.text = textValue;
         tmp.fontSize = node.fontSize > 0f ? node.fontSize : 32f;
-        tmp.alignment = TextAlignmentOptions.Center;
+        tmp.alignment = ResolveStructuredTextAlignment(node);
         tmp.color = ToUnityColor(node.fill);
-        TMP_FontAsset defaultFont = AssetDatabase.LoadAssetAtPath<TMP_FontAsset>(DefaultTMPFontPath);
-        if (defaultFont != null)
+        TMP_FontAsset mappedFont = ResolveStructuredFont(node);
+        if (mappedFont != null)
         {
-            tmp.font = defaultFont;
+            tmp.font = mappedFont;
         }
 
         return textObject;
@@ -558,16 +708,114 @@ internal static class FigmaPasteSceneHandler
             selectionSize.y * 0.5f - centerY);
     }
 
-    private static void ApplyStructuredRotation(
+    private static void ApplyStructuredTransform(
         RectTransform rectTransform,
         FigmaPasteStructuredNode node)
     {
-        if (rectTransform == null || node == null || Mathf.Approximately(node.rotation, 0f))
+        if (rectTransform == null || node == null)
         {
             return;
         }
 
         rectTransform.localRotation = Quaternion.Euler(0f, 0f, -node.rotation);
+        Vector3 scale = rectTransform.localScale;
+        float scaleX = node.scaleX < 0f ? -1f : 1f;
+        float scaleY = node.scaleY < 0f ? -1f : 1f;
+        rectTransform.localScale = new Vector3(
+            Mathf.Max(0.0001f, Mathf.Abs(scale.x)) * scaleX,
+            Mathf.Max(0.0001f, Mathf.Abs(scale.y)) * scaleY,
+            Mathf.Max(0.0001f, Mathf.Abs(scale.z)));
+    }
+
+    private static TMP_FontAsset ResolveStructuredFont(FigmaPasteStructuredNode node)
+    {
+        if (node == null)
+        {
+            return AssetDatabase.LoadAssetAtPath<TMP_FontAsset>(DefaultTMPFontPath);
+        }
+
+        TMP_FontAsset font = LoadTmpFont(node.fontPath);
+        if (font == null && !string.IsNullOrEmpty(node.fontGuid))
+        {
+            font = LoadTmpFont(AssetDatabase.GUIDToAssetPath(node.fontGuid));
+        }
+
+        if (font != null)
+        {
+            return font;
+        }
+
+        string unityFontName = (node.unityFontName ?? string.Empty).Trim().ToLowerInvariant();
+        if (!string.IsNullOrEmpty(unityFontName))
+        {
+            return LoadTmpFont(GetUnityFontPath(unityFontName)) ??
+                   AssetDatabase.LoadAssetAtPath<TMP_FontAsset>(DefaultTMPFontPath);
+        }
+
+        string figmaFamily = (node.fontFamily ?? string.Empty).Trim().ToLowerInvariant();
+        if (figmaFamily == "uifont_title")
+        {
+            return LoadTmpFont(NumberTMPFontPath);
+        }
+
+        if (figmaFamily == "uifont_title_zh-hans")
+        {
+            return LoadTmpFont(TitleTMPFontPath);
+        }
+
+        if (figmaFamily == "uifont_title_special" || figmaFamily == "uifont_title+special")
+        {
+            return LoadTmpFont(SpecialTitleTMPFontPath);
+        }
+
+        return LoadTmpFont(DefaultTMPFontPath);
+    }
+
+    private static string GetUnityFontPath(string fontName)
+    {
+        switch (fontName)
+        {
+            case "uifont_num":
+                return NumberTMPFontPath;
+            case "uifont_title":
+                return TitleTMPFontPath;
+            case "uifont_title_special":
+            case "uifont_title+special":
+                return SpecialTitleTMPFontPath;
+            default:
+                return DefaultTMPFontPath;
+        }
+    }
+
+    private static TMP_FontAsset LoadTmpFont(string assetPath)
+    {
+        return string.IsNullOrEmpty(assetPath)
+            ? null
+            : AssetDatabase.LoadAssetAtPath<TMP_FontAsset>(assetPath.Replace('\\', '/'));
+    }
+
+    private static TextAlignmentOptions ResolveStructuredTextAlignment(
+        FigmaPasteStructuredNode node)
+    {
+        string horizontal = (node.textAlignHorizontal ?? string.Empty).ToUpperInvariant();
+        string vertical = (node.textAlignVertical ?? string.Empty).ToUpperInvariant();
+        if (vertical == "TOP")
+        {
+            return horizontal == "LEFT" ? TextAlignmentOptions.TopLeft :
+                   horizontal == "RIGHT" ? TextAlignmentOptions.TopRight :
+                   TextAlignmentOptions.Top;
+        }
+
+        if (vertical == "BOTTOM")
+        {
+            return horizontal == "LEFT" ? TextAlignmentOptions.BottomLeft :
+                   horizontal == "RIGHT" ? TextAlignmentOptions.BottomRight :
+                   TextAlignmentOptions.Bottom;
+        }
+
+        return horizontal == "LEFT" ? TextAlignmentOptions.Left :
+               horizontal == "RIGHT" ? TextAlignmentOptions.Right :
+               TextAlignmentOptions.Center;
     }
 
     private static Color ToUnityColor(FigmaPasteStructuredColor color)

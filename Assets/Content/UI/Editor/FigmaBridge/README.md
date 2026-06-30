@@ -33,9 +33,9 @@ Keep Figma Bridge notes here unless the project gains a shared UI tooling docume
 4. Find the generated package under `Assets/Content/UI/FigmaBridgeExports`.
 5. Import the package with the local Figma development plugin.
 
-### Figma Paste Phase 1
+### Figma Paste
 
-Figma Paste is a lightweight Scene-view paste shortcut under `FigmaPaste/`. It is separate from the package importer and only covers the first practical paste layer:
+Figma Paste is a lightweight Scene-view paste shortcut under `FigmaPaste/`. It is separate from the restore-package importer:
 
 1. For native clipboard image/SVG/text data, copy from Figma.
 2. If native Ctrl+C exposes only private Figma `data-buffer` HTML, use the Figma plugin button `Copy Selection for Unity Paste`.
@@ -44,7 +44,10 @@ Figma Paste is a lightweight Scene-view paste shortcut under `FigmaPaste/`. It i
 
 Current behavior:
 
-- Plugin enhanced-copy JSON can paste solid rectangles, image-filled selections, and text selections.
+- Plugin enhanced-copy JSON v2 recursively preserves Figma frame/group/component-set hierarchy and creates matching RectTransform groups.
+- Solid rectangles, image-filled selections, and text selections become `SgrImage` / `MultiLanguageTMPText` nodes. Horizontal Figma flips become negative RectTransform X scale.
+- Text mapping first reuses stored Unity font source metadata. For Figma-only text it reverses the project mapping: `uifont_zh-Hans` to `uifont`, `uifont_title` to `uifont_num`, and `uifont_title_zh-Hans` to `uifont_title`.
+- Nodes carrying Unity Prefab source metadata are instantiated from the original Prefab path/GUID instead of being rebuilt from pixels. Figma Instances resolve the exact main component, preserving Unity Prefab variants.
 - Clipboard images, including SVG-embedded `data:image` nodes, are imported as PNG files into the active prefab's lowercase `resource` folder, configured as single Sprites, then pasted as `SgrImage` nodes.
 - Single filled Figma rectangles can paste from SVG/HTML clipboard data as solid-color `SgrImage` nodes with matching width and height.
 - Clipboard text is pasted as project TMP text using `MultiLanguageTMPText` and the default `uifont` asset when available.
@@ -52,7 +55,7 @@ Current behavior:
 - Unsupported ordinary clipboard content is not consumed, so Unity's native paste can continue.
 - Unsupported Figma/design clipboard content is consumed with a Scene-view notification so Unity does not paste an unrelated object from its own internal clipboard.
 
-Out of scope for phase 1: Figma frame/group hierarchy reconstruction, Auto Layout conversion, and general SVG rendering.
+Still out of scope: Auto Layout to Unity Layout Group reconstruction, rounded corners/effects, general SVG rendering, and full anchor/constraint reverse solving for Figma-only nodes.
 
 ### Component Library One-Click Sync
 
@@ -73,7 +76,7 @@ Configuration:
 - The latest queued package is persisted at `C:\tmp\FigmaBridgeLocalSync\latest.json`, so Unity domain reloads after asset refresh do not lose the pending import.
 - Unity local sync self-checks `/status` before publishing. If `18733` is occupied by a stale non-responsive listener, Unity starts on the next available fallback port and the Figma plugin probes the same port range before fetching `/latest`.
 - The Figma development plugin manifest must allow `http://localhost:18733` through `http://localhost:18736` in `networkAccess.allowedDomains` with a reasoning. Keeping `allowedDomains` as `["none"]` can leave the plugin UI stuck at `Waiting for package...`.
-- The current development plugin appears as `Unity Figma Bridge Importer v18741`. If the plugin window title does not include `v18741`, Figma is still running an older cached development plugin.
+- The current development plugin appears as `Unity Figma Bridge Importer v18742`. If the plugin window title does not include `v18742`, Figma is still running an older cached development plugin.
 - Figma plugin UI runs from a `data:` URL, so `localStorage` may be disabled. Use in-memory storage fallback in `ui.html` for target page and last package state.
 - If Figma reports blocked local network access, allow the plugin to access `http://localhost:18733` through `http://localhost:18736`.
 
