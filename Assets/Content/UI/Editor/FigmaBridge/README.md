@@ -47,7 +47,7 @@ Current behavior:
 - Plugin enhanced-copy JSON v2 recursively preserves Figma frame/group/component-set hierarchy and creates matching RectTransform groups.
 - Solid rectangles, image-filled selections, and text selections become `SgrImage` / `MultiLanguageTMPText` nodes. Horizontal Figma flips become negative RectTransform X scale.
 - Text mapping first reuses stored Unity font source metadata. For Figma-only text it reverses the project mapping: `uifont_zh-Hans` to `uifont`, `uifont_title` to `uifont_num`, and `uifont_title_zh-Hans` to `uifont_title`.
-- Nodes carrying Unity Prefab source metadata are instantiated from the original Prefab path/GUID instead of being rebuilt from pixels. Figma Instances resolve the exact main component, preserving Unity Prefab variants.
+- Nodes carrying Unity Prefab source metadata are instantiated from the original Prefab path/GUID instead of being rebuilt from pixels. The instance root restores the Unity source Prefab name; Figma Instances resolve the exact main component and apply path-backed descendant visibility as Unity active-state overrides.
 - Clipboard images, including SVG-embedded `data:image` nodes, are imported as PNG files into the active prefab's lowercase `resource` folder, configured as single Sprites, then pasted as `SgrImage` nodes.
 - Single filled Figma rectangles can paste from SVG/HTML clipboard data as solid-color `SgrImage` nodes with matching width and height.
 - Clipboard text is pasted as project TMP text using `MultiLanguageTMPText` and the default `uifont` asset when available.
@@ -76,7 +76,7 @@ Configuration:
 - The latest queued package is persisted at `C:\tmp\FigmaBridgeLocalSync\latest.json`, so Unity domain reloads after asset refresh do not lose the pending import.
 - Unity local sync self-checks `/status` before publishing. If `18733` is occupied by a stale non-responsive listener, Unity starts on the next available fallback port and the Figma plugin probes the same port range before fetching `/latest`.
 - The Figma development plugin manifest must allow `http://localhost:18733` through `http://localhost:18736` in `networkAccess.allowedDomains` with a reasoning. Keeping `allowedDomains` as `["none"]` can leave the plugin UI stuck at `Waiting for package...`.
-- The current development plugin appears as `Unity Figma Bridge Importer v18742`. If the plugin window title does not include `v18742`, Figma is still running an older cached development plugin.
+- The current development plugin appears as `Unity Figma Bridge Importer v18743`. If the plugin window title does not include `v18743`, Figma is still running an older cached development plugin.
 - Figma plugin UI runs from a `data:` URL, so `localStorage` may be disabled. Use in-memory storage fallback in `ui.html` for target page and last package state.
 - If Figma reports blocked local network access, allow the plugin to access `http://localhost:18733` through `http://localhost:18736`.
 

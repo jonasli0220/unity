@@ -16,7 +16,8 @@ Designer-facing Figma-to-Unity Scene paste support.
   - Text selections paste as project TMP text and reverse-map the project body/title/number/special-title fonts.
   - Figma Frame/Group/Component Set nesting is preserved as a RectTransform hierarchy, including nested groups.
   - Horizontal flips are preserved as negative RectTransform local X scale.
-  - Unity-exported components are restored as Prefab instances when their shared plugin data contains a Prefab path or GUID. Figma component instances resolve their exact main component, so Unity Prefab variants remain variants.
+  - Unity-exported components are restored as Prefab instances when their shared plugin data contains a Prefab path or GUID. The pasted root uses the Unity source Prefab name instead of Figma's generated variant label.
+  - Figma component instances resolve their exact main component and carry exported descendant visibility states back as Unity active-state overrides, preserving variant layer switches when the paths still exist in the source Prefab.
 - Copy an image from Figma, focus a Unity Scene view while editing a UI prefab, then press `Ctrl+V`.
   - Direct clipboard images and SVG-embedded `data:image` nodes are saved as PNG under the prefab-local `resource` folder.
   - Unity imports it as a single Sprite.

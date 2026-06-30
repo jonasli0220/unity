@@ -34,6 +34,8 @@ This directory contains the Unity Editor paste workflow for content copied from 
 - Text font mapping must reverse the Unity-to-Figma project mapping. Prefer stored Unity font path/GUID/name before inferring from the visible Figma family.
 - Horizontal mirror is represented by negative RectTransform local scale. Parent group mirroring must remain on the parent so descendants inherit it naturally.
 - A node with `figmaBridgeSource`, a nested prefab root reference, or an instance whose main component has source data must instantiate the referenced Unity Prefab instead of rebuilding its visual children. Resolve a Figma component instance to its exact main component so variants keep their own prefab path.
+- Name a pasted Unity reference from its source Prefab name, not from Figma's generated instance/variant label such as `Property 1=Default`.
+- For Figma component variants, carry descendant visibility states only when a node has a `figmaBridgeNode.path`. After Prefab instantiation, apply those states by exported Unity path so variant on/off overrides are preserved without guessing from layer names.
 - Supported diagnostics: list clipboard formats and save a PNG probe image when available.
 - Do not assume Figma's private clipboard formats are stable; native Figma `data-buffer` HTML is diagnostic-only unless Figma also exposes public image/SVG/text data.
 - When native Figma Ctrl+C exposes only private `figma`/`figmeta` buffers, use the Figma plugin's `Copy Selection for Unity Paste` button to write the supported JSON marker into the system clipboard.

@@ -529,7 +529,7 @@ internal static class FigmaPasteSceneHandler
 
         Undo.RegisterCreatedObjectUndo(instance, undoName);
         Undo.SetTransformParent(instance.transform, parent, undoName);
-        instance.name = MakeObjectName(node.name, prefabAsset.name);
+        instance.name = ResolveStructuredReferenceName(node.source, prefabAsset);
         GameObjectUtility.EnsureUniqueNameForSibling(instance);
 
         RectTransform rectTransform = instance.transform as RectTransform;
@@ -549,7 +549,135 @@ internal static class FigmaPasteSceneHandler
             Mathf.Max(0.0001f, Mathf.Abs(sourceScale.x)),
             Mathf.Max(0.0001f, Mathf.Abs(sourceScale.y)),
             Mathf.Max(0.0001f, Mathf.Abs(sourceScale.z)));
+        ApplyStructuredReferenceNodeStates(instance, node.source, undoName);
         return instance;
+    }
+
+    private static string ResolveStructuredReferenceName(
+        FigmaPasteStructuredSource source,
+        GameObject prefabAsset)
+    {
+        string prefabName = source != null ? source.prefabName : string.Empty;
+        if (string.IsNullOrEmpty(prefabName) && source != null)
+        {
+            prefabName = Path.GetFileNameWithoutExtension(source.prefabPath ?? string.Empty);
+        }
+
+        if (string.IsNullOrEmpty(prefabName) && prefabAsset != null)
+        {
+            prefabName = prefabAsset.name;
+        }
+
+        return MakeObjectName(prefabName, "unity_component");
+    }
+
+    private static void ApplyStructuredReferenceNodeStates(
+        GameObject instance,
+        FigmaPasteStructuredSource source,
+        string undoName)
+    {
+        if (instance == null || source == null || source.nodeStates == null)
+        {
+            return;
+        }
+
+        int appliedCount = 0;
+        int missingCount = 0;
+        for (int i = 0; i < source.nodeStates.Length; i++)
+        {
+            FigmaPasteStructuredNodeState state = source.nodeStates[i];
+            Transform target = FindStructuredReferenceTransform(instance.transform, source, state);
+            if (target == null)
+            {
+                missingCount++;
+                continue;
+            }
+
+            if (target.gameObject.activeSelf != state.active)
+            {
+                Undo.RecordObject(target.gameObject, undoName);
+                target.gameObject.SetActive(state.active);
+            }
+            appliedCount++;
+        }
+
+        if (missingCount > 0)
+        {
+            Debug.LogWarning(
+                "[Figma Paste] Applied " + appliedCount +
+                " variant node state(s) to " + instance.name +
+                "; " + missingCount + " exported path(s) were not found in the source Prefab.");
+        }
+    }
+
+    private static Transform FindStructuredReferenceTransform(
+        Transform instanceRoot,
+        FigmaPasteStructuredSource source,
+        FigmaPasteStructuredNodeState state)
+    {
+        if (instanceRoot == null || state == null || string.IsNullOrEmpty(state.path))
+        {
+            return null;
+        }
+
+        string path = state.path.Replace('\\', '/').Trim('/');
+        string instanceRootPath = (source.instanceRootPath ?? string.Empty)
+            .Replace('\\', '/')
+            .Trim('/');
+        string prefabName = (source.prefabName ?? string.Empty).Trim('/');
+
+        string relativePath = StripStructuredReferenceRoot(path, instanceRootPath);
+        if (relativePath == null)
+        {
+            relativePath = StripStructuredReferenceRoot(path, prefabName);
+        }
+        if (relativePath == null)
+        {
+            relativePath = StripStructuredReferenceRoot(path, instanceRoot.name);
+        }
+        if (relativePath == null)
+        {
+            return null;
+        }
+        if (relativePath.Length == 0)
+        {
+            return instanceRoot;
+        }
+
+        Transform current = instanceRoot;
+        string[] parts = relativePath.Split('/');
+        for (int i = 0; i < parts.Length; i++)
+        {
+            if (string.IsNullOrEmpty(parts[i]))
+            {
+                continue;
+            }
+
+            current = current.Find(parts[i]);
+            if (current == null)
+            {
+                return null;
+            }
+        }
+
+        return current;
+    }
+
+    private static string StripStructuredReferenceRoot(string path, string rootPath)
+    {
+        if (string.IsNullOrEmpty(path) || string.IsNullOrEmpty(rootPath))
+        {
+            return null;
+        }
+        if (string.Equals(path, rootPath, StringComparison.Ordinal))
+        {
+            return string.Empty;
+        }
+
+        string prefix = rootPath + "/";
+        return path.StartsWith(prefix, StringComparison.Ordinal)
+            ? path.Substring(prefix.Length)
+            : null;
     }
 
     private static string ResolveStructuredPrefabPath(FigmaPasteStructuredSource source)

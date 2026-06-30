@@ -285,12 +285,21 @@ internal sealed class FigmaPasteStructuredNode
 [Serializable]
 internal sealed class FigmaPasteStructuredSource
 {
+    public string prefabName;
     public string prefabPath;
     public string prefabGuid;
     public long sourceLocalId;
     public string instanceRootPath;
     public string componentName;
     public string variantProperties;
+    public FigmaPasteStructuredNodeState[] nodeStates;
+}
+
+[Serializable]
+internal sealed class FigmaPasteStructuredNodeState
+{
+    public string path;
+    public bool active;
 }
 
 [Serializable]

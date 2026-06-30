@@ -453,6 +453,7 @@ function getRootName(manifest) {
 function buildRootSourceData(manifest, options) {
   return {
     targetKind: manifest.targetKind,
+    prefabName: manifest.source ? manifest.source.prefabName : '',
     prefabPath: manifest.source ? manifest.source.prefabPath : '',
     prefabGuid: manifest.source ? manifest.source.prefabGuid : '',
     sourceHash: manifest.source ? manifest.source.sourceHash : '',
@@ -1495,6 +1496,7 @@ async function getUnityPasteSource(node) {
     const prefabReference = bridgeNode.prefabReference || null;
     const source = rootSource || (prefabReference && prefabReference.isPrefabInstanceRoot
       ? {
+          prefabName: prefabReference.sourcePrefabName || '',
           prefabPath: prefabReference.sourcePrefabPath || '',
           prefabGuid: prefabReference.sourcePrefabGuid || '',
           sourceLocalId: prefabReference.sourceLocalId || 0,
@@ -1503,17 +1505,72 @@ async function getUnityPasteSource(node) {
       : null);
     if (source && (source.prefabPath || source.prefabGuid)) {
       return {
+        prefabName: getUnityPastePrefabName(source),
         prefabPath: source.prefabPath || '',
         prefabGuid: source.prefabGuid || '',
         sourceLocalId: source.sourceLocalId || 0,
         instanceRootPath: source.instanceRootPath || '',
         componentName: candidate.name || node.name || '',
-        variantProperties: getUnityPasteVariantProperties(node, candidate)
+        variantProperties: getUnityPasteVariantProperties(node, candidate),
+        nodeStates: collectUnityPasteNodeStates(node, candidate)
       };
     }
   }
 
   return null;
+}
+
+function getUnityPastePrefabName(source) {
+  const explicitName = String(source && (source.prefabName || source.sourcePrefabName) || '').trim();
+  if (explicitName) {
+    return explicitName;
+  }
+
+  const path = String(source && (source.prefabPath || source.sourcePrefabPath) || '').replace(/\\/g, '/');
+  const fileName = path.split('/').pop() || '';
+  return fileName.replace(/\.prefab$/i, '');
+}
+
+function collectUnityPasteNodeStates(actualRoot, templateRoot) {
+  const states = [];
+  const seenPaths = {};
+  collectUnityPasteNodeStatesRecursive(actualRoot, templateRoot, states, seenPaths);
+  return states;
+}
+
+function collectUnityPasteNodeStatesRecursive(actualNode, templateNode, output, seenPaths) {
+  if (!actualNode && !templateNode) {
+    return;
+  }
+
+  const bridgeNode = readPluginJson(actualNode, 'figmaBridgeNode') ||
+    readPluginJson(templateNode, 'figmaBridgeNode') || null;
+  const path = bridgeNode ? String(bridgeNode.path || '') : '';
+  if (path && !seenPaths[path]) {
+    seenPaths[path] = true;
+    output.push({
+      path,
+      active: actualNode ? actualNode.visible !== false : templateNode.visible !== false
+    });
+  }
+
+  const actualChildren = actualNode && 'children' in actualNode ? actualNode.children : [];
+  const templateChildren = templateNode && 'children' in templateNode ? templateNode.children : [];
+  for (let i = 0; i < actualChildren.length; i += 1) {
+    const actualChild = actualChildren[i];
+    const templateChild = findUnityPasteTemplateChild(actualChild, templateChildren, i);
+    collectUnityPasteNodeStatesRecursive(actualChild, templateChild, output, seenPaths);
+  }
+}
+
+function findUnityPasteTemplateChild(actualChild, templateChildren, fallbackIndex) {
+  if (!actualChild || !Array.isArray(templateChildren)) {
+    return null;
+  }
+
+  const nameMatch = templateChildren.find(child =>
+    child && child.name === actualChild.name && child.type === actualChild.type);
+  return nameMatch || templateChildren[fallbackIndex] || null;
 }
 
 async function getUnityPasteMainComponent(node) {
