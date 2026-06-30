@@ -149,7 +149,7 @@ This is not intended to be pixel-perfect runtime parity. The practical target is
 - For Unity-prefab-to-Figma-component-library work, do not build a separate simplified MCP renderer. MCP/local sync can trigger, transport, or validate, but the actual Figma node creation should reuse `FigmaPlugin/code.js` importer behavior so text, RectTransform, node visibility, Layout Group, LayoutElement, ContentSizeFitter, image fills, and shared plugin data stay consistent with manual package import.
 - Figma Paste phase 1 is intentionally narrower than restore/import:
   - It intercepts Scene-view `Ctrl+V` only when clipboard content and UI parent are both valid.
-  - Clipboard images import into the active UI prefab's lowercase `resource` folder and paste as `SgrImage`.
+  - Clipboard images, including SVG-embedded `data:image` nodes, import into the active UI prefab's lowercase `resource` folder and paste as `SgrImage`.
   - A single filled Figma rectangle may paste from SVG/HTML clipboard data as a solid-color `SgrImage`.
   - Clipboard text pastes as `MultiLanguageTMPText` with the project default TMP font.
   - Unsupported Figma/design clipboard content is consumed with a Scene-view notification so Unity does not paste stale Unity objects.

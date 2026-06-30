@@ -10,7 +10,7 @@ Phase 1 of Figma-to-Unity paste support.
 ## What Works Now
 
 - Copy an image from Figma, focus a Unity Scene view while editing a UI prefab, then press `Ctrl+V`.
-  - The image is saved as a PNG under the prefab-local `resource` folder.
+  - Direct clipboard images and SVG-embedded `data:image` nodes are saved as PNG under the prefab-local `resource` folder.
   - Unity imports it as a single Sprite.
   - A new `SgrImage` is created at the Scene cursor position.
 - Copy a single filled rectangle from Figma, focus the same Scene view, then press `Ctrl+V`.

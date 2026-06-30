@@ -312,6 +312,7 @@ internal static class FigmaPasteClipboard
 
             payload.FileDrops.AddRange(ReadFileDropPaths());
             ReadImage(formatIds, payload);
+            ReadEmbeddedSvgImage(payload);
             return payload;
         }
         finally
@@ -450,6 +451,40 @@ internal static class FigmaPasteClipboard
         }
 
         TryReadDibImage(CF_DIB, "CF_DIB", payload);
+    }
+
+    private static void ReadEmbeddedSvgImage(FigmaPasteClipboardPayload payload)
+    {
+        if (payload == null || payload.HasImage)
+        {
+            return;
+        }
+
+        FigmaPasteSvgEmbeddedImage embeddedImage;
+        if (!FigmaPasteSvgShape.TryParseEmbeddedImage(payload, out embeddedImage) ||
+            embeddedImage == null ||
+            embeddedImage.EncodedBytes == null ||
+            embeddedImage.EncodedBytes.Length == 0)
+        {
+            return;
+        }
+
+        byte[] pngBytes;
+        int width;
+        int height;
+        if (!TryConvertEncodedImageToPng(
+            embeddedImage.EncodedBytes,
+            out pngBytes,
+            out width,
+            out height))
+        {
+            return;
+        }
+
+        payload.ImagePngBytes = pngBytes;
+        payload.ImageWidth = width > 0 ? width : Mathf.RoundToInt(embeddedImage.Size.x);
+        payload.ImageHeight = height > 0 ? height : Mathf.RoundToInt(embeddedImage.Size.y);
+        payload.ImageSourceFormat = "SVG embedded " + embeddedImage.MimeType;
     }
 
     private static bool TryReadEncodedImage(
@@ -649,6 +684,12 @@ internal static class FigmaPasteClipboard
             return string.Empty;
         }
 
+        string unicodeValue;
+        if (TryDecodeRegisteredUnicodeText(bytes, out unicodeValue))
+        {
+            return unicodeValue;
+        }
+
         int length = FindAnsiStringByteLength(bytes);
         if (length <= 0)
         {
@@ -665,6 +706,104 @@ internal static class FigmaPasteClipboard
         {
             return Encoding.Default.GetString(bytes, 0, length).TrimEnd('\0');
         }
+    }
+
+    private static bool TryDecodeRegisteredUnicodeText(byte[] bytes, out string value)
+    {
+        value = string.Empty;
+        if (bytes == null || bytes.Length < 4)
+        {
+            return false;
+        }
+
+        if (bytes[0] == 0xFF && bytes[1] == 0xFE)
+        {
+            value = DecodeUnicodeText(bytes, 2, Encoding.Unicode);
+            return LooksLikeUsefulText(value);
+        }
+
+        if (bytes[0] == 0xFE && bytes[1] == 0xFF)
+        {
+            value = DecodeUnicodeText(bytes, 2, Encoding.BigEndianUnicode);
+            return LooksLikeUsefulText(value);
+        }
+
+        int sampleLength = Mathf.Min(bytes.Length, 200);
+        int evenNonZero = 0;
+        int oddZero = 0;
+        int evenZero = 0;
+        int oddNonZero = 0;
+        for (int i = 0; i + 1 < sampleLength; i += 2)
+        {
+            if (bytes[i] == 0)
+            {
+                evenZero++;
+            }
+            else
+            {
+                evenNonZero++;
+            }
+
+            if (bytes[i + 1] == 0)
+            {
+                oddZero++;
+            }
+            else
+            {
+                oddNonZero++;
+            }
+        }
+
+        if (evenNonZero > 0 && oddZero >= Mathf.Max(2, evenNonZero / 2))
+        {
+            value = DecodeUnicodeText(bytes, 0, Encoding.Unicode);
+            return LooksLikeUsefulText(value);
+        }
+
+        if (oddNonZero > 0 && evenZero >= Mathf.Max(2, oddNonZero / 2))
+        {
+            value = DecodeUnicodeText(bytes, 0, Encoding.BigEndianUnicode);
+            return LooksLikeUsefulText(value);
+        }
+
+        return false;
+    }
+
+    private static string DecodeUnicodeText(
+        byte[] bytes,
+        int startIndex,
+        Encoding encoding)
+    {
+        int byteLength = bytes.Length - startIndex;
+        byteLength -= byteLength % 2;
+        if (byteLength <= 0)
+        {
+            return string.Empty;
+        }
+
+        return encoding.GetString(bytes, startIndex, byteLength)
+            .TrimEnd('\0')
+            .TrimStart('\uFEFF');
+    }
+
+    private static bool LooksLikeUsefulText(string value)
+    {
+        if (string.IsNullOrEmpty(value))
+        {
+            return false;
+        }
+
+        int controlCount = 0;
+        for (int i = 0; i < value.Length; i++)
+        {
+            char c = value[i];
+            if (char.IsControl(c) && c != '\r' && c != '\n' && c != '\t')
+            {
+                controlCount++;
+            }
+        }
+
+        return controlCount <= Mathf.Max(2, value.Length / 20);
     }
 
     private static int FindUnicodeStringByteLength(byte[] bytes)

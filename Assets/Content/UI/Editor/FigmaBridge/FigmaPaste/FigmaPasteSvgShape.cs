@@ -11,6 +11,13 @@ internal sealed class FigmaPasteSvgRectangle
     public float CornerRadius;
 }
 
+internal sealed class FigmaPasteSvgEmbeddedImage
+{
+    public byte[] EncodedBytes;
+    public string MimeType;
+    public Vector2 Size;
+}
+
 internal static class FigmaPasteSvgShape
 {
     private static readonly string[] OtherVisualElementNames =
@@ -39,6 +46,21 @@ internal static class FigmaPasteSvgShape
         return TryParseRectangle(payload.Svg, out rectangle)
             || TryParseRectangle(payload.Html, out rectangle)
             || TryParseRectangle(payload.Text, out rectangle);
+    }
+
+    public static bool TryParseEmbeddedImage(
+        FigmaPasteClipboardPayload payload,
+        out FigmaPasteSvgEmbeddedImage image)
+    {
+        image = null;
+        if (payload == null)
+        {
+            return false;
+        }
+
+        return TryParseEmbeddedImage(payload.Svg, out image)
+            || TryParseEmbeddedImage(payload.Html, out image)
+            || TryParseEmbeddedImage(payload.Text, out image);
     }
 
     private static bool TryParseRectangle(
@@ -112,6 +134,62 @@ internal static class FigmaPasteSvgShape
         return true;
     }
 
+    private static bool TryParseEmbeddedImage(
+        string source,
+        out FigmaPasteSvgEmbeddedImage image)
+    {
+        image = null;
+        string svg = ExtractSvgSource(source);
+        if (string.IsNullOrEmpty(svg))
+        {
+            return false;
+        }
+
+        XDocument document;
+        try
+        {
+            document = XDocument.Parse(svg, LoadOptions.None);
+        }
+        catch
+        {
+            return false;
+        }
+
+        XElement root = document.Root;
+        if (root == null || !IsElementNamed(root, "svg"))
+        {
+            return false;
+        }
+
+        XElement imageElement;
+        if (!TryFindSingleVisibleImage(root, out imageElement))
+        {
+            return false;
+        }
+
+        string href = ReadHref(imageElement);
+        byte[] encodedBytes;
+        string mimeType;
+        if (!TryParseDataImage(href, out encodedBytes, out mimeType))
+        {
+            return false;
+        }
+
+        Vector2 size;
+        if (!TryReadImageSize(imageElement, root, out size))
+        {
+            size = Vector2.zero;
+        }
+
+        image = new FigmaPasteSvgEmbeddedImage
+        {
+            EncodedBytes = encodedBytes,
+            MimeType = mimeType,
+            Size = size
+        };
+        return true;
+    }
+
     private static string ExtractSvgSource(string source)
     {
         if (string.IsNullOrEmpty(source))
@@ -138,6 +216,107 @@ internal static class FigmaPasteSvgShape
         return decoded.Substring(start, end + "</svg>".Length - start);
     }
 
+    private static bool TryFindSingleVisibleImage(
+        XElement root,
+        out XElement imageElement)
+    {
+        imageElement = null;
+        int count = 0;
+        foreach (XElement element in root.Descendants())
+        {
+            if (!IsElementNamed(element, "image") || !IsElementDisplayed(element))
+            {
+                continue;
+            }
+
+            imageElement = element;
+            count++;
+            if (count > 1)
+            {
+                return false;
+            }
+        }
+
+        return count == 1 && imageElement != null;
+    }
+
+    private static bool TryReadImageSize(
+        XElement imageElement,
+        XElement root,
+        out Vector2 size)
+    {
+        size = Vector2.zero;
+        float width;
+        float height;
+        if (TryReadPositiveLength(imageElement, "width", out width) &&
+            TryReadPositiveLength(imageElement, "height", out height))
+        {
+            size = new Vector2(width, height);
+            return true;
+        }
+
+        return TryReadRootSize(root, out size);
+    }
+
+    private static string ReadHref(XElement element)
+    {
+        foreach (XAttribute attribute in element.Attributes())
+        {
+            if (string.Equals(attribute.Name.LocalName, "href", StringComparison.OrdinalIgnoreCase))
+            {
+                return WebUtility.HtmlDecode(attribute.Value.Trim());
+            }
+        }
+
+        return string.Empty;
+    }
+
+    private static bool TryParseDataImage(
+        string href,
+        out byte[] bytes,
+        out string mimeType)
+    {
+        bytes = null;
+        mimeType = string.Empty;
+        if (string.IsNullOrEmpty(href) ||
+            !href.StartsWith("data:image/", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        int commaIndex = href.IndexOf(',');
+        if (commaIndex <= 0 || commaIndex >= href.Length - 1)
+        {
+            return false;
+        }
+
+        string metadata = href.Substring(0, commaIndex);
+        if (metadata.IndexOf(";base64", StringComparison.OrdinalIgnoreCase) < 0)
+        {
+            return false;
+        }
+
+        int mimeStart = "data:".Length;
+        int mimeEnd = metadata.IndexOf(';', mimeStart);
+        if (mimeEnd <= mimeStart)
+        {
+            return false;
+        }
+
+        mimeType = metadata.Substring(mimeStart, mimeEnd - mimeStart);
+        try
+        {
+            bytes = Convert.FromBase64String(href.Substring(commaIndex + 1).Trim());
+            return bytes.Length > 0;
+        }
+        catch
+        {
+            bytes = null;
+            mimeType = string.Empty;
+            return false;
+        }
+    }
+
     private static void CountVisualElements(
         XElement element,
         bool ignored,
@@ -150,7 +329,7 @@ internal static class FigmaPasteSvgShape
 
         if (!childIgnored)
         {
-            if (IsElementNamed(element, "rect") && HasPositiveRectSize(element))
+            if (IsElementNamed(element, "rect") && IsVisibleRectCandidate(element))
             {
                 visualRect = element;
                 visualRectCount++;
@@ -191,13 +370,29 @@ internal static class FigmaPasteSvgShape
         return false;
     }
 
-    private static bool HasPositiveRectSize(XElement rect)
+    private static bool IsVisibleRectCandidate(XElement rect)
     {
+        if (!IsElementDisplayed(rect))
+        {
+            return false;
+        }
+
+        string fill = ReadInheritedPresentationValue(rect, "fill");
+        if (string.Equals(fill, "none", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
         float width;
         float height;
-        return IsElementDisplayed(rect)
-            && TryReadPositiveLength(rect, "width", out width)
-            && TryReadPositiveLength(rect, "height", out height);
+        if (TryReadPositiveLength(rect, "width", out width) &&
+            TryReadPositiveLength(rect, "height", out height))
+        {
+            return true;
+        }
+
+        return IsPercentLength(ReadAttribute(rect, "width")) &&
+               IsPercentLength(ReadAttribute(rect, "height"));
     }
 
     private static bool IsElementDisplayed(XElement element)
@@ -377,6 +572,16 @@ internal static class FigmaPasteSvgShape
         }
 
         return TryParseFloat(trimmed.Substring(0, length), out result);
+    }
+
+    private static bool IsPercentLength(string value)
+    {
+        if (string.IsNullOrEmpty(value))
+        {
+            return false;
+        }
+
+        return value.Trim().EndsWith("%", StringComparison.Ordinal);
     }
 
     private static bool IsSvgNumberChar(char value)
