@@ -21,6 +21,8 @@ namespace SgrUnity
         private static readonly int FaceColorId = Shader.PropertyToID("_FaceColor");
         private static readonly int GrayStrengthId = Shader.PropertyToID("_GrayStrength");
         private const string GrayKeyword = "_IS_GRAY";
+        private const int RuntimeRefreshBurstFrames = 8;
+        private const int RuntimeRefreshCheckIntervalFrames = 3;
 
         [SerializeField] private bool isDark = true;
         [SerializeField] [Range(0f, 1f)] private float darkFactor = 0.6f;
@@ -38,6 +40,9 @@ namespace SgrUnity
 
         private ParticleSystem.Particle[] particleBuffer = new ParticleSystem.Particle[128];
         private bool refreshPending;
+        private int refreshBurstFramesRemaining;
+        private int nextRefreshCheckFrame;
+        private int contentSignature;
 #if UNITY_EDITOR
         private static readonly List<UIHeadDarkener> ActiveEditorPreviews = new List<UIHeadDarkener>();
         private static bool editorCallbacksRegistered;
@@ -106,6 +111,7 @@ namespace SgrUnity
             isDark = dark;
 
             ApplyCurrentState();
+            QueueRuntimeRefreshBurst();
         }
 
         public void Refresh()
@@ -132,6 +138,7 @@ namespace SgrUnity
 #endif
 
             ApplyCurrentState();
+            QueueRuntimeRefreshBurst();
         }
 
 #if UNITY_EDITOR
@@ -182,19 +189,159 @@ namespace SgrUnity
         {
             if (autoRefreshOnChildrenChanged && isDark)
             {
-                refreshPending = true;
+                QueueRuntimeRefreshBurst();
             }
         }
 
         private void LateUpdate()
         {
-            if (!refreshPending)
+            if (!TryConsumeRefreshRequest())
             {
                 return;
             }
 
-            refreshPending = false;
             Refresh();
+        }
+
+        private void QueueRuntimeRefreshBurst()
+        {
+            if (!autoRefreshOnChildrenChanged || !isDark)
+            {
+                return;
+            }
+
+            refreshPending = true;
+            refreshBurstFramesRemaining = Mathf.Max(refreshBurstFramesRemaining, RuntimeRefreshBurstFrames);
+            nextRefreshCheckFrame = 0;
+        }
+
+        private bool TryConsumeRefreshRequest()
+        {
+            if (!isDark || !CanApplyInCurrentMode())
+            {
+                refreshPending = false;
+                refreshBurstFramesRemaining = 0;
+                return false;
+            }
+
+            bool shouldRefresh = refreshPending;
+            refreshPending = false;
+
+            if (!autoRefreshOnChildrenChanged)
+            {
+                return shouldRefresh;
+            }
+
+            if (refreshBurstFramesRemaining > 0)
+            {
+                refreshBurstFramesRemaining--;
+                shouldRefresh = true;
+            }
+            else if (HasContentSignatureChanged())
+            {
+                shouldRefresh = true;
+            }
+
+            return shouldRefresh;
+        }
+
+        private bool HasContentSignatureChanged()
+        {
+#if UNITY_EDITOR
+            if (!Application.IsPlaying(gameObject))
+            {
+                return false;
+            }
+#endif
+
+            if (Time.frameCount < nextRefreshCheckFrame)
+            {
+                return false;
+            }
+
+            nextRefreshCheckFrame = Time.frameCount + RuntimeRefreshCheckIntervalFrames;
+
+            int currentSignature = CalculateContentSignature();
+            if (currentSignature == contentSignature)
+            {
+                return false;
+            }
+
+            contentSignature = currentSignature;
+            return true;
+        }
+
+        private int CalculateContentSignature()
+        {
+            unchecked
+            {
+                int hash = 17;
+
+                var transforms = GetComponentsInChildren<Transform>(true);
+                for (int i = 0; i < transforms.Length; i++)
+                {
+                    AddObjectHash(ref hash, transforms[i]);
+                }
+
+                var graphics = GetComponentsInChildren<Graphic>(true);
+                for (int i = 0; i < graphics.Length; i++)
+                {
+                    var graphic = graphics[i];
+                    AddObjectHash(ref hash, graphic);
+                    AddObjectHash(ref hash, graphic.material);
+                    AddObjectHash(ref hash, graphic.mainTexture);
+
+                    var image = graphic as Image;
+                    if (image != null)
+                    {
+                        AddObjectHash(ref hash, image.sprite);
+                        AddObjectHash(ref hash, image.overrideSprite);
+                    }
+
+                    var rawImage = graphic as RawImage;
+                    if (rawImage != null)
+                    {
+                        AddObjectHash(ref hash, rawImage.texture);
+                    }
+                }
+
+                var helpers = GetComponentsInChildren<UIShaderParamHelper_vx_common_shader>(true);
+                for (int i = 0; i < helpers.Length; i++)
+                {
+                    AddObjectHash(ref hash, helpers[i]);
+                }
+
+                var particles = GetComponentsInChildren<ParticleSystem>(true);
+                for (int i = 0; i < particles.Length; i++)
+                {
+                    AddObjectHash(ref hash, particles[i]);
+                }
+
+                var particleRenderers = GetComponentsInChildren<ParticleSystemRenderer>(true);
+                for (int i = 0; i < particleRenderers.Length; i++)
+                {
+                    var renderer = particleRenderers[i];
+                    AddObjectHash(ref hash, renderer);
+
+                    Material[] materials = renderer.sharedMaterials;
+                    for (int j = 0; j < materials.Length; j++)
+                    {
+                        AddObjectHash(ref hash, materials[j]);
+                    }
+
+                    AddObjectHash(ref hash, renderer.trailMaterial);
+                }
+
+                return hash;
+            }
+        }
+
+        private static void AddObjectHash(ref int hash, Object value)
+        {
+            unchecked
+            {
+                hash = hash * 31 + (value != null ? value.GetInstanceID() : 0);
+            }
         }
 
         private void ApplyCurrentState()
@@ -348,6 +495,7 @@ namespace SgrUnity
             ApplyShaderHelpers();
             ApplyGraphics();
             ApplyParticles();
+            contentSignature = CalculateContentSignature();
         }
 
         private void ApplyShaderHelpers()
@@ -921,6 +1069,11 @@ namespace SgrUnity
                 RestoreParticleRendererMaterials(pair.Key, pair.Value);
             }
             particleRendererStates.Clear();
+
+            refreshPending = false;
+            refreshBurstFramesRemaining = 0;
+            nextRefreshCheckFrame = 0;
+            contentSignature = 0;
         }
 
         private void RestoreParticleRendererMaterials(ParticleSystemRenderer renderer, ParticleRendererState state)
