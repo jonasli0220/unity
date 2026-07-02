@@ -458,10 +458,23 @@ public class ProjectImageDuplicateImportResolver : AssetPostprocessor
         HashSet<string> resolvedDuplicatePaths =
             new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
+        bool hasActiveExternalDrop = HasActiveExternalProjectDrop();
+
         AddExactExternalDropResolutions(
             candidatePaths,
             resolvedDuplicatePaths,
             resolutions);
+
+        // During an external Project-window drop, the source filenames are the
+        // authority. A deliberately named image such as name_3.png must remain
+        // a new asset even when name.png or name_2.png already exists.
+        // Numeric-suffix inference is reserved for imports where no external
+        // drag context was captured (for example, legacy/manual cleanup).
+        if (hasActiveExternalDrop)
+        {
+            pendingExternalProjectDrop = null;
+            return resolutions;
+        }
 
         for (int i = 0; i < candidatePaths.Length; i++)
         {
@@ -486,6 +499,13 @@ public class ProjectImageDuplicateImportResolver : AssetPostprocessor
         }
 
         return resolutions;
+    }
+
+    private static bool HasActiveExternalProjectDrop()
+    {
+        return pendingExternalProjectDrop != null
+            && EditorApplication.timeSinceStartup - pendingExternalProjectDrop.Time <=
+                PendingExternalProjectDropSeconds;
     }
 
     private static void AddExactExternalDropResolutions(
