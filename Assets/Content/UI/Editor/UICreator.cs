@@ -1066,8 +1066,30 @@ public class UICreator
 
     private static bool TryGetDraggedSprites(List<Sprite> sprites)
     {
+        string[] draggedPaths = DragAndDrop.paths;
+        if (draggedPaths == null || draggedPaths.Length == 0)
+        {
+            return false;
+        }
+
         UnityEngine.Object[] draggedObjects = DragAndDrop.objectReferences;
         if (draggedObjects == null || draggedObjects.Length == 0)
+        {
+            return false;
+        }
+
+        bool hasValidAssetPath = false;
+        for (int i = 0; i < draggedPaths.Length; i++)
+        {
+            if (!string.IsNullOrEmpty(draggedPaths[i]) &&
+                draggedPaths[i].StartsWith("Assets/", StringComparison.OrdinalIgnoreCase))
+            {
+                hasValidAssetPath = true;
+                break;
+            }
+        }
+
+        if (!hasValidAssetPath)
         {
             return false;
         }
@@ -1076,11 +1098,6 @@ public class UICreator
         for (int i = 0; i < draggedObjects.Length; i++)
         {
             UnityEngine.Object draggedObject = draggedObjects[i];
-            if (draggedObject == null || !AssetDatabase.Contains(draggedObject))
-            {
-                return false;
-            }
-
             Sprite sprite = draggedObject as Sprite;
 
             if (sprite == null && draggedObject is Texture2D)
@@ -1108,12 +1125,6 @@ public class UICreator
         if (string.IsNullOrEmpty(assetPath))
         {
             return null;
-        }
-
-        Sprite mainSprite = AssetDatabase.LoadAssetAtPath<Sprite>(assetPath);
-        if (mainSprite != null)
-        {
-            return mainSprite;
         }
 
         UnityEngine.Object[] assets = AssetDatabase.LoadAllAssetsAtPath(assetPath);
