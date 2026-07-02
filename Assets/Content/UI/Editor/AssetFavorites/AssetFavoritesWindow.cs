@@ -12,12 +12,17 @@ public sealed class AssetFavoritesWindow : EditorWindow
 
     private const string MenuPath = "Tools/UI/Asset Favorites";
     private const string ViewModePrefsKey = "Dragon.AssetFavorites.GridView";
-    private const float ToolbarHeight = 22f;
+    private const string PreviewSizePrefsKey = "Dragon.AssetFavorites.PreviewSize";
+    private const float ToolbarHeight = 30f;
     private const float FolderPanelWidth = 238f;
-    private const float PanelHeaderHeight = 28f;
-    private const float StatusHeight = 20f;
-    private const float GridTileWidth = 124f;
-    private const float GridTileHeight = 128f;
+    private const float FolderActionHeight = 36f;
+    private const float StatusHeight = 26f;
+    private const float MinPreviewSize = 64f;
+    private const float DefaultPreviewSize = 96f;
+    private const float MaxPreviewSize = 512f;
+    private const float PreviewZoomStep = 24f;
+    private const float GridHorizontalPadding = 24f;
+    private const float GridVerticalPadding = 48f;
     private const float ListRowHeight = 44f;
 
     private AssetFavoritesLibrary library;
@@ -28,6 +33,7 @@ public sealed class AssetFavoritesWindow : EditorWindow
     private string statusText = "将 Project 中的资产或文件夹拖到这里收藏";
     private Vector2 contentScroll;
     private bool gridView = true;
+    private float previewSize = DefaultPreviewSize;
     private readonly HashSet<string> selectedGuids = new HashSet<string>();
     private string selectionAnchorGuid = string.Empty;
     private string mouseDownGuid = string.Empty;
@@ -45,6 +51,7 @@ public sealed class AssetFavoritesWindow : EditorWindow
     private void OnEnable()
     {
         gridView = EditorPrefs.GetBool(ViewModePrefsKey, true);
+        previewSize = Mathf.Clamp(EditorPrefs.GetFloat(PreviewSizePrefsKey, DefaultPreviewSize), MinPreviewSize, MaxPreviewSize);
         ReloadLibrary();
     }
 
@@ -64,110 +71,176 @@ public sealed class AssetFavoritesWindow : EditorWindow
         EnsureReady();
         DrawToolbar();
 
-        Rect bodyRect = new Rect(0f, ToolbarHeight, position.width, Mathf.Max(0f, position.height - ToolbarHeight));
+        Rect statusRect = new Rect(0f, position.height - StatusHeight, position.width, StatusHeight);
+        Rect bodyRect = new Rect(0f, ToolbarHeight, position.width, Mathf.Max(0f, statusRect.y - ToolbarHeight));
         float leftWidth = Mathf.Min(FolderPanelWidth, Mathf.Max(190f, bodyRect.width * 0.34f));
         Rect leftRect = new Rect(bodyRect.x, bodyRect.y, leftWidth, bodyRect.height);
         Rect rightRect = new Rect(leftRect.xMax + 1f, bodyRect.y, Mathf.Max(0f, bodyRect.width - leftWidth - 1f), bodyRect.height);
+        List<EntryView> visibleEntries = GetVisibleEntries();
 
         EditorGUI.DrawRect(new Rect(leftRect.xMax, bodyRect.y, 1f, bodyRect.height), EditorGUIUtility.isProSkin ? new Color(0.12f, 0.12f, 0.12f) : new Color(0.65f, 0.65f, 0.65f));
         DrawFolderPanel(leftRect);
-        DrawContentPanel(rightRect);
+        DrawContentPanel(rightRect, visibleEntries);
+        DrawStatusBar(statusRect, visibleEntries.Count);
     }
 
     private void DrawToolbar()
     {
         using (new GUILayout.HorizontalScope(EditorStyles.toolbar, GUILayout.Height(ToolbarHeight)))
         {
-            GUILayout.Label("★ Asset Favorites", EditorStyles.boldLabel, GUILayout.Width(126f));
-
-            if (GUILayout.Button("+ Folder", EditorStyles.toolbarButton, GUILayout.Width(66f)))
-            {
-                CreateFolder();
-            }
-
-            using (new EditorGUI.DisabledScope(selectedGuids.Count == 0))
-            {
-                if (GUILayout.Button("Remove", EditorStyles.toolbarButton, GUILayout.Width(58f)))
-                {
-                    RemoveSelectedEntries();
-                }
-            }
-
-            GUILayout.FlexibleSpace();
-            GUILayout.Label("Search", EditorStyles.miniLabel, GUILayout.Width(42f));
-            string nextSearch = GUILayout.TextField(searchText, EditorStyles.toolbarTextField, GUILayout.MinWidth(110f), GUILayout.MaxWidth(240f));
+            GUILayout.Space(4f);
+            GUIStyle searchStyle = GUI.skin.FindStyle("ToolbarSeachTextField") ?? EditorStyles.toolbarTextField;
+            string nextSearch = GUILayout.TextField(searchText, searchStyle, GUILayout.ExpandWidth(true), GUILayout.Height(20f));
             if (nextSearch != searchText)
             {
                 searchText = nextSearch;
                 contentScroll = Vector2.zero;
             }
 
-            if (GUILayout.Toggle(gridView, "Grid", EditorStyles.toolbarButton, GUILayout.Width(42f)) && !gridView)
+            if (!string.IsNullOrEmpty(searchText) && GUILayout.Button("×", EditorStyles.toolbarButton, GUILayout.Width(24f)))
             {
-                gridView = true;
-                EditorPrefs.SetBool(ViewModePrefsKey, gridView);
+                searchText = string.Empty;
                 contentScroll = Vector2.zero;
             }
-
-            if (GUILayout.Toggle(!gridView, "List", EditorStyles.toolbarButton, GUILayout.Width(40f)) && gridView)
-            {
-                gridView = false;
-                EditorPrefs.SetBool(ViewModePrefsKey, gridView);
-                contentScroll = Vector2.zero;
-            }
+            GUILayout.Space(4f);
         }
     }
 
     private void DrawFolderPanel(Rect rect)
     {
-        Rect headerRect = new Rect(rect.x, rect.y, rect.width, PanelHeaderHeight);
-        EditorGUI.DrawRect(headerRect, EditorGUIUtility.isProSkin ? new Color(0.19f, 0.19f, 0.19f) : new Color(0.82f, 0.82f, 0.82f));
-        GUI.Label(new Rect(headerRect.x + 8f, headerRect.y + 5f, headerRect.width - 16f, 18f), "Folders", EditorStyles.boldLabel);
-
         Rect footerRect = new Rect(rect.x, rect.yMax - 26f, rect.width, 26f);
-        Rect treeRect = new Rect(rect.x + 2f, headerRect.yMax + 2f, rect.width - 4f, Mathf.Max(0f, footerRect.y - headerRect.yMax - 4f));
-        treeView.OnGUI(treeRect);
+        Rect actionRect = new Rect(rect.x + 6f, rect.y + 6f, rect.width - 12f, 26f);
+        Rect treeRect = new Rect(rect.x + 2f, rect.y + FolderActionHeight, rect.width - 4f, Mathf.Max(0f, footerRect.y - rect.y - FolderActionHeight - 2f));
 
-        if (GUI.Button(new Rect(footerRect.x + 5f, footerRect.y + 3f, 24f, 20f), "+"))
+        if (GUI.Button(actionRect, "+ 新建文件夹"))
         {
             CreateFolder();
         }
 
+        treeView.OnGUI(treeRect);
+
         AssetFavoriteFolder selectedFolder = library.FindFolder(currentFolderId);
         using (new EditorGUI.DisabledScope(selectedFolder == null || selectedFolder.automatic))
         {
-            if (GUI.Button(new Rect(footerRect.x + 33f, footerRect.y + 3f, 58f, 20f), "Rename"))
+            if (GUI.Button(new Rect(footerRect.x + 6f, footerRect.y + 3f, 70f, 20f), "重命名", EditorStyles.miniButtonLeft))
             {
                 treeView.BeginRenameFolder(currentFolderId);
             }
 
-            if (GUI.Button(new Rect(footerRect.x + 95f, footerRect.y + 3f, 50f, 20f), "Delete"))
+            if (GUI.Button(new Rect(footerRect.x + 76f, footerRect.y + 3f, 62f, 20f), "删除", EditorStyles.miniButtonRight))
             {
                 DeleteCurrentFolder();
             }
         }
     }
 
-    private void DrawContentPanel(Rect rect)
+    private void DrawContentPanel(Rect rect, List<EntryView> visibleEntries)
     {
-        Rect headerRect = new Rect(rect.x, rect.y, rect.width, PanelHeaderHeight);
-        EditorGUI.DrawRect(headerRect, EditorGUIUtility.isProSkin ? new Color(0.19f, 0.19f, 0.19f) : new Color(0.82f, 0.82f, 0.82f));
-        GUI.Label(new Rect(headerRect.x + 9f, headerRect.y + 5f, headerRect.width - 100f, 18f), BuildBreadcrumb(), EditorStyles.boldLabel);
+        DrawEntries(rect, visibleEntries);
+        HandleProjectDrop(rect);
+    }
 
-        List<EntryView> visibleEntries = GetVisibleEntries();
-        GUI.Label(new Rect(headerRect.xMax - 88f, headerRect.y + 5f, 78f, 18f), visibleEntries.Count + " items", EditorStyles.miniLabel);
+    private void DrawStatusBar(Rect rect, int visibleCount)
+    {
+        EditorGUI.DrawRect(rect, EditorGUIUtility.isProSkin ? new Color(0.16f, 0.16f, 0.16f) : new Color(0.88f, 0.88f, 0.88f));
+        GUI.Label(new Rect(rect.x + 8f, rect.y + 4f, 78f, 18f), visibleCount + " 个资产", EditorStyles.miniLabel);
 
-        Rect statusRect = new Rect(rect.x, rect.yMax - StatusHeight, rect.width, StatusHeight);
-        Rect contentRect = new Rect(rect.x, headerRect.yMax, rect.width, Mathf.Max(0f, statusRect.y - headerRect.yMax));
-        DrawEntries(contentRect, visibleEntries);
-        HandleProjectDrop(contentRect);
+        const float controlsWidth = 230f;
+        Rect controlsRect = new Rect(rect.xMax - controlsWidth - 6f, rect.y + 2f, controlsWidth, rect.height - 4f);
+        float statusWidth = Mathf.Max(0f, controlsRect.x - rect.x - 92f);
+        GUI.Label(new Rect(rect.x + 88f, rect.y + 4f, statusWidth, 18f), statusText, EditorStyles.miniLabel);
 
-        EditorGUI.DrawRect(statusRect, EditorGUIUtility.isProSkin ? new Color(0.16f, 0.16f, 0.16f) : new Color(0.88f, 0.88f, 0.88f));
-        GUI.Label(new Rect(statusRect.x + 8f, statusRect.y + 2f, statusRect.width - 16f, 17f), statusText, EditorStyles.miniLabel);
+        Rect listRect = new Rect(controlsRect.x, controlsRect.y, 28f, controlsRect.height);
+        Rect sizeLabelRect = new Rect(listRect.xMax + 4f, controlsRect.y + 2f, 44f, controlsRect.height - 4f);
+        Rect sliderRect = new Rect(sizeLabelRect.xMax + 2f, controlsRect.y + 3f, 120f, controlsRect.height - 6f);
+        Rect gridRect = new Rect(sliderRect.xMax + 4f, controlsRect.y, 28f, controlsRect.height);
+
+        if (GUI.Toggle(listRect, !gridView, new GUIContent("≡", "列表视图"), EditorStyles.miniButtonLeft) && gridView)
+        {
+            SetGridView(false);
+        }
+
+        using (new EditorGUI.DisabledScope(!gridView))
+        {
+            GUI.Label(sizeLabelRect, Mathf.RoundToInt(previewSize) + " px", EditorStyles.centeredGreyMiniLabel);
+            float nextPreviewSize = GUI.HorizontalSlider(sliderRect, previewSize, MinPreviewSize, MaxPreviewSize);
+            if (!Mathf.Approximately(nextPreviewSize, previewSize))
+            {
+                SetPreviewSize(nextPreviewSize, true);
+            }
+        }
+
+        if (GUI.Toggle(gridRect, gridView, new GUIContent("▦", "网格视图"), EditorStyles.miniButtonRight) && !gridView)
+        {
+            SetGridView(true);
+        }
+
+        HandleZoomControlWheel(controlsRect);
+    }
+
+    private void HandleContentZoomWheel(Rect contentRect)
+    {
+        Event current = Event.current;
+        if (!gridView
+            || current.type != EventType.ScrollWheel
+            || !contentRect.Contains(current.mousePosition)
+            || (!current.control && !current.command))
+        {
+            return;
+        }
+
+        SetPreviewSize(previewSize - current.delta.y * PreviewZoomStep, true);
+        current.Use();
+    }
+
+    private void HandleZoomControlWheel(Rect controlsRect)
+    {
+        Event current = Event.current;
+        if (!gridView || current.type != EventType.ScrollWheel || !controlsRect.Contains(current.mousePosition))
+        {
+            return;
+        }
+
+        SetPreviewSize(previewSize - current.delta.y * PreviewZoomStep, true);
+        current.Use();
+    }
+
+    private void SetPreviewSize(float requestedSize, bool preserveScrollPosition)
+    {
+        float nextSize = Mathf.Round(Mathf.Clamp(requestedSize, MinPreviewSize, MaxPreviewSize));
+        if (Mathf.Approximately(nextSize, previewSize))
+        {
+            return;
+        }
+
+        if (preserveScrollPosition && previewSize > 0f)
+        {
+            float scale = (nextSize + GridVerticalPadding) / (previewSize + GridVerticalPadding);
+            contentScroll *= scale;
+        }
+
+        previewSize = nextSize;
+        EditorPrefs.SetFloat(PreviewSizePrefsKey, previewSize);
+        Repaint();
+    }
+
+    private void SetGridView(bool enabled)
+    {
+        if (gridView == enabled)
+        {
+            return;
+        }
+
+        gridView = enabled;
+        EditorPrefs.SetBool(ViewModePrefsKey, gridView);
+        contentScroll = Vector2.zero;
+        Repaint();
     }
 
     private void DrawEntries(Rect contentRect, List<EntryView> visibleEntries)
     {
+        HandleContentZoomWheel(contentRect);
+
         if (visibleEntries.Count == 0)
         {
             string message = string.IsNullOrEmpty(searchText)
@@ -179,28 +252,34 @@ public sealed class AssetFavoritesWindow : EditorWindow
 
         float contentWidth = Mathf.Max(1f, contentRect.width - 18f);
         float contentHeight;
+        float viewWidth = contentWidth;
         int columns = 1;
         if (gridView)
         {
-            columns = Mathf.Max(1, Mathf.FloorToInt((contentWidth - 8f) / GridTileWidth));
+            float gridTileWidth = previewSize + GridHorizontalPadding;
+            float gridTileHeight = previewSize + GridVerticalPadding;
+            columns = Mathf.Max(1, Mathf.FloorToInt((contentWidth - 8f) / gridTileWidth));
             int rows = Mathf.CeilToInt(visibleEntries.Count / (float)columns);
-            contentHeight = rows * GridTileHeight + 12f;
+            contentHeight = rows * gridTileHeight + 12f;
+            viewWidth = Mathf.Max(contentWidth, gridTileWidth + 10f);
         }
         else
         {
             contentHeight = visibleEntries.Count * ListRowHeight + 8f;
         }
 
-        Rect viewRect = new Rect(0f, 0f, contentWidth, Mathf.Max(contentRect.height, contentHeight));
+        Rect viewRect = new Rect(0f, 0f, viewWidth, Mathf.Max(contentRect.height, contentHeight));
         contentScroll = GUI.BeginScrollView(contentRect, contentScroll, viewRect);
         for (int i = 0; i < visibleEntries.Count; i++)
         {
             Rect itemRect;
             if (gridView)
             {
+                float gridTileWidth = previewSize + GridHorizontalPadding;
+                float gridTileHeight = previewSize + GridVerticalPadding;
                 int row = i / columns;
                 int column = i % columns;
-                itemRect = new Rect(7f + column * GridTileWidth, 6f + row * GridTileHeight, GridTileWidth - 8f, GridTileHeight - 8f);
+                itemRect = new Rect(7f + column * gridTileWidth, 6f + row * gridTileHeight, gridTileWidth - 8f, gridTileHeight - 8f);
                 DrawGridEntry(itemRect, visibleEntries[i]);
             }
             else
@@ -217,13 +296,19 @@ public sealed class AssetFavoritesWindow : EditorWindow
     private void DrawGridEntry(Rect rect, EntryView entry)
     {
         bool selected = selectedGuids.Contains(entry.Entry.assetGuid);
-        EditorGUI.DrawRect(rect, selected
-            ? (EditorGUIUtility.isProSkin ? new Color(0.20f, 0.42f, 0.65f, 0.75f) : new Color(0.30f, 0.55f, 0.82f, 0.55f))
-            : (EditorGUIUtility.isProSkin ? new Color(0.23f, 0.23f, 0.23f) : new Color(0.90f, 0.90f, 0.90f)));
+        bool hovered = rect.Contains(Event.current.mousePosition);
+        if (selected)
+        {
+            EditorGUI.DrawRect(rect, EditorGUIUtility.isProSkin ? new Color(0.20f, 0.42f, 0.65f, 0.72f) : new Color(0.30f, 0.55f, 0.82f, 0.52f));
+        }
+        else if (hovered && Event.current.type == EventType.Repaint)
+        {
+            EditorGUI.DrawRect(rect, EditorGUIUtility.isProSkin ? new Color(1f, 1f, 1f, 0.055f) : new Color(0f, 0f, 0f, 0.055f));
+        }
 
-        Rect previewRect = new Rect(rect.x + 10f, rect.y + 7f, rect.width - 20f, 82f);
+        Rect previewRect = new Rect(rect.x + 8f, rect.y + 5f, previewSize, previewSize);
         DrawAssetPreview(previewRect, entry);
-        GUI.Label(new Rect(rect.x + 5f, previewRect.yMax + 4f, rect.width - 10f, 30f), entry.DisplayName, CenteredMiniLabelStyle());
+        GUI.Label(new Rect(rect.x + 4f, previewRect.yMax + 3f, rect.width - 8f, 30f), entry.DisplayName, CenteredMiniLabelStyle());
     }
 
     private void DrawListEntry(Rect rect, EntryView entry)
@@ -246,10 +331,13 @@ public sealed class AssetFavoritesWindow : EditorWindow
 
     private void DrawAssetPreview(Rect rect, EntryView entry)
     {
-        Texture preview = null;
+        Texture preview = entry.Asset as Texture;
         if (entry.Asset != null)
         {
-            preview = AssetPreview.GetAssetPreview(entry.Asset);
+            if (preview == null)
+            {
+                preview = AssetPreview.GetAssetPreview(entry.Asset);
+            }
             if (preview == null)
             {
                 preview = AssetPreview.GetMiniThumbnail(entry.Asset);
@@ -660,6 +748,7 @@ internal sealed class AssetFavoritesTreeView : TreeView
 
         TreeViewItem root = new TreeViewItem(0, -1, "Root");
         TreeViewItem all = new TreeViewItem(1, 0, "All Favorites");
+        all.icon = EditorGUIUtility.IconContent("Folder Icon").image as Texture2D;
         root.AddChild(all);
         itemFolders[1] = string.Empty;
         folderItems[string.Empty] = 1;
@@ -802,6 +891,7 @@ internal sealed class AssetFavoritesTreeView : TreeView
         {
             int itemId = nextId++;
             TreeViewItem item = new TreeViewItem(itemId, depth, folder.displayName);
+            item.icon = EditorGUIUtility.IconContent("Folder Icon").image as Texture2D;
             parentItem.AddChild(item);
             itemFolders[itemId] = folder.id;
             folderItems[folder.id] = itemId;

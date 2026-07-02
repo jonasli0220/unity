@@ -30,15 +30,15 @@ public sealed class AssetFavoritesLibrary : ScriptableObject
 
     private static readonly AutoFolderDefinition[] AutoFolders =
     {
-        new AutoFolderDefinition("auto-prefabs", "Prefabs", 10),
-        new AutoFolderDefinition("auto-textures", "Textures", 20),
-        new AutoFolderDefinition("auto-animations", "Animations", 30),
-        new AutoFolderDefinition("auto-materials", "Materials", 40),
-        new AutoFolderDefinition("auto-audio", "Audio", 50),
-        new AutoFolderDefinition("auto-scenes", "Scenes", 60),
-        new AutoFolderDefinition("auto-scripts", "Scripts", 70),
-        new AutoFolderDefinition("auto-fonts", "Fonts", 80),
-        new AutoFolderDefinition("auto-other", "Other", 90)
+        new AutoFolderDefinition("auto-prefabs", "预制体 Prefab", 10),
+        new AutoFolderDefinition("auto-textures", "贴图 Texture", 20),
+        new AutoFolderDefinition("auto-animations", "动画 Animation", 30),
+        new AutoFolderDefinition("auto-materials", "材质 Material", 40),
+        new AutoFolderDefinition("auto-audio", "音频 Audio", 50),
+        new AutoFolderDefinition("auto-scenes", "场景 Scene", 60),
+        new AutoFolderDefinition("auto-scripts", "脚本 Script", 70),
+        new AutoFolderDefinition("auto-fonts", "字体 Font", 80),
+        new AutoFolderDefinition("auto-other", "其他 Other", 90)
     };
 
     [SerializeField] private List<AssetFavoriteFolder> folders = new List<AssetFavoriteFolder>();
@@ -276,10 +276,14 @@ public sealed class AssetFavoritesLibrary : ScriptableObject
                 });
                 changed = true;
             }
-            else if (!folder.automatic || folder.parentId != string.Empty || folder.order != definition.Order)
+            else if (!folder.automatic
+                     || folder.parentId != string.Empty
+                     || folder.displayName != definition.Name
+                     || folder.order != definition.Order)
             {
                 folder.automatic = true;
                 folder.parentId = string.Empty;
+                folder.displayName = definition.Name;
                 folder.order = definition.Order;
                 changed = true;
             }
@@ -419,4 +423,3 @@ public static class AssetFavoritesProjectMenu
         });
     }
 }
-

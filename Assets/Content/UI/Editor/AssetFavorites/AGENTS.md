@@ -20,10 +20,11 @@
 - Skip already-favorited assets instead of creating duplicate entries.
 - Preserve standard Unity selection conventions: Ctrl/Cmd toggles, Shift ranges, single click pings, double click opens.
 - Keep the folder tree keyboard navigable and accept dragged favorite entries or Project assets.
+- Keep grid preview zoom discoverable and non-destructive: provide a draggable bottom-right size slider, support Ctrl/Cmd + mouse wheel over the content area, preserve ordinary wheel scrolling, and cap previews at 512 x 512.
+- Keep the visual hierarchy close to Unity's Project browser: a full-width search strip, a clear left-side create-folder action, a compact folder tree with counts, an unboxed preview grid, and a shared bottom status bar with item count plus view/zoom controls.
 
 ## Validation
 
 - Validate on Unity 2021.3.8f1 and avoid APIs introduced after Unity 2021 LTS.
 - After changes, confirm Editor compilation, menu registration, and shared library creation through the Codex Unity Bridge when available.
 - Do not publish the mutable library asset to the reusable GitHub scripts repository; publish this tool's scripts, `.meta` files, and documentation only.
-
