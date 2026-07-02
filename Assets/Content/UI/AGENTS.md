@@ -168,6 +168,7 @@ This is not intended to be pixel-perfect runtime parity. The practical target is
 
 - All newly created Unity C# scripts for this UI workspace must be placed under `Assets/Content/UI/Editor`; create a clearly named subdirectory there when a tool contains multiple files.
 - `UICreator` has one active implementation at `Assets/Content/UI/Editor/UICreator.cs`. The SVN-managed legacy file at `Assets/Scripts/SgrProject/UI/Editor/UITools/UICreator.cs` is retained as a compile-disabled compatibility shell because deleting it causes SVN/update workflows to restore a second `UICreator` after restart. Never enable both implementations or define another global `UICreator` class.
+- Keep `UICreator` focused on UI creation commands: Scene right-click quick-create, legacy `GameObject/UI` creation entries, and the existing component-added UI defaults. Sprite drag-to-UI belongs in `Assets/Content/UI/Editor/UISpriteDragToUICreator.cs`; do not add Scene-view drag handlers back into `UICreator`.
 - Because Unity compiles everything under an `Editor` directory into an editor-only assembly, do not create runtime/player scripts without first updating this convention and agreeing on a runtime script location.
 - Prefer small, local edits inside `Assets/Content/UI/Editor/FigmaBridge`.
 - Do not move Figma Bridge docs to project root. Put detailed tool docs in `Editor/FigmaBridge/README.md`; use this `AGENTS.md` only as startup context.
@@ -178,6 +179,7 @@ This is not intended to be pixel-perfect runtime parity. The practical target is
 
 ## Sprite Drag-To-UI Convention
 
+- Implementation entry point: `Assets/Content/UI/Editor/UISpriteDragToUICreator.cs`. Keep Project-window Sprite dragging, operating-system image dragging, drag preview, prefab-local `resource` import, and selected-image replacement in this script.
 - Expose the feature as a checked menu toggle at `UITools/拖入图片自动创建UI`. The preference is editor-local, persists through `EditorPrefs`, and defaults to enabled on first use.
 - When enabled and a Sprite asset is dragged into the Scene view, create a UI node instead of Unity's default `SpriteRenderer` whenever a valid Canvas/UI parent exists. This applies to ordinary scenes and Prefab Stages regardless of asset folder.
 - The created node uses `RectTransform`, `CanvasRenderer`, and `SgrImage`, binds the dragged Sprite, disables `Raycast Target`, inherits the parent UI layer, and calls `SetNativeSize()`.
