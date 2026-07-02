@@ -15,12 +15,12 @@
 
 ## Interaction Rules
 
-- Optimize for designer workflows: Project context-menu add, drag-in, search, grid/list views, multi-select, ping, open, and drag-out must remain direct actions.
+- Optimize for designer workflows: Project context-menu add, drag-in, search, adaptive grid/list browsing, multi-select, ping, open, and drag-out must remain direct actions.
 - When adding without an explicit destination, classify assets by type automatically.
 - Skip already-favorited assets instead of creating duplicate entries.
 - Preserve standard Unity selection conventions: Ctrl/Cmd toggles, Shift ranges, single click pings, double click opens.
 - Keep the folder tree keyboard navigable and accept dragged favorite entries or Project assets.
-- Keep grid preview zoom discoverable and non-destructive: provide a draggable bottom-right size slider, support Ctrl/Cmd + mouse wheel over the content area, preserve ordinary wheel scrolling, and cap previews at 512 x 512.
+- Treat preview size as one continuous browsing control, not separate clickable list/grid modes. At 64 px the content switches automatically to a compact single-line list; above 64 px it is a grid. Keep the endpoint icons informational only, support Ctrl/Cmd + mouse wheel over the content area, preserve ordinary wheel scrolling, and cap previews at 512 x 512.
 - Keep the visual hierarchy close to Unity's Project browser: a full-width search strip, a clear left-side create-folder action, a compact folder tree with counts, an unboxed preview grid, and a shared bottom status bar with item count plus view/zoom controls.
 
 ## Validation

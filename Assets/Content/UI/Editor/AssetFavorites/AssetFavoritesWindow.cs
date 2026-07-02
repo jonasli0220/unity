@@ -11,19 +11,19 @@ public sealed class AssetFavoritesWindow : EditorWindow
     internal const string EntryDragKey = "Dragon.AssetFavorites.EntryGuids";
 
     private const string MenuPath = "Tools/UI/Asset Favorites";
-    private const string ViewModePrefsKey = "Dragon.AssetFavorites.GridView";
     private const string PreviewSizePrefsKey = "Dragon.AssetFavorites.PreviewSize";
     private const float ToolbarHeight = 30f;
     private const float FolderPanelWidth = 238f;
     private const float FolderActionHeight = 36f;
     private const float StatusHeight = 26f;
     private const float MinPreviewSize = 64f;
+    private const float ListViewThreshold = 64f;
     private const float DefaultPreviewSize = 96f;
     private const float MaxPreviewSize = 512f;
     private const float PreviewZoomStep = 24f;
     private const float GridHorizontalPadding = 24f;
     private const float GridVerticalPadding = 48f;
-    private const float ListRowHeight = 44f;
+    private const float ListRowHeight = 24f;
 
     private AssetFavoritesLibrary library;
     private TreeViewState treeState;
@@ -32,12 +32,16 @@ public sealed class AssetFavoritesWindow : EditorWindow
     private string searchText = string.Empty;
     private string statusText = "将 Project 中的资产或文件夹拖到这里收藏";
     private Vector2 contentScroll;
-    private bool gridView = true;
     private float previewSize = DefaultPreviewSize;
     private readonly HashSet<string> selectedGuids = new HashSet<string>();
     private string selectionAnchorGuid = string.Empty;
     private string mouseDownGuid = string.Empty;
     private Vector2 mouseDownPosition;
+
+    private bool IsListView
+    {
+        get { return previewSize <= ListViewThreshold; }
+    }
 
     [MenuItem(MenuPath, false, 2330)]
     public static void OpenAndFocus()
@@ -50,7 +54,6 @@ public sealed class AssetFavoritesWindow : EditorWindow
 
     private void OnEnable()
     {
-        gridView = EditorPrefs.GetBool(ViewModePrefsKey, true);
         previewSize = Mathf.Clamp(EditorPrefs.GetFloat(PreviewSizePrefsKey, DefaultPreviewSize), MinPreviewSize, MaxPreviewSize);
         ReloadLibrary();
     }
@@ -155,34 +158,37 @@ public sealed class AssetFavoritesWindow : EditorWindow
         Rect sliderRect = new Rect(sizeLabelRect.xMax + 2f, controlsRect.y + 3f, 120f, controlsRect.height - 6f);
         Rect gridRect = new Rect(sliderRect.xMax + 4f, controlsRect.y, 28f, controlsRect.height);
 
-        if (GUI.Toggle(listRect, !gridView, new GUIContent("≡", "列表视图"), EditorStyles.miniButtonLeft) && gridView)
+        DrawViewIndicator(listRect, "≡", IsListView, "缩小到 64 px 自动进入列表");
+        GUI.Label(sizeLabelRect, Mathf.RoundToInt(previewSize) + " px", EditorStyles.centeredGreyMiniLabel);
+        float nextPreviewSize = GUI.HorizontalSlider(sliderRect, previewSize, MinPreviewSize, MaxPreviewSize);
+        if (!Mathf.Approximately(nextPreviewSize, previewSize))
         {
-            SetGridView(false);
+            SetPreviewSize(nextPreviewSize, true);
         }
-
-        using (new EditorGUI.DisabledScope(!gridView))
-        {
-            GUI.Label(sizeLabelRect, Mathf.RoundToInt(previewSize) + " px", EditorStyles.centeredGreyMiniLabel);
-            float nextPreviewSize = GUI.HorizontalSlider(sliderRect, previewSize, MinPreviewSize, MaxPreviewSize);
-            if (!Mathf.Approximately(nextPreviewSize, previewSize))
-            {
-                SetPreviewSize(nextPreviewSize, true);
-            }
-        }
-
-        if (GUI.Toggle(gridRect, gridView, new GUIContent("▦", "网格视图"), EditorStyles.miniButtonRight) && !gridView)
-        {
-            SetGridView(true);
-        }
+        DrawViewIndicator(gridRect, "▦", !IsListView, "放大到 64 px 以上自动进入网格");
 
         HandleZoomControlWheel(controlsRect);
+    }
+
+    private static void DrawViewIndicator(Rect rect, string glyph, bool active, string tooltip)
+    {
+        if (active)
+        {
+            EditorGUI.DrawRect(rect, EditorGUIUtility.isProSkin ? new Color(0.24f, 0.39f, 0.56f, 0.9f) : new Color(0.30f, 0.52f, 0.78f, 0.75f));
+        }
+
+        GUIStyle style = new GUIStyle(EditorStyles.centeredGreyMiniLabel);
+        if (active)
+        {
+            style.normal.textColor = Color.white;
+        }
+        GUI.Label(rect, new GUIContent(glyph, tooltip), style);
     }
 
     private void HandleContentZoomWheel(Rect contentRect)
     {
         Event current = Event.current;
-        if (!gridView
-            || current.type != EventType.ScrollWheel
+        if (current.type != EventType.ScrollWheel
             || !contentRect.Contains(current.mousePosition)
             || (!current.control && !current.command))
         {
@@ -196,7 +202,7 @@ public sealed class AssetFavoritesWindow : EditorWindow
     private void HandleZoomControlWheel(Rect controlsRect)
     {
         Event current = Event.current;
-        if (!gridView || current.type != EventType.ScrollWheel || !controlsRect.Contains(current.mousePosition))
+        if (current.type != EventType.ScrollWheel || !controlsRect.Contains(current.mousePosition))
         {
             return;
         }
@@ -213,7 +219,13 @@ public sealed class AssetFavoritesWindow : EditorWindow
             return;
         }
 
-        if (preserveScrollPosition && previewSize > 0f)
+        bool wasListView = IsListView;
+        bool willBeListView = nextSize <= ListViewThreshold;
+        if (wasListView != willBeListView)
+        {
+            contentScroll = Vector2.zero;
+        }
+        else if (preserveScrollPosition && !willBeListView && previewSize > 0f)
         {
             float scale = (nextSize + GridVerticalPadding) / (previewSize + GridVerticalPadding);
             contentScroll *= scale;
@@ -221,19 +233,6 @@ public sealed class AssetFavoritesWindow : EditorWindow
 
         previewSize = nextSize;
         EditorPrefs.SetFloat(PreviewSizePrefsKey, previewSize);
-        Repaint();
-    }
-
-    private void SetGridView(bool enabled)
-    {
-        if (gridView == enabled)
-        {
-            return;
-        }
-
-        gridView = enabled;
-        EditorPrefs.SetBool(ViewModePrefsKey, gridView);
-        contentScroll = Vector2.zero;
         Repaint();
     }
 
@@ -254,7 +253,7 @@ public sealed class AssetFavoritesWindow : EditorWindow
         float contentHeight;
         float viewWidth = contentWidth;
         int columns = 1;
-        if (gridView)
+        if (!IsListView)
         {
             float gridTileWidth = previewSize + GridHorizontalPadding;
             float gridTileHeight = previewSize + GridVerticalPadding;
@@ -273,7 +272,7 @@ public sealed class AssetFavoritesWindow : EditorWindow
         for (int i = 0; i < visibleEntries.Count; i++)
         {
             Rect itemRect;
-            if (gridView)
+            if (!IsListView)
             {
                 float gridTileWidth = previewSize + GridHorizontalPadding;
                 float gridTileHeight = previewSize + GridVerticalPadding;
@@ -314,19 +313,19 @@ public sealed class AssetFavoritesWindow : EditorWindow
     private void DrawListEntry(Rect rect, EntryView entry)
     {
         bool selected = selectedGuids.Contains(entry.Entry.assetGuid);
+        bool hovered = rect.Contains(Event.current.mousePosition);
         if (selected)
         {
             EditorGUI.DrawRect(rect, EditorGUIUtility.isProSkin ? new Color(0.20f, 0.42f, 0.65f, 0.75f) : new Color(0.30f, 0.55f, 0.82f, 0.55f));
         }
-        else if (((int)(rect.y / ListRowHeight)) % 2 == 0)
+        else if (hovered && Event.current.type == EventType.Repaint)
         {
-            EditorGUI.DrawRect(rect, EditorGUIUtility.isProSkin ? new Color(0.21f, 0.21f, 0.21f) : new Color(0.93f, 0.93f, 0.93f));
+            EditorGUI.DrawRect(rect, EditorGUIUtility.isProSkin ? new Color(1f, 1f, 1f, 0.055f) : new Color(0f, 0f, 0f, 0.055f));
         }
 
-        Rect iconRect = new Rect(rect.x + 6f, rect.y + 4f, 34f, 34f);
+        Rect iconRect = new Rect(rect.x + 6f, rect.y + 2f, 20f, 20f);
         DrawAssetPreview(iconRect, entry);
-        GUI.Label(new Rect(iconRect.xMax + 8f, rect.y + 4f, Mathf.Max(80f, rect.width * 0.34f), 18f), entry.DisplayName, EditorStyles.label);
-        GUI.Label(new Rect(iconRect.xMax + 8f, rect.y + 22f, rect.width - iconRect.width - 20f, 16f), entry.Path, EditorStyles.miniLabel);
+        GUI.Label(new Rect(iconRect.xMax + 7f, rect.y + 2f, rect.width - iconRect.width - 18f, 20f), new GUIContent(entry.DisplayName, entry.Path), EditorStyles.label);
     }
 
     private void DrawAssetPreview(Rect rect, EntryView entry)
