@@ -852,7 +852,13 @@ public class UICreator
             return false;
         }
 
-        return prefabStage.prefabContentsRoot.GetComponentInChildren<Canvas>(true) != null;
+        GameObject prefabRoot = prefabStage.prefabContentsRoot;
+        if (prefabRoot.GetComponentInChildren<Canvas>(true) != null)
+        {
+            return true;
+        }
+
+        return prefabRoot.GetComponentInChildren<RectTransform>(true) != null;
     }
 
     private static bool TryGetExternalImagePaths(List<string> externalImagePaths)
@@ -1066,30 +1072,13 @@ public class UICreator
 
     private static bool TryGetDraggedSprites(List<Sprite> sprites)
     {
-        string[] draggedPaths = DragAndDrop.paths;
-        if (draggedPaths == null || draggedPaths.Length == 0)
-        {
-            return false;
-        }
-
         UnityEngine.Object[] draggedObjects = DragAndDrop.objectReferences;
         if (draggedObjects == null || draggedObjects.Length == 0)
         {
             return false;
         }
 
-        bool hasValidAssetPath = false;
-        for (int i = 0; i < draggedPaths.Length; i++)
-        {
-            if (!string.IsNullOrEmpty(draggedPaths[i]) &&
-                draggedPaths[i].StartsWith("Assets/", StringComparison.OrdinalIgnoreCase))
-            {
-                hasValidAssetPath = true;
-                break;
-            }
-        }
-
-        if (!hasValidAssetPath)
+        if (!HasDraggedProjectAssetPath())
         {
             return false;
         }
@@ -1098,6 +1087,11 @@ public class UICreator
         for (int i = 0; i < draggedObjects.Length; i++)
         {
             UnityEngine.Object draggedObject = draggedObjects[i];
+            if (draggedObject == null || !AssetDatabase.Contains(draggedObject))
+            {
+                return false;
+            }
+
             Sprite sprite = draggedObject as Sprite;
 
             if (sprite == null && draggedObject is Texture2D)
@@ -1119,12 +1113,44 @@ public class UICreator
         return sprites.Count > 0;
     }
 
+    private static bool HasDraggedProjectAssetPath()
+    {
+        string[] draggedPaths = DragAndDrop.paths;
+        if (draggedPaths == null || draggedPaths.Length == 0)
+        {
+            return false;
+        }
+
+        for (int i = 0; i < draggedPaths.Length; i++)
+        {
+            string draggedPath = draggedPaths[i];
+            if (string.IsNullOrEmpty(draggedPath) ||
+                !draggedPath.StartsWith("Assets/", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            if (AssetDatabase.LoadMainAssetAtPath(draggedPath) != null)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     private static Sprite LoadSingleSpriteFromTexture(UnityEngine.Object texture)
     {
         string assetPath = AssetDatabase.GetAssetPath(texture);
         if (string.IsNullOrEmpty(assetPath))
         {
             return null;
+        }
+
+        Sprite mainSprite = AssetDatabase.LoadAssetAtPath<Sprite>(assetPath);
+        if (mainSprite != null)
+        {
+            return mainSprite;
         }
 
         UnityEngine.Object[] assets = AssetDatabase.LoadAllAssetsAtPath(assetPath);
@@ -1154,8 +1180,10 @@ public class UICreator
         Transform selectedTransform = Selection.activeTransform;
         RectTransform selectedRect = selectedTransform as RectTransform;
         if (selectedRect != null &&
-            selectedRect.GetComponentInParent<Canvas>() != null &&
-            IsInsideCurrentEditingContext(selectedRect, prefabStage))
+            IsInsideCurrentEditingContext(selectedRect, prefabStage) &&
+            (prefabStage != null
+                ? IsUIPrefabStage(prefabStage)
+                : selectedRect.GetComponentInParent<Canvas>() != null))
         {
             return selectedRect;
         }
@@ -1170,6 +1198,23 @@ public class UICreator
                 if (canvasRect != null && IsInsidePrefabStage(canvasRect, prefabStage))
                 {
                     return canvasRect;
+                }
+            }
+
+            RectTransform prefabRootRect =
+                prefabStage.prefabContentsRoot.transform as RectTransform;
+            if (prefabRootRect != null && IsInsidePrefabStage(prefabRootRect, prefabStage))
+            {
+                return prefabRootRect;
+            }
+
+            RectTransform[] prefabRects =
+                prefabStage.prefabContentsRoot.GetComponentsInChildren<RectTransform>(true);
+            for (int i = 0; i < prefabRects.Length; i++)
+            {
+                if (prefabRects[i] != null && IsInsidePrefabStage(prefabRects[i], prefabStage))
+                {
+                    return prefabRects[i];
                 }
             }
 
