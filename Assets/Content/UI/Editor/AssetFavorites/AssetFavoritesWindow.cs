@@ -66,8 +66,14 @@ public sealed class AssetFavoritesWindow : EditorWindow
 
     private void OnProjectChange()
     {
+        AssetFavoritesNodePreviewRenderer.ClearCache();
         ReloadLibrary();
         Repaint();
+    }
+
+    private void OnDisable()
+    {
+        AssetFavoritesNodePreviewRenderer.ClearCache();
     }
 
     private void OnGUI()
@@ -341,16 +347,25 @@ public sealed class AssetFavoritesWindow : EditorWindow
 
     private void DrawAssetPreview(Rect rect, EntryView entry)
     {
-        Texture preview = entry.Asset as Texture;
-        if (entry.Asset != null)
+        Texture preview = null;
+        if (entry.IsNodeTemplate)
         {
-            if (preview == null)
+            preview = AssetFavoritesNodePreviewRenderer.GetPreview(entry.Entry, entry.Asset as GameObject);
+        }
+
+        if (preview == null)
+        {
+            preview = entry.Asset as Texture;
+            if (entry.Asset != null)
             {
-                preview = AssetPreview.GetAssetPreview(entry.Asset);
-            }
-            if (preview == null)
-            {
-                preview = AssetPreview.GetMiniThumbnail(entry.Asset);
+                if (preview == null)
+                {
+                    preview = AssetPreview.GetAssetPreview(entry.Asset);
+                }
+                if (preview == null)
+                {
+                    preview = AssetPreview.GetMiniThumbnail(entry.Asset);
+                }
             }
         }
 

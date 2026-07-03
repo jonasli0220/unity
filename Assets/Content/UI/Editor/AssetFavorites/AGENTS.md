@@ -21,6 +21,7 @@
 - When adding without an explicit destination, classify assets by type automatically.
 - Scene or prefab-stage GameObjects can be saved as node templates. They should feel like favorites to the user, while the generated prefab remains implementation detail.
 - Node templates must be reusable by dragging or placing into a selected Hierarchy parent, and placed instances should be unpacked so designers are not forced into prefab-instance management.
+- Node template previews should render the captured UI itself through an Editor-only preview cache instead of exposing Unity's generic prefab cube wherever practical.
 - Skip already-favorited assets instead of creating duplicate entries.
 - Preserve standard Unity selection conventions: Ctrl/Cmd toggles, Shift ranges, single click pings, double click opens.
 - Keep the folder tree keyboard navigable and accept dragged favorite entries or Project assets.
