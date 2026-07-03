@@ -12,7 +12,9 @@
 
 - 直接把 Project 中的资产或文件夹拖到右侧内容区。
 - 直接把 Hierarchy 中的 UI 节点拖到右侧内容区，可收藏为节点模板。
-- 当前选择了左侧文件夹时，拖入内容收藏到该目录；选择 `All Favorites` 时，按 Prefab、Texture、Animation、Material、Audio 等类型自动分类。
+- 当前选择了左侧文件夹时，拖入内容收藏到该目录；选择 `All Favorites` 时，按 Prefab、Node、Sprite、VFX、Animation、Material、Other 自动分类。
+- `图片 Sprite` 接收 Sprite 与 Texture2D；`特效 VFX` 接收 Visual Effect Graph 资源，以及根节点为特效组件，或同时具备粒子 / Trail / VFX 组件和 VX、VFX、FX、Effect 命名特征的 prefab，避免把仅内嵌少量粒子的完整 UI 页面误判为特效。
+- Audio、Scene、Script、Font 不再单独显示，收藏时统一进入 `其他 Other`；已有收藏会保留，自定义文件夹中的手动整理不会被迁移。
 - 未指定目录时，节点模板会自动进入 `节点 Node` 分类。
 - 右侧支持路径搜索，以及由预览尺寸自动驱动的 Grid / List 浏览。
 - 节点模板在列表中显示为 `Node · 宽×高 · 主要组件`，并可按来源层级路径、组件类型搜索。

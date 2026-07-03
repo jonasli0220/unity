@@ -19,6 +19,7 @@
 
 - Optimize for designer workflows: Project context-menu add, drag-in, search, adaptive grid/list browsing, multi-select, ping, open, and drag-out must remain direct actions.
 - When adding without an explicit destination, classify assets by type automatically.
+- Keep the built-in automatic categories limited to Prefab, Node, Sprite, VFX, Animation, Material, and Other. Detect Visual Effect Graph assets directly; classify prefabs as VFX when their root is an effect component or when particle/trail/VFX components are paired with the project's VX/VFX/FX/Effect naming conventions. Preserve custom-folder placement during category migrations.
 - Scene or prefab-stage GameObjects can be saved as node templates. They should feel like favorites to the user, while the generated prefab remains implementation detail.
 - Node templates must be reusable by dragging or placing into a selected Hierarchy parent, and placed instances should be unpacked so designers are not forced into prefab-instance management.
 - Dropping node templates into the Scene view should place them as siblings immediately after the scene node that was selected before the drag started; without a valid scene selection, place them at the scene root.

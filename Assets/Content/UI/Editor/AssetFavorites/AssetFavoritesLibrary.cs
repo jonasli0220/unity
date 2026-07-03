@@ -45,19 +45,28 @@ public sealed partial class AssetFavoritesLibrary : ScriptableObject
     public const string AutoNodeFolderId = "auto-nodes";
 
     private const string LibraryFolder = "Assets/Content/UI/Library";
+    private const string AutoPrefabFolderId = "auto-prefabs";
+    private const string AutoSpriteFolderId = "auto-textures";
+    private const string AutoVfxFolderId = "auto-vfx";
+    private const string AutoOtherFolderId = "auto-other";
 
     private static readonly AutoFolderDefinition[] AutoFolders =
     {
-        new AutoFolderDefinition("auto-prefabs", "预制体 Prefab", 10),
+        new AutoFolderDefinition(AutoPrefabFolderId, "预制体 Prefab", 10),
         new AutoFolderDefinition(AutoNodeFolderId, "节点 Node", 15),
-        new AutoFolderDefinition("auto-textures", "贴图 Texture", 20),
-        new AutoFolderDefinition("auto-animations", "动画 Animation", 30),
-        new AutoFolderDefinition("auto-materials", "材质 Material", 40),
-        new AutoFolderDefinition("auto-audio", "音频 Audio", 50),
-        new AutoFolderDefinition("auto-scenes", "场景 Scene", 60),
-        new AutoFolderDefinition("auto-scripts", "脚本 Script", 70),
-        new AutoFolderDefinition("auto-fonts", "字体 Font", 80),
-        new AutoFolderDefinition("auto-other", "其他 Other", 90)
+        new AutoFolderDefinition(AutoSpriteFolderId, "图片 Sprite", 20),
+        new AutoFolderDefinition(AutoVfxFolderId, "特效 VFX", 30),
+        new AutoFolderDefinition("auto-animations", "动画 Animation", 40),
+        new AutoFolderDefinition("auto-materials", "材质 Material", 50),
+        new AutoFolderDefinition(AutoOtherFolderId, "其他 Other", 90)
+    };
+
+    private static readonly HashSet<string> ObsoleteAutoFolderIds = new HashSet<string>
+    {
+        "auto-audio",
+        "auto-scenes",
+        "auto-scripts",
+        "auto-fonts"
     };
 
     [SerializeField] private List<AssetFavoriteFolder> folders = new List<AssetFavoriteFolder>();
@@ -314,6 +323,44 @@ public sealed partial class AssetFavoritesLibrary : ScriptableObject
             }
         }
 
+        foreach (AssetFavoriteEntry entry in entries)
+        {
+            bool comesFromRemovedCategory = ObsoleteAutoFolderIds.Contains(entry.folderId);
+            bool usesVfxMigrationCategory = entry.folderId == AutoPrefabFolderId
+                                            || entry.folderId == AutoVfxFolderId
+                                            || entry.folderId == AutoOtherFolderId;
+            if (!comesFromRemovedCategory && !usesVfxMigrationCategory)
+            {
+                continue;
+            }
+
+            string classifiedFolderId = ClassifyEntry(entry);
+            if (comesFromRemovedCategory
+                || entry.folderId == AutoVfxFolderId
+                || classifiedFolderId == AutoVfxFolderId)
+            {
+                if (entry.folderId != classifiedFolderId)
+                {
+                    entry.folderId = classifiedFolderId;
+                    changed = true;
+                }
+            }
+        }
+
+        foreach (AssetFavoriteFolder folder in folders)
+        {
+            if (ObsoleteAutoFolderIds.Contains(folder.parentId))
+            {
+                folder.parentId = string.Empty;
+                changed = true;
+            }
+        }
+
+        if (folders.RemoveAll(folder => ObsoleteAutoFolderIds.Contains(folder.id)) > 0)
+        {
+            changed = true;
+        }
+
         return changed;
     }
 
@@ -383,16 +430,90 @@ public sealed partial class AssetFavoritesLibrary : ScriptableObject
         string extension = Path.GetExtension(path ?? string.Empty).ToLowerInvariant();
         Type type = string.IsNullOrEmpty(path) ? null : AssetDatabase.GetMainAssetTypeAtPath(path);
 
-        if (extension == ".prefab") return "auto-prefabs";
-        if (type == typeof(Texture2D) || type == typeof(Sprite)) return "auto-textures";
+        if (IsVfxAsset(path, type, extension)) return AutoVfxFolderId;
+        if (extension == ".prefab") return AutoPrefabFolderId;
+        if (type == typeof(Texture2D) || type == typeof(Sprite)) return AutoSpriteFolderId;
         if (type == typeof(AnimationClip) || type == typeof(RuntimeAnimatorController)
             || extension == ".controller" || extension == ".overridecontroller" || extension == ".mask") return "auto-animations";
         if (type == typeof(Material)) return "auto-materials";
-        if (type == typeof(AudioClip)) return "auto-audio";
-        if (type == typeof(SceneAsset) || extension == ".unity") return "auto-scenes";
-        if (type == typeof(MonoScript)) return "auto-scripts";
-        if (type == typeof(Font) || (type != null && type.FullName != null && type.FullName.Contains("TMP_FontAsset"))) return "auto-fonts";
-        return "auto-other";
+        return AutoOtherFolderId;
+    }
+
+    private static bool IsVfxAsset(string path, Type type, string extension)
+    {
+        if (extension == ".vfx" || extension == ".vfxoperator" || extension == ".vfxblock")
+        {
+            return true;
+        }
+
+        if (type != null && string.Equals(type.FullName, "UnityEngine.VFX.VisualEffectAsset", StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        if (extension != ".prefab")
+        {
+            return false;
+        }
+
+        GameObject prefab = AssetDatabase.LoadAssetAtPath<GameObject>(path);
+        if (prefab == null)
+        {
+            return false;
+        }
+
+        if (HasVfxComponent(prefab, false))
+        {
+            return true;
+        }
+
+        return HasVfxNamingHint(path) && HasVfxComponent(prefab, true);
+    }
+
+    private static bool HasVfxComponent(GameObject prefab, bool includeChildren)
+    {
+        if (includeChildren)
+        {
+            if (prefab.GetComponentInChildren<ParticleSystem>(true) != null
+                || prefab.GetComponentInChildren<TrailRenderer>(true) != null)
+            {
+                return true;
+            }
+
+            return prefab.GetComponentsInChildren<Component>(true)
+                .Any(IsVisualEffectComponent);
+        }
+
+        if (prefab.GetComponent<ParticleSystem>() != null || prefab.GetComponent<TrailRenderer>() != null)
+        {
+            return true;
+        }
+
+        return prefab.GetComponents<Component>().Any(IsVisualEffectComponent);
+    }
+
+    private static bool IsVisualEffectComponent(Component component)
+    {
+        return component != null
+               && string.Equals(
+                   component.GetType().FullName,
+                   "UnityEngine.VFX.VisualEffect",
+                   StringComparison.Ordinal);
+    }
+
+    private static bool HasVfxNamingHint(string path)
+    {
+        string[] tokens = (path ?? string.Empty)
+            .Replace('\\', '/')
+            .ToLowerInvariant()
+            .Split(new[] { '/', '_', '-', ' ', '.' }, StringSplitOptions.RemoveEmptyEntries);
+        return tokens.Any(token => token == "vfx"
+                                   || token == "vx"
+                                   || token == "fx"
+                                   || token == "effect"
+                                   || token == "effects"
+                                   || token == "particle"
+                                   || token == "particles");
     }
 
     private static void EnsureAssetFolder()
