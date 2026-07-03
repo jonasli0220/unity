@@ -993,7 +993,8 @@ public class PrefabNavigationOverlay : ToolbarOverlay
         PrefabHistoryButton.id,
         PrefabBackButton.id,
         PrefabForwardButton.id,
-        UIPcAdaptationPreviewButton.id)
+        UIPcAdaptationPreviewButton.id,
+        UIEffectPreviewButton.id)
     {
     }
 }
