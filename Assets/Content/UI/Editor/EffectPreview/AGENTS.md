@@ -2,7 +2,7 @@
 
 ## Scope
 
-This directory contains editor-only controls for previewing UI effects without entering Play Mode.
+This directory contains editor-only controls for previewing UI dynamic effects without entering Play Mode.
 
 ## Placement
 
@@ -14,8 +14,12 @@ This directory contains editor-only controls for previewing UI effects without e
 
 - Preview is available only outside Play Mode and must never enter Play Mode automatically.
 - The primary entry is a compact control in the existing `Prefab导航` Scene View overlay; keep a menu fallback under `Tools/UI/Effect Preview`.
-- In Prefab Stage, preview the selected hierarchy subtree when it contains particles; otherwise preview the whole opened prefab.
+- In Prefab Stage, preview the selected hierarchy subtree when it contains supported dynamic effects; otherwise preview the whole opened prefab.
 - In a regular scene, preview the selected hierarchy subtree only. Never silently simulate every particle in a gameplay scene.
-- Preview particle state only. Do not modify serialized particle settings, create Undo records, or mark scenes/prefabs dirty.
+- Supported preview types are Unity `ParticleSystem`, Spine `SkeletonGraphic` / `SkeletonAnimation` / `SkeletonMecanim`, `Animator`, and legacy `Animation`.
+- For project `UIPanelAnimation`, prefer the configured enter animation and automatically continue to the configured loop animation; otherwise use each component's configured default animation.
+- Animator and legacy Animation preview must use Unity Animation Mode so stopping restores sampled transforms and properties.
+- Spine preview must reset the runtime skeleton state on stop. Do not add `EditorSkeletonPlayer` or other persistent components to source objects.
+- Do not modify serialized effect settings, create Undo records, or mark scenes/prefabs dirty.
 - Stop and clear preview state before assembly reload, Play Mode changes, editor quit, Prefab Stage changes, or preview-target destruction.
-- Keep unsupported runtime-script, shader-time, Timeline, Animator, and Visual Effect Graph behavior explicit instead of pretending the preview matches Play Mode.
+- Keep unsupported custom runtime-script orchestration, shader-global time, Timeline, audio, and Visual Effect Graph behavior explicit instead of pretending the preview matches Play Mode.

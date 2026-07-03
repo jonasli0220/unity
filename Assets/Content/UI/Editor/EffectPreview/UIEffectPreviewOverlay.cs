@@ -4,14 +4,13 @@ using UnityEditor;
 using UnityEditor.SceneManagement;
 using UnityEditor.Toolbars;
 using UnityEngine;
-using UnityEngine.SceneManagement;
 using UnityEngine.UIElements;
 
 [InitializeOnLoad]
 public static class UIEffectPreviewController
 {
-    private const string ToggleMenuPath = "Tools/UI/Effect Preview/Play or Stop Particles";
-    private const string StopMenuPath = "Tools/UI/Effect Preview/Stop and Clear Particles";
+    private const string ToggleMenuPath = "Tools/UI/Effect Preview/Play or Stop Dynamic Effects";
+    private const string StopMenuPath = "Tools/UI/Effect Preview/Stop and Reset Dynamic Effects";
     private const float MaxSimulationStep = 0.05f;
 
     private static readonly List<ParticleSystem> ActiveParticleSystems = new List<ParticleSystem>();
@@ -32,35 +31,37 @@ public static class UIEffectPreviewController
 
     public static bool IsPreviewing
     {
-        get { return ActiveParticleSystems.Count > 0; }
+        get { return ActiveParticleSystems.Count > 0 || UIExtendedEffectPreview.IsPreviewing; }
     }
 
     public static bool HasPreviewTargets()
     {
-        return CollectParticleSystems().Count > 0;
+        return CollectParticleSystems().Count > 0 || UIExtendedEffectPreview.HasPreviewTargets();
     }
 
     public static bool StartPreview()
     {
         if (EditorApplication.isPlayingOrWillChangePlaymode)
         {
-            Warn("粒子预览只在非运行模式可用。", "Exit Play Mode first");
+            Warn("动态效果预览只在非运行模式可用。", "请先退出运行模式");
             return false;
         }
 
         List<ParticleSystem> targets = CollectParticleSystems();
-        if (targets.Count == 0)
+        bool hasExtendedTargets = UIExtendedEffectPreview.HasPreviewTargets();
+        if (targets.Count == 0 && !hasExtendedTargets)
         {
             Warn(
                 PrefabStageUtility.GetCurrentPrefabStage() != null
-                    ? "当前 Prefab 中没有可预览的 ParticleSystem。"
-                    : "请先选择包含 ParticleSystem 的节点。",
-                "No particles found");
+                    ? "当前 Prefab 中没有可预览的粒子、Spine、Animator 或 Animation。"
+                    : "请先选择包含动态效果的节点。",
+                "没有找到可预览的动态效果");
             return false;
         }
 
         StopPreview(false);
         ActiveParticleSystems.AddRange(targets);
+        bool extendedStarted = UIExtendedEffectPreview.StartPreview();
 
         for (int i = 0; i < ActiveParticleSystems.Count; i++)
         {
@@ -75,9 +76,16 @@ public static class UIEffectPreviewController
             particleSystem.Simulate(0f, false, true, true);
         }
 
+        if (ActiveParticleSystems.Count == 0 && !extendedStarted)
+        {
+            Warn("找到的动态效果没有可播放的动画或有效资源。", "动态效果没有可播放内容");
+            return false;
+        }
+
         lastUpdateTime = EditorApplication.timeSinceStartup;
-        Debug.Log($"Effect preview started. ParticleSystem count: {ActiveParticleSystems.Count}. Click ■ 粒子 to stop and clear.");
-        NotifySceneView($"正在预览 {ActiveParticleSystems.Count} 个粒子系统");
+        string summary = $"粒子 {ActiveParticleSystems.Count} / {UIExtendedEffectPreview.Summary}";
+        Debug.Log("Dynamic effect preview started. " + summary + ". Click ■ 动效 to stop and reset.");
+        NotifySceneView("正在预览：" + summary);
         RefreshViews();
         PreviewStateChanged?.Invoke();
         return true;
@@ -122,7 +130,7 @@ public static class UIEffectPreviewController
 
     private static void StopPreview(bool notify)
     {
-        bool hadPreview = ActiveParticleSystems.Count > 0;
+        bool hadPreview = IsPreviewing;
 
         for (int i = 0; i < ActiveParticleSystems.Count; i++)
         {
@@ -137,6 +145,7 @@ public static class UIEffectPreviewController
         }
 
         ActiveParticleSystems.Clear();
+        UIExtendedEffectPreview.StopPreview();
         lastUpdateTime = 0d;
 
         if (!hadPreview)
@@ -146,8 +155,8 @@ public static class UIEffectPreviewController
 
         if (notify)
         {
-            Debug.Log("Effect preview stopped and particle state was cleared.");
-            NotifySceneView("粒子预览已停止");
+            Debug.Log("Dynamic effect preview stopped and temporary edit-mode state was reset.");
+            NotifySceneView("动效预览已停止");
         }
 
         RefreshViews();
@@ -169,26 +178,25 @@ public static class UIEffectPreviewController
             return;
         }
 
-        bool hasValidTarget = false;
+        bool shouldRefresh = false;
         for (int i = ActiveParticleSystems.Count - 1; i >= 0; i--)
         {
             ParticleSystem particleSystem = ActiveParticleSystems[i];
-            if (particleSystem == null || !IsPreviewableSceneObject(particleSystem))
+            if (particleSystem == null || !UIEffectPreviewTargetUtility.IsPreviewable(particleSystem))
             {
                 ActiveParticleSystems.RemoveAt(i);
                 continue;
             }
 
-            if (!particleSystem.gameObject.activeInHierarchy)
-            {
-                continue;
-            }
-
             particleSystem.Simulate(deltaTime, false, false, true);
-            hasValidTarget = true;
+            shouldRefresh = true;
         }
 
-        if (ActiveParticleSystems.Count == 0)
+        bool hadExtendedPreview = UIExtendedEffectPreview.IsPreviewing;
+        UIExtendedEffectPreview.Update(deltaTime);
+        shouldRefresh |= hadExtendedPreview || UIExtendedEffectPreview.IsPreviewing;
+
+        if (!IsPreviewing)
         {
             lastUpdateTime = 0d;
             RefreshViews();
@@ -196,7 +204,7 @@ public static class UIEffectPreviewController
             return;
         }
 
-        if (hasValidTarget)
+        if (shouldRefresh)
         {
             RefreshViews();
         }
@@ -216,50 +224,14 @@ public static class UIEffectPreviewController
     {
         List<ParticleSystem> result = new List<ParticleSystem>();
         HashSet<int> seen = new HashSet<int>();
-        PrefabStage prefabStage = PrefabStageUtility.GetCurrentPrefabStage();
+        List<GameObject> roots = UIEffectPreviewTargetUtility.CollectTargetRoots();
 
-        if (prefabStage != null && prefabStage.prefabContentsRoot != null)
+        for (int i = 0; i < roots.Count; i++)
         {
-            AddSelectedParticleSystems(result, seen, prefabStage.scene, prefabStage.prefabContentsRoot.transform);
-            if (result.Count == 0)
-            {
-                AddParticleSystemsUnder(result, seen, prefabStage.prefabContentsRoot);
-            }
-
-            return result;
+            AddParticleSystemsUnder(result, seen, roots[i]);
         }
 
-        AddSelectedParticleSystems(result, seen, default(Scene), null);
         return result;
-    }
-
-    private static void AddSelectedParticleSystems(
-        List<ParticleSystem> result,
-        HashSet<int> seen,
-        Scene requiredScene,
-        Transform requiredRoot)
-    {
-        GameObject[] selectedObjects = Selection.gameObjects;
-        for (int i = 0; i < selectedObjects.Length; i++)
-        {
-            GameObject selectedObject = selectedObjects[i];
-            if (selectedObject == null || !IsSceneObject(selectedObject))
-            {
-                continue;
-            }
-
-            if (requiredScene.IsValid() && selectedObject.scene != requiredScene)
-            {
-                continue;
-            }
-
-            if (requiredRoot != null && !IsTransformUnder(selectedObject.transform, requiredRoot))
-            {
-                continue;
-            }
-
-            AddParticleSystemsUnder(result, seen, selectedObject);
-        }
     }
 
     private static void AddParticleSystemsUnder(
@@ -276,7 +248,7 @@ public static class UIEffectPreviewController
         for (int i = 0; i < particleSystems.Length; i++)
         {
             ParticleSystem particleSystem = particleSystems[i];
-            if (!IsPreviewableSceneObject(particleSystem) || !particleSystem.gameObject.activeInHierarchy)
+            if (!UIEffectPreviewTargetUtility.IsPreviewable(particleSystem))
             {
                 continue;
             }
@@ -287,37 +259,6 @@ public static class UIEffectPreviewController
                 result.Add(particleSystem);
             }
         }
-    }
-
-    private static bool IsPreviewableSceneObject(Component component)
-    {
-        return component != null
-            && !EditorUtility.IsPersistent(component)
-            && IsSceneObject(component.gameObject);
-    }
-
-    private static bool IsSceneObject(GameObject gameObject)
-    {
-        return gameObject != null
-            && !EditorUtility.IsPersistent(gameObject)
-            && gameObject.scene.IsValid()
-            && gameObject.scene.isLoaded;
-    }
-
-    private static bool IsTransformUnder(Transform child, Transform root)
-    {
-        Transform current = child;
-        while (current != null)
-        {
-            if (current == root)
-            {
-                return true;
-            }
-
-            current = current.parent;
-        }
-
-        return false;
     }
 
     private static void Warn(string logMessage, string notification)
@@ -358,7 +299,7 @@ public class UIEffectPreviewButton : Button
 
     public UIEffectPreviewButton()
     {
-        tooltip = "非运行模式预览粒子。Prefab 模式下优先播放选中节点；选中节点没有粒子时播放整个 Prefab。再次点击停止并清空。";
+        tooltip = "非运行模式预览粒子、Spine、Animator 和 Animation 动效。Prefab 模式下优先播放选中节点；选中节点没有动效时播放整个 Prefab。再次点击停止并复位。";
         clicked += OnClicked;
         RegisterCallback<MouseDownEvent>(OnMouseDown, TrickleDown.TrickleDown);
 
@@ -425,7 +366,7 @@ public class UIEffectPreviewButton : Button
     private void RefreshState()
     {
         bool isPreviewing = UIEffectPreviewController.IsPreviewing;
-        text = isPreviewing ? "■ 粒子" : "▶ 粒子";
+        text = isPreviewing ? "■ 动效" : "▶ 动效";
         SetEnabled(isPreviewing
             || (!EditorApplication.isPlayingOrWillChangePlaymode
                 && UIEffectPreviewController.HasPreviewTargets()));
