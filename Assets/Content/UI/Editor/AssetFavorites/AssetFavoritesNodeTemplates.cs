@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using UnityEditor;
 using UnityEngine;
+using UnityEngine.SceneManagement;
 
 public sealed partial class AssetFavoritesLibrary
 {
@@ -126,7 +127,27 @@ public sealed partial class AssetFavoritesLibrary
 
     public int InstantiateNodeTemplates(IEnumerable<string> entryIds, Transform parent, out List<GameObject> createdObjects)
     {
+        return InstantiateNodeTemplates(entryIds, parent, -1, out createdObjects);
+    }
+
+    public int InstantiateNodeTemplates(
+        IEnumerable<string> entryIds,
+        Transform parent,
+        int siblingIndex,
+        out List<GameObject> createdObjects)
+    {
+        return InstantiateNodeTemplates(entryIds, parent, siblingIndex, default(Scene), out createdObjects);
+    }
+
+    public int InstantiateNodeTemplates(
+        IEnumerable<string> entryIds,
+        Transform parent,
+        int siblingIndex,
+        Scene destinationScene,
+        out List<GameObject> createdObjects)
+    {
         createdObjects = new List<GameObject>();
+        int nextSiblingIndex = siblingIndex;
         foreach (string entryId in (entryIds ?? Enumerable.Empty<string>()).Distinct())
         {
             AssetFavoriteEntry entry = FindEntryById(entryId);
@@ -156,11 +177,25 @@ public sealed partial class AssetFavoritesLibrary
                 continue;
             }
 
+            if (parent == null
+                && destinationScene.IsValid()
+                && destinationScene.isLoaded
+                && instance.scene != destinationScene)
+            {
+                SceneManager.MoveGameObjectToScene(instance, destinationScene);
+            }
+
             instance.name = string.IsNullOrEmpty(entry.displayName) ? template.name : entry.displayName;
             Undo.RegisterCreatedObjectUndo(instance, "Place Favorite Node");
             if (PrefabUtility.IsPartOfPrefabInstance(instance))
             {
                 PrefabUtility.UnpackPrefabInstance(instance, PrefabUnpackMode.Completely, InteractionMode.AutomatedAction);
+            }
+
+            if (nextSiblingIndex >= 0)
+            {
+                instance.transform.SetSiblingIndex(nextSiblingIndex);
+                nextSiblingIndex++;
             }
 
             createdObjects.Add(instance);
@@ -455,8 +490,77 @@ internal static class AssetFavoritesHierarchyDropHandler
             DragAndDrop.AcceptDrag();
             DragAndDrop.SetGenericData(AssetFavoritesWindow.NodeTemplateDragKey, null);
             DragAndDrop.SetGenericData(AssetFavoritesWindow.EntryDragKey, null);
+            DragAndDrop.SetGenericData(AssetFavoritesWindow.SceneSiblingTargetDragKey, null);
         }
 
         current.Use();
+    }
+}
+
+[InitializeOnLoad]
+internal static class AssetFavoritesSceneDropHandler
+{
+    static AssetFavoritesSceneDropHandler()
+    {
+        SceneView.duringSceneGui += OnSceneGUI;
+    }
+
+    private static void OnSceneGUI(SceneView sceneView)
+    {
+        Event current = Event.current;
+        if (current.type != EventType.DragUpdated && current.type != EventType.DragPerform)
+        {
+            return;
+        }
+
+        string[] nodeTemplateEntryIds = DragAndDrop.GetGenericData(AssetFavoritesWindow.NodeTemplateDragKey) as string[];
+        if (nodeTemplateEntryIds == null || nodeTemplateEntryIds.Length == 0)
+        {
+            return;
+        }
+
+        DragAndDrop.visualMode = DragAndDropVisualMode.Copy;
+        if (current.type == EventType.DragPerform)
+        {
+            GameObject siblingTarget = GetSiblingTarget();
+            Transform parent = siblingTarget == null ? null : siblingTarget.transform.parent;
+            int siblingIndex = siblingTarget == null ? -1 : siblingTarget.transform.GetSiblingIndex() + 1;
+
+            AssetFavoritesLibrary library = AssetFavoritesLibrary.LoadOrCreate();
+            List<GameObject> createdObjects;
+            library.InstantiateNodeTemplates(
+                nodeTemplateEntryIds,
+                parent,
+                siblingIndex,
+                siblingTarget == null ? default(Scene) : siblingTarget.scene,
+                out createdObjects);
+
+            DragAndDrop.AcceptDrag();
+            DragAndDrop.SetGenericData(AssetFavoritesWindow.NodeTemplateDragKey, null);
+            DragAndDrop.SetGenericData(AssetFavoritesWindow.EntryDragKey, null);
+            DragAndDrop.SetGenericData(AssetFavoritesWindow.SceneSiblingTargetDragKey, null);
+            EditorApplication.RepaintHierarchyWindow();
+            sceneView.Repaint();
+        }
+
+        current.Use();
+    }
+
+    private static GameObject GetSiblingTarget()
+    {
+        object instanceIdData = DragAndDrop.GetGenericData(AssetFavoritesWindow.SceneSiblingTargetDragKey);
+        int instanceId = instanceIdData is int ? (int)instanceIdData : 0;
+        GameObject target = instanceId == 0
+            ? null
+            : EditorUtility.InstanceIDToObject(instanceId) as GameObject;
+        if (target == null
+            || EditorUtility.IsPersistent(target)
+            || !target.scene.IsValid()
+            || !target.scene.isLoaded)
+        {
+            return null;
+        }
+
+        return target;
     }
 }

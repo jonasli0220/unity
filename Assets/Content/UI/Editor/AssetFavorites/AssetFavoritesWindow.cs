@@ -10,6 +10,7 @@ public sealed class AssetFavoritesWindow : EditorWindow
 {
     internal const string EntryDragKey = "Dragon.AssetFavorites.EntryIds";
     internal const string NodeTemplateDragKey = "Dragon.AssetFavorites.NodeTemplateEntryIds";
+    internal const string SceneSiblingTargetDragKey = "Dragon.AssetFavorites.SceneSiblingTargetInstanceId";
 
     private const string MenuPath = "Tools/UI/Asset Favorites";
     private const string PreviewSizePrefsKey = "Dragon.AssetFavorites.PreviewSize";
@@ -38,6 +39,7 @@ public sealed class AssetFavoritesWindow : EditorWindow
     private string selectionAnchorGuid = string.Empty;
     private string mouseDownGuid = string.Empty;
     private Vector2 mouseDownPosition;
+    private int mouseDownSceneTargetInstanceId;
 
     private bool IsListView
     {
@@ -389,6 +391,7 @@ public sealed class AssetFavoritesWindow : EditorWindow
 
         if (current.type == EventType.MouseDown && current.button == 0)
         {
+            mouseDownSceneTargetInstanceId = GetSelectedSceneGameObjectInstanceId();
             ApplyEntrySelection(entry.Id, visibleEntries, current.control || current.command, current.shift);
             PingEntry(entry);
             mouseDownGuid = entry.Id;
@@ -497,9 +500,29 @@ public sealed class AssetFavoritesWindow : EditorWindow
         DragAndDrop.PrepareStartDrag();
         DragAndDrop.SetGenericData(EntryDragKey, entryIds);
         DragAndDrop.SetGenericData(NodeTemplateDragKey, nodeTemplateIds.Length > 0 ? nodeTemplateIds : null);
+        DragAndDrop.SetGenericData(
+            SceneSiblingTargetDragKey,
+            nodeTemplateIds.Length > 0 && mouseDownSceneTargetInstanceId != 0
+                ? (object)mouseDownSceneTargetInstanceId
+                : null);
         DragAndDrop.objectReferences = objects;
         DragAndDrop.StartDrag(entryIds.Length == 1 ? "Favorite" : entryIds.Length + " Favorites");
         mouseDownGuid = string.Empty;
+        mouseDownSceneTargetInstanceId = 0;
+    }
+
+    private static int GetSelectedSceneGameObjectInstanceId()
+    {
+        GameObject selected = Selection.activeGameObject;
+        if (selected == null
+            || EditorUtility.IsPersistent(selected)
+            || !selected.scene.IsValid()
+            || !selected.scene.isLoaded)
+        {
+            return 0;
+        }
+
+        return selected.GetInstanceID();
     }
 
     private void HandleIncomingDrop(Rect rect)
