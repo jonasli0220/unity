@@ -9,14 +9,18 @@
 ## Shared Data
 
 - Store the team-shared favorites library at `Assets/Content/UI/Library/AssetFavoritesLibrary.asset`.
-- Persist asset references by Unity GUID, not by direct object reference or absolute path.
+- Persist project asset references by Unity GUID, not by direct object reference or absolute path.
+- Store generated node-template prefabs only under `Assets/Content/UI/Library/AssetFavoritesNodeTemplates`.
 - Treat the library asset as relationship data only. Removing an entry or folder must never delete, move, or edit the referenced source asset.
+- Removing a node-template favorite may delete its generated template prefab, but must never delete or edit the original scene or prefab-stage node it was captured from.
 - Keep folders and favorite entries serializable with stable IDs so nested organization survives renames and asset moves.
 
 ## Interaction Rules
 
 - Optimize for designer workflows: Project context-menu add, drag-in, search, adaptive grid/list browsing, multi-select, ping, open, and drag-out must remain direct actions.
 - When adding without an explicit destination, classify assets by type automatically.
+- Scene or prefab-stage GameObjects can be saved as node templates. They should feel like favorites to the user, while the generated prefab remains implementation detail.
+- Node templates must be reusable by dragging or placing into a selected Hierarchy parent, and placed instances should be unpacked so designers are not forced into prefab-instance management.
 - Skip already-favorited assets instead of creating duplicate entries.
 - Preserve standard Unity selection conventions: Ctrl/Cmd toggles, Shift ranges, single click pings, double click opens.
 - Keep the folder tree keyboard navigable and accept dragged favorite entries or Project assets.

@@ -18,19 +18,38 @@ public sealed class AssetFavoriteFolder
 [Serializable]
 public sealed class AssetFavoriteEntry
 {
+    public string id = string.Empty;
+    public AssetFavoriteEntryKind kind = AssetFavoriteEntryKind.Asset;
     public string assetGuid = string.Empty;
+    public string templateGuid = string.Empty;
     public string folderId = string.Empty;
+    public string displayName = string.Empty;
+    public string sourceScenePath = string.Empty;
+    public string sourceHierarchyPath = string.Empty;
+    public string sourceGlobalObjectId = string.Empty;
+    public string primaryComponent = string.Empty;
+    public int rectWidth;
+    public int rectHeight;
 }
 
-public sealed class AssetFavoritesLibrary : ScriptableObject
+public enum AssetFavoriteEntryKind
+{
+    Asset = 0,
+    NodeTemplate = 1
+}
+
+public sealed partial class AssetFavoritesLibrary : ScriptableObject
 {
     public const string AssetPath = "Assets/Content/UI/Library/AssetFavoritesLibrary.asset";
+    public const string NodeTemplatesFolder = "Assets/Content/UI/Library/AssetFavoritesNodeTemplates";
+    public const string AutoNodeFolderId = "auto-nodes";
 
     private const string LibraryFolder = "Assets/Content/UI/Library";
 
     private static readonly AutoFolderDefinition[] AutoFolders =
     {
         new AutoFolderDefinition("auto-prefabs", "预制体 Prefab", 10),
+        new AutoFolderDefinition(AutoNodeFolderId, "节点 Node", 15),
         new AutoFolderDefinition("auto-textures", "贴图 Texture", 20),
         new AutoFolderDefinition("auto-animations", "动画 Animation", 30),
         new AutoFolderDefinition("auto-materials", "材质 Material", 40),
@@ -153,6 +172,8 @@ public sealed class AssetFavoritesLibrary : ScriptableObject
         }
         while (foundChild);
 
+        List<AssetFavoriteEntry> removingEntries = entries.Where(entry => folderIds.Contains(entry.folderId)).ToList();
+        DeleteGeneratedTemplates(removingEntries);
         int removedEntries = entries.RemoveAll(entry => folderIds.Contains(entry.folderId));
         folders.RemoveAll(candidate => folderIds.Contains(candidate.id));
         Save();
@@ -163,7 +184,9 @@ public sealed class AssetFavoritesLibrary : ScriptableObject
     {
         EnsureDefaultFolders();
         List<string> expandedPaths = ExpandProjectPaths(projectPaths);
-        HashSet<string> existingGuids = new HashSet<string>(entries.Select(entry => entry.assetGuid));
+        HashSet<string> existingGuids = new HashSet<string>(entries
+            .Where(entry => entry.kind == AssetFavoriteEntryKind.Asset)
+            .Select(entry => entry.assetGuid));
         int addedCount = 0;
         skippedCount = 0;
 
@@ -191,20 +214,20 @@ public sealed class AssetFavoritesLibrary : ScriptableObject
         return addedCount;
     }
 
-    public int MoveEntries(IEnumerable<string> assetGuids, string destinationFolderId)
+    public int MoveEntries(IEnumerable<string> entryIds, string destinationFolderId)
     {
-        HashSet<string> movingGuids = new HashSet<string>(assetGuids ?? Enumerable.Empty<string>());
+        HashSet<string> movingIds = new HashSet<string>(entryIds ?? Enumerable.Empty<string>());
         int moved = 0;
         foreach (AssetFavoriteEntry entry in entries)
         {
-            if (!movingGuids.Contains(entry.assetGuid))
+            if (!movingIds.Contains(GetEntryId(entry)))
             {
                 continue;
             }
 
             string newFolderId = IsValidDestination(destinationFolderId)
                 ? destinationFolderId
-                : ClassifyAsset(AssetDatabase.GUIDToAssetPath(entry.assetGuid));
+                : ClassifyEntry(entry);
             if (entry.folderId != newFolderId)
             {
                 entry.folderId = newFolderId;
@@ -220,10 +243,12 @@ public sealed class AssetFavoritesLibrary : ScriptableObject
         return moved;
     }
 
-    public int RemoveEntries(IEnumerable<string> assetGuids)
+    public int RemoveEntries(IEnumerable<string> entryIds)
     {
-        HashSet<string> removing = new HashSet<string>(assetGuids ?? Enumerable.Empty<string>());
-        int removed = entries.RemoveAll(entry => removing.Contains(entry.assetGuid));
+        HashSet<string> removing = new HashSet<string>(entryIds ?? Enumerable.Empty<string>());
+        List<AssetFavoriteEntry> removingEntries = entries.Where(entry => removing.Contains(GetEntryId(entry))).ToList();
+        DeleteGeneratedTemplates(removingEntries);
+        int removed = entries.RemoveAll(entry => removing.Contains(GetEntryId(entry)));
         if (removed > 0)
         {
             Save();
@@ -343,6 +368,7 @@ public sealed class AssetFavoritesLibrary : ScriptableObject
     {
         if (string.IsNullOrEmpty(path)
             || path == AssetPath
+            || path.StartsWith(NodeTemplatesFolder + "/", StringComparison.OrdinalIgnoreCase)
             || AssetDatabase.IsValidFolder(path)
             || AssetDatabase.LoadMainAssetAtPath(path) == null)
         {

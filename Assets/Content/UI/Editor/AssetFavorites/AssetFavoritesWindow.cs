@@ -8,7 +8,8 @@ using UnityEngine;
 
 public sealed class AssetFavoritesWindow : EditorWindow
 {
-    internal const string EntryDragKey = "Dragon.AssetFavorites.EntryGuids";
+    internal const string EntryDragKey = "Dragon.AssetFavorites.EntryIds";
+    internal const string NodeTemplateDragKey = "Dragon.AssetFavorites.NodeTemplateEntryIds";
 
     private const string MenuPath = "Tools/UI/Asset Favorites";
     private const string PreviewSizePrefsKey = "Dragon.AssetFavorites.PreviewSize";
@@ -30,7 +31,7 @@ public sealed class AssetFavoritesWindow : EditorWindow
     private AssetFavoritesTreeView treeView;
     private string currentFolderId = string.Empty;
     private string searchText = string.Empty;
-    private string statusText = "将 Project 中的资产或文件夹拖到这里收藏";
+    private string statusText = "将 Project 资产、文件夹或 Hierarchy 节点拖到这里收藏";
     private Vector2 contentScroll;
     private float previewSize = DefaultPreviewSize;
     private readonly HashSet<string> selectedGuids = new HashSet<string>();
@@ -140,13 +141,13 @@ public sealed class AssetFavoritesWindow : EditorWindow
     private void DrawContentPanel(Rect rect, List<EntryView> visibleEntries)
     {
         DrawEntries(rect, visibleEntries);
-        HandleProjectDrop(rect);
+        HandleIncomingDrop(rect);
     }
 
     private void DrawStatusBar(Rect rect, int visibleCount)
     {
         EditorGUI.DrawRect(rect, EditorGUIUtility.isProSkin ? new Color(0.16f, 0.16f, 0.16f) : new Color(0.88f, 0.88f, 0.88f));
-        GUI.Label(new Rect(rect.x + 8f, rect.y + 4f, 78f, 18f), visibleCount + " 个资产", EditorStyles.miniLabel);
+        GUI.Label(new Rect(rect.x + 8f, rect.y + 4f, 78f, 18f), visibleCount + " 个收藏", EditorStyles.miniLabel);
 
         const float controlsWidth = 230f;
         Rect controlsRect = new Rect(rect.xMax - controlsWidth - 6f, rect.y + 2f, controlsWidth, rect.height - 4f);
@@ -243,7 +244,7 @@ public sealed class AssetFavoritesWindow : EditorWindow
         if (visibleEntries.Count == 0)
         {
             string message = string.IsNullOrEmpty(searchText)
-                ? "拖入资产开始收藏"
+                ? "拖入资产或节点开始收藏"
                 : "没有匹配的收藏";
             GUI.Label(contentRect, message, CenteredLabelStyle());
             return;
@@ -294,7 +295,7 @@ public sealed class AssetFavoritesWindow : EditorWindow
 
     private void DrawGridEntry(Rect rect, EntryView entry)
     {
-        bool selected = selectedGuids.Contains(entry.Entry.assetGuid);
+        bool selected = selectedGuids.Contains(entry.Id);
         bool hovered = rect.Contains(Event.current.mousePosition);
         if (selected)
         {
@@ -307,12 +308,16 @@ public sealed class AssetFavoritesWindow : EditorWindow
 
         Rect previewRect = new Rect(rect.x + 8f, rect.y + 5f, previewSize, previewSize);
         DrawAssetPreview(previewRect, entry);
-        GUI.Label(new Rect(rect.x + 4f, previewRect.yMax + 3f, rect.width - 8f, 30f), entry.DisplayName, CenteredMiniLabelStyle());
+        GUI.Label(new Rect(rect.x + 4f, previewRect.yMax + 2f, rect.width - 8f, 17f), entry.DisplayName, CenteredMiniLabelStyle());
+        if (!string.IsNullOrEmpty(entry.DetailText))
+        {
+            GUI.Label(new Rect(rect.x + 4f, previewRect.yMax + 18f, rect.width - 8f, 16f), entry.DetailText, CenteredMiniDetailStyle());
+        }
     }
 
     private void DrawListEntry(Rect rect, EntryView entry)
     {
-        bool selected = selectedGuids.Contains(entry.Entry.assetGuid);
+        bool selected = selectedGuids.Contains(entry.Id);
         bool hovered = rect.Contains(Event.current.mousePosition);
         if (selected)
         {
@@ -325,7 +330,13 @@ public sealed class AssetFavoritesWindow : EditorWindow
 
         Rect iconRect = new Rect(rect.x + 6f, rect.y + 2f, 20f, 20f);
         DrawAssetPreview(iconRect, entry);
-        GUI.Label(new Rect(iconRect.xMax + 7f, rect.y + 2f, rect.width - iconRect.width - 18f, 20f), new GUIContent(entry.DisplayName, entry.Path), EditorStyles.label);
+        float detailWidth = string.IsNullOrEmpty(entry.DetailText) ? 0f : Mathf.Min(220f, Mathf.Max(120f, rect.width * 0.36f));
+        Rect nameRect = new Rect(iconRect.xMax + 7f, rect.y + 2f, rect.width - iconRect.width - detailWidth - 24f, 20f);
+        GUI.Label(nameRect, new GUIContent(entry.DisplayName, entry.Tooltip), EditorStyles.label);
+        if (detailWidth > 0f)
+        {
+            GUI.Label(new Rect(rect.xMax - detailWidth - 8f, rect.y + 2f, detailWidth, 20f), entry.DetailText, EditorStyles.centeredGreyMiniLabel);
+        }
     }
 
     private void DrawAssetPreview(Rect rect, EntryView entry)
@@ -363,14 +374,14 @@ public sealed class AssetFavoritesWindow : EditorWindow
 
         if (current.type == EventType.MouseDown && current.button == 0)
         {
-            ApplyEntrySelection(entry.Entry.assetGuid, visibleEntries, current.control || current.command, current.shift);
-            Ping(entry.Asset);
-            mouseDownGuid = entry.Entry.assetGuid;
+            ApplyEntrySelection(entry.Id, visibleEntries, current.control || current.command, current.shift);
+            PingEntry(entry);
+            mouseDownGuid = entry.Id;
             mouseDownPosition = current.mousePosition;
 
             if (current.clickCount == 2)
             {
-                Open(entry.Asset);
+                OpenEntry(entry);
             }
 
             current.Use();
@@ -385,16 +396,26 @@ public sealed class AssetFavoritesWindow : EditorWindow
         }
         else if (current.type == EventType.ContextClick)
         {
-            if (!selectedGuids.Contains(entry.Entry.assetGuid))
+            if (!selectedGuids.Contains(entry.Id))
             {
                 selectedGuids.Clear();
-                selectedGuids.Add(entry.Entry.assetGuid);
-                selectionAnchorGuid = entry.Entry.assetGuid;
+                selectedGuids.Add(entry.Id);
+                selectionAnchorGuid = entry.Id;
             }
 
             GenericMenu menu = new GenericMenu();
-            menu.AddItem(new GUIContent("Ping in Project"), false, () => Ping(entry.Asset));
-            menu.AddItem(new GUIContent("Open"), false, () => Open(entry.Asset));
+            if (entry.IsNodeTemplate)
+            {
+                menu.AddItem(new GUIContent("放到当前选中节点下"), false, PlaceSelectedNodeTemplatesUnderSelection);
+                menu.AddItem(new GUIContent("定位源节点"), false, () => PingEntry(entry));
+                menu.AddItem(new GUIContent("打开来源"), false, () => OpenEntry(entry));
+                menu.AddItem(new GUIContent("定位模板资源"), false, () => Ping(entry.Asset));
+            }
+            else
+            {
+                menu.AddItem(new GUIContent("Ping in Project"), false, () => Ping(entry.Asset));
+                menu.AddItem(new GUIContent("Open"), false, () => Open(entry.Asset));
+            }
             menu.AddSeparator(string.Empty);
             menu.AddItem(new GUIContent("Remove from Favorites"), false, RemoveSelectedEntries);
             menu.ShowAsContext();
@@ -406,8 +427,8 @@ public sealed class AssetFavoritesWindow : EditorWindow
     {
         if (range && !string.IsNullOrEmpty(selectionAnchorGuid))
         {
-            int anchorIndex = visibleEntries.FindIndex(entry => entry.Entry.assetGuid == selectionAnchorGuid);
-            int clickedIndex = visibleEntries.FindIndex(entry => entry.Entry.assetGuid == guid);
+            int anchorIndex = visibleEntries.FindIndex(entry => entry.Id == selectionAnchorGuid);
+            int clickedIndex = visibleEntries.FindIndex(entry => entry.Id == guid);
             if (anchorIndex >= 0 && clickedIndex >= 0)
             {
                 if (!toggle)
@@ -419,7 +440,7 @@ public sealed class AssetFavoritesWindow : EditorWindow
                 int end = Mathf.Max(anchorIndex, clickedIndex);
                 for (int i = start; i <= end; i++)
                 {
-                    selectedGuids.Add(visibleEntries[i].Entry.assetGuid);
+                    selectedGuids.Add(visibleEntries[i].Id);
                 }
                 return;
             }
@@ -443,21 +464,30 @@ public sealed class AssetFavoritesWindow : EditorWindow
 
     private void StartEntryDrag()
     {
-        string[] guids = selectedGuids.Count > 0 ? selectedGuids.ToArray() : new[] { mouseDownGuid };
-        UnityEngine.Object[] objects = guids
-            .Select(AssetDatabase.GUIDToAssetPath)
-            .Select(AssetDatabase.LoadMainAssetAtPath)
+        string[] entryIds = selectedGuids.Count > 0 ? selectedGuids.ToArray() : new[] { mouseDownGuid };
+        List<AssetFavoriteEntry> draggedEntries = entryIds
+            .Select(library.FindEntryById)
+            .Where(entry => entry != null)
+            .ToList();
+        UnityEngine.Object[] objects = draggedEntries
+            .Where(entry => !AssetFavoritesLibrary.IsNodeTemplate(entry))
+            .Select(library.LoadFavoriteObject)
             .Where(item => item != null)
+            .ToArray();
+        string[] nodeTemplateIds = draggedEntries
+            .Where(AssetFavoritesLibrary.IsNodeTemplate)
+            .Select(AssetFavoritesLibrary.GetEntryId)
             .ToArray();
 
         DragAndDrop.PrepareStartDrag();
-        DragAndDrop.SetGenericData(EntryDragKey, guids);
+        DragAndDrop.SetGenericData(EntryDragKey, entryIds);
+        DragAndDrop.SetGenericData(NodeTemplateDragKey, nodeTemplateIds.Length > 0 ? nodeTemplateIds : null);
         DragAndDrop.objectReferences = objects;
-        DragAndDrop.StartDrag(guids.Length == 1 ? "Favorite Asset" : guids.Length + " Favorite Assets");
+        DragAndDrop.StartDrag(entryIds.Length == 1 ? "Favorite" : entryIds.Length + " Favorites");
         mouseDownGuid = string.Empty;
     }
 
-    private void HandleProjectDrop(Rect rect)
+    private void HandleIncomingDrop(Rect rect)
     {
         Event current = Event.current;
         if (!rect.Contains(current.mousePosition)
@@ -471,11 +501,15 @@ public sealed class AssetFavoritesWindow : EditorWindow
             return;
         }
 
+        GameObject[] gameObjects = DragAndDrop.objectReferences
+            .OfType<GameObject>()
+            .Where(AssetFavoritesLibrary.CanFavoriteGameObject)
+            .ToArray();
         string[] paths = DragAndDrop.objectReferences
             .Select(AssetDatabase.GetAssetPath)
             .Where(path => !string.IsNullOrEmpty(path))
             .ToArray();
-        if (paths.Length == 0)
+        if (paths.Length == 0 && gameObjects.Length == 0)
         {
             return;
         }
@@ -484,8 +518,16 @@ public sealed class AssetFavoritesWindow : EditorWindow
         if (current.type == EventType.DragPerform)
         {
             DragAndDrop.AcceptDrag();
-            AddPaths(paths, currentFolderId);
+            if (paths.Length > 0)
+            {
+                AddPaths(paths, currentFolderId);
+            }
+            if (gameObjects.Length > 0)
+            {
+                AddGameObjects(gameObjects, currentFolderId);
+            }
             DragAndDrop.SetGenericData(EntryDragKey, null);
+            DragAndDrop.SetGenericData(NodeTemplateDragKey, null);
         }
 
         current.Use();
@@ -496,6 +538,15 @@ public sealed class AssetFavoritesWindow : EditorWindow
         int skipped;
         int added = library.AddProjectPaths(paths, destinationFolderId, out skipped);
         statusText = "已收藏 " + added + " 个；跳过 " + skipped + " 个已收藏或无效资产";
+        ReloadTreeKeepingSelection();
+        Repaint();
+    }
+
+    private void AddGameObjects(IEnumerable<GameObject> gameObjects, string destinationFolderId)
+    {
+        int skipped;
+        int added = library.AddGameObjectTemplates(gameObjects, destinationFolderId, out skipped);
+        statusText = "已收藏 " + added + " 个节点模板；跳过 " + skipped + " 个已收藏或无效节点";
         ReloadTreeKeepingSelection();
         Repaint();
     }
@@ -518,8 +569,19 @@ public sealed class AssetFavoritesWindow : EditorWindow
         int removed = library.RemoveEntries(selectedGuids);
         selectedGuids.Clear();
         selectionAnchorGuid = string.Empty;
-        statusText = "已从收藏中移除 " + removed + " 个资产；原资产未受影响";
+        statusText = "已从收藏中移除 " + removed + " 项；原资产与原节点未受影响";
         ReloadTreeKeepingSelection();
+        Repaint();
+    }
+
+    private void PlaceSelectedNodeTemplatesUnderSelection()
+    {
+        Transform parent = Selection.activeTransform;
+        List<GameObject> createdObjects;
+        int placed = library.InstantiateNodeTemplates(selectedGuids, parent, out createdObjects);
+        statusText = placed > 0
+            ? "已放置 " + placed + " 个节点模板" + (parent == null ? "" : " 到 " + parent.name)
+            : "当前选择中没有可放置的节点模板";
         Repaint();
     }
 
@@ -568,7 +630,8 @@ public sealed class AssetFavoritesWindow : EditorWindow
         if (!string.IsNullOrEmpty(query))
         {
             views = views.Where(view => view.DisplayName.IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0
-                                        || view.Path.IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0)
+                                        || view.Path.IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0
+                                        || view.SearchText.IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0)
                 .ToList();
         }
 
@@ -603,7 +666,7 @@ public sealed class AssetFavoritesWindow : EditorWindow
             treeState = new TreeViewState();
         }
 
-        treeView = new AssetFavoritesTreeView(treeState, library, OnFolderSelected, AddPaths, MoveEntries, Repaint);
+        treeView = new AssetFavoritesTreeView(treeState, library, OnFolderSelected, AddPaths, AddGameObjects, MoveEntries, Repaint);
         treeView.SelectFolder(currentFolderId);
     }
 
@@ -627,8 +690,50 @@ public sealed class AssetFavoritesWindow : EditorWindow
         selectedGuids.Clear();
         selectionAnchorGuid = string.Empty;
         contentScroll = Vector2.zero;
-        statusText = string.IsNullOrEmpty(folderId) ? "未指定目录时，新收藏会按类型自动分类" : "拖入资产会收藏到当前目录";
+        statusText = string.IsNullOrEmpty(folderId) ? "未指定目录时，新收藏会按类型自动分类" : "拖入资产或节点会收藏到当前目录";
         Repaint();
+    }
+
+    private void PingEntry(EntryView entry)
+    {
+        if (entry != null && entry.IsNodeTemplate)
+        {
+            UnityEngine.Object source = library.FindSourceObject(entry.Entry);
+            if (source != null)
+            {
+                Selection.activeObject = source;
+                Ping(source);
+                return;
+            }
+        }
+
+        Ping(entry == null ? null : entry.Asset);
+    }
+
+    private void OpenEntry(EntryView entry)
+    {
+        if (entry != null && entry.IsNodeTemplate)
+        {
+            UnityEngine.Object source = library.FindSourceObject(entry.Entry);
+            if (source != null)
+            {
+                Selection.activeObject = source;
+                Ping(source);
+                return;
+            }
+
+            if (!string.IsNullOrEmpty(entry.Entry.sourceScenePath))
+            {
+                UnityEngine.Object sourceAsset = AssetDatabase.LoadMainAssetAtPath(entry.Entry.sourceScenePath);
+                if (sourceAsset != null)
+                {
+                    AssetDatabase.OpenAsset(sourceAsset);
+                    return;
+                }
+            }
+        }
+
+        Open(entry == null ? null : entry.Asset);
     }
 
     private static void Ping(UnityEngine.Object asset)
@@ -663,19 +768,74 @@ public sealed class AssetFavoritesWindow : EditorWindow
         return style;
     }
 
+    private static GUIStyle CenteredMiniDetailStyle()
+    {
+        GUIStyle style = new GUIStyle(EditorStyles.centeredGreyMiniLabel);
+        style.alignment = TextAnchor.UpperCenter;
+        style.wordWrap = true;
+        return style;
+    }
+
     private sealed class EntryView
     {
         public readonly AssetFavoriteEntry Entry;
+        public readonly string Id;
         public readonly string Path;
         public readonly string DisplayName;
+        public readonly string DetailText;
+        public readonly string Tooltip;
+        public readonly string SearchText;
+        public readonly bool IsNodeTemplate;
         public readonly UnityEngine.Object Asset;
 
         public EntryView(AssetFavoriteEntry entry)
         {
             Entry = entry;
-            Path = AssetDatabase.GUIDToAssetPath(entry.assetGuid);
-            Asset = string.IsNullOrEmpty(Path) ? null : AssetDatabase.LoadMainAssetAtPath(Path);
-            DisplayName = string.IsNullOrEmpty(Path) ? "Missing Asset" : System.IO.Path.GetFileNameWithoutExtension(Path);
+            Id = AssetFavoritesLibrary.GetEntryId(entry);
+            IsNodeTemplate = AssetFavoritesLibrary.IsNodeTemplate(entry);
+            if (IsNodeTemplate)
+            {
+                Path = AssetDatabase.GUIDToAssetPath(entry.templateGuid);
+                Asset = string.IsNullOrEmpty(Path) ? null : AssetDatabase.LoadAssetAtPath<GameObject>(Path);
+                DisplayName = !string.IsNullOrEmpty(entry.displayName)
+                    ? entry.displayName
+                    : string.IsNullOrEmpty(Path) ? "Missing Node Template" : System.IO.Path.GetFileNameWithoutExtension(Path);
+                DetailText = BuildNodeDetail(entry);
+                Tooltip = string.IsNullOrEmpty(entry.sourceHierarchyPath) ? Path : entry.sourceHierarchyPath;
+                SearchText = string.Join(" ", new[]
+                {
+                    Path,
+                    entry.sourceScenePath,
+                    entry.sourceHierarchyPath,
+                    entry.primaryComponent,
+                    DetailText,
+                    "Node"
+                }.Where(value => !string.IsNullOrEmpty(value)).ToArray());
+            }
+            else
+            {
+                Path = AssetDatabase.GUIDToAssetPath(entry.assetGuid);
+                Asset = string.IsNullOrEmpty(Path) ? null : AssetDatabase.LoadMainAssetAtPath(Path);
+                DisplayName = string.IsNullOrEmpty(Path) ? "Missing Asset" : System.IO.Path.GetFileNameWithoutExtension(Path);
+                DetailText = string.Empty;
+                Tooltip = Path;
+                SearchText = Path;
+            }
+        }
+
+        private static string BuildNodeDetail(AssetFavoriteEntry entry)
+        {
+            List<string> parts = new List<string> { "Node" };
+            if (entry.rectWidth > 0 && entry.rectHeight > 0)
+            {
+                parts.Add(entry.rectWidth + "×" + entry.rectHeight);
+            }
+            if (!string.IsNullOrEmpty(entry.primaryComponent) && entry.primaryComponent != "GameObject")
+            {
+                parts.Add(entry.primaryComponent);
+            }
+
+            return string.Join(" · ", parts.ToArray());
         }
     }
 }
@@ -685,6 +845,7 @@ internal sealed class AssetFavoritesTreeView : TreeView
     private readonly AssetFavoritesLibrary library;
     private readonly Action<string> selectionChanged;
     private readonly Action<IEnumerable<string>, string> addPaths;
+    private readonly Action<IEnumerable<GameObject>, string> addGameObjects;
     private readonly Action<IEnumerable<string>, string> moveEntries;
     private readonly Action repaint;
     private readonly Dictionary<int, string> itemFolders = new Dictionary<int, string>();
@@ -695,12 +856,14 @@ internal sealed class AssetFavoritesTreeView : TreeView
         AssetFavoritesLibrary library,
         Action<string> selectionChanged,
         Action<IEnumerable<string>, string> addPaths,
+        Action<IEnumerable<GameObject>, string> addGameObjects,
         Action<IEnumerable<string>, string> moveEntries,
         Action repaint) : base(state)
     {
         this.library = library;
         this.selectionChanged = selectionChanged;
         this.addPaths = addPaths;
+        this.addGameObjects = addGameObjects;
         this.moveEntries = moveEntries;
         this.repaint = repaint;
         showBorder = false;
@@ -863,22 +1026,34 @@ internal sealed class AssetFavoritesTreeView : TreeView
                 moveEntries(draggedEntries, targetFolderId);
                 DragAndDrop.AcceptDrag();
                 DragAndDrop.SetGenericData(AssetFavoritesWindow.EntryDragKey, null);
+                DragAndDrop.SetGenericData(AssetFavoritesWindow.NodeTemplateDragKey, null);
             }
             return DragAndDropVisualMode.Move;
         }
 
+        GameObject[] gameObjects = DragAndDrop.objectReferences
+            .OfType<GameObject>()
+            .Where(AssetFavoritesLibrary.CanFavoriteGameObject)
+            .ToArray();
         string[] paths = DragAndDrop.objectReferences
             .Select(AssetDatabase.GetAssetPath)
             .Where(path => !string.IsNullOrEmpty(path))
             .ToArray();
-        if (paths.Length == 0)
+        if (paths.Length == 0 && gameObjects.Length == 0)
         {
             return DragAndDropVisualMode.None;
         }
 
         if (args.performDrop)
         {
-            addPaths(paths, targetFolderId);
+            if (paths.Length > 0)
+            {
+                addPaths(paths, targetFolderId);
+            }
+            if (gameObjects.Length > 0)
+            {
+                addGameObjects(gameObjects, targetFolderId);
+            }
             DragAndDrop.AcceptDrag();
         }
         return DragAndDropVisualMode.Copy;
