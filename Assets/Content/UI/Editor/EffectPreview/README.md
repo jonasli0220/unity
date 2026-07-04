@@ -1,12 +1,12 @@
 # Effect Preview
 
-在不进入 Play Mode 的情况下，从 Scene 视图的 `Prefab导航` 工具栏预览当前 UI Prefab 或选中节点下的运行时动效。
+在不进入 Play Mode 的情况下，从 Scene 视图的 `Prefab导航` 工具栏预览当前 UI Prefab 的运行时动效。
 
 ## 使用方式
 
 - 打开一个 UI Prefab。
-- 如果只想看局部效果，选中包含动效的节点；如果未选中可预览节点，工具会预览整个当前 Prefab。
-- 点击预览时，当前 Prefab 里所有已开启节点上的 `Animator` 都会触发一遍 Controller Entry，适合 `Entry -> *_in -> *_loop` 这类入场状态机。
+- 打开 Prefab 后无需选择节点；工具会扫描当前 Prefab 里所有已开启节点的动效。
+- 点击预览时，当前 Prefab 里所有已开启节点上的 `Animator` 都会从 Controller Entry 触发一遍，适合 `Entry -> *_in -> *_loop` 这类入场状态机。
 - 点击 `▶ 动效` 开始播放，再点击 `■ 动效` 停止并复位临时预览状态。
 - 普通 Scene 中必须先选择目标节点，工具不会自动播放整个场景的动效。
 - 备用菜单：`Tools/UI/Effect Preview/Play or Stop Dynamic Effects`。
@@ -18,7 +18,7 @@
 - Unity `Animator`。
 - Legacy `Animation`。
 - 如果节点上有 `UIPanelAnimation`，优先按项目运行时约定播放 `enter`，并在配置允许时自动转入 `loop`。
-- 如果 `Animator` 没有 `UIPanelAnimation`，优先读取 Animator Controller 第一层的 Entry/default state；若 entry state 后续转向 loop state，会自动接 loop。
+- 如果 `Animator` 没有 `UIPanelAnimation`，会重新绑定并更新 Animator，让 Animator Controller 从 Entry/default state 自己开始走，并按 Controller 里的 transition 继续播放。
 
 ## 预览边界
 

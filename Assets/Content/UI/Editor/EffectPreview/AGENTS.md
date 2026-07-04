@@ -14,12 +14,11 @@ This directory contains editor-only controls for previewing UI dynamic effects w
 
 - Preview is available only outside Play Mode and must never enter Play Mode automatically.
 - The primary entry is a compact control in the existing `Prefab导航` Scene View overlay; keep a menu fallback under `Tools/UI/Effect Preview`.
-- In Prefab Stage, preview the selected hierarchy subtree when it contains supported dynamic effects; otherwise preview the whole opened prefab.
-- In Prefab Stage, include all active and enabled `Animator` components under the currently opened prefab when preview starts, so controller Entry states can be triggered together even when they are spread across many active nodes.
+- In Prefab Stage, preview the whole opened prefab's active hierarchy; do not bind preview scope to the current selection.
 - In a regular scene, preview the selected hierarchy subtree only. Never silently simulate every particle in a gameplay scene.
 - Supported preview types are Unity `ParticleSystem`, Spine `SkeletonGraphic` / `SkeletonAnimation` / `SkeletonMecanim`, `Animator`, and legacy `Animation`.
 - For project `UIPanelAnimation`, prefer the configured enter animation and automatically continue to the configured loop animation; otherwise use each component's configured default animation.
-- For `Animator` components without `UIPanelAnimation`, prefer the first layer's Animator Controller Entry/default state; if that state transitions to another state, prefer a loop-looking destination state before falling back to the first transition.
+- For `Animator` components without `UIPanelAnimation`, rebind and update the Animator so its Controller starts from Entry/default state and follows its own transitions.
 - Animator and legacy Animation preview must use Unity Animation Mode so stopping restores sampled transforms and properties.
 - Spine preview must reset the runtime skeleton state on stop. Do not add `EditorSkeletonPlayer` or other persistent components to source objects.
 - Do not modify serialized effect settings, create Undo records, or mark scenes/prefabs dirty.

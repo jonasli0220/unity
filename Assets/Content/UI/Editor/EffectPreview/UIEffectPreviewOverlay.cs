@@ -299,7 +299,7 @@ public class UIEffectPreviewButton : Button
 
     public UIEffectPreviewButton()
     {
-        tooltip = "非运行模式预览粒子、Spine、Animator 和 Animation 动效。Prefab 模式下优先播放选中节点；选中节点没有动效时播放整个 Prefab。再次点击停止并复位。";
+        tooltip = "非运行模式预览粒子、Spine、Animator 和 Animation 动效。Prefab 模式下播放当前打开 Prefab 的所有已开启节点；普通 Scene 中播放选中节点。再次点击停止并复位。";
         clicked += OnClicked;
         RegisterCallback<MouseDownEvent>(OnMouseDown, TrickleDown.TrickleDown);
 
