@@ -6,6 +6,7 @@ using UnityEditor;
 using UnityEditor.SceneManagement;
 using UnityEngine;
 using UnityEngine.SceneManagement;
+using UnityEngine.UI;
 
 using LegacyAnimation = UnityEngine.Animation;
 using SpineSkeletonAnimation = Spine.Unity.SkeletonAnimation;
@@ -100,20 +101,29 @@ internal static class UIEffectPreviewTargetUtility
             || root.GetComponentInChildren<SkeletonGraphic>(true) != null
             || root.GetComponentInChildren<SpineSkeletonAnimation>(true) != null
             || root.GetComponentInChildren<SkeletonMecanim>(true) != null
-            || root.GetComponentInChildren<Animator>(true) != null
-            || root.GetComponentInChildren<LegacyAnimation>(true) != null;
+            || (UIExtendedEffectPreview.IncludeAnimatorPreview
+                && (root.GetComponentInChildren<Animator>(true) != null
+                    || root.GetComponentInChildren<LegacyAnimation>(true) != null));
     }
 }
 
 internal static class UIExtendedEffectPreview
 {
     private const string EmptyAnimationName = "__Empty__";
+    private const string IncludeAnimatorMenuPath = "UITools/动态预览包含animator";
+    private const string IncludeAnimatorPrefKey = "Dragon.UI.EffectPreview.IncludeAnimator";
 
     private static readonly List<SpinePreview> ActiveSpines = new List<SpinePreview>();
     private static readonly List<AnimatorPreview> ActiveAnimators = new List<AnimatorPreview>();
     private static readonly List<LegacyAnimationPreview> ActiveLegacyAnimations = new List<LegacyAnimationPreview>();
 
+    private static PreviewStateSnapshot stateSnapshot;
     private static bool ownsAnimationMode;
+
+    public static bool IncludeAnimatorPreview
+    {
+        get { return EditorPrefs.GetBool(IncludeAnimatorPrefKey, false); }
+    }
 
     public static bool IsPreviewing
     {
@@ -121,7 +131,8 @@ internal static class UIExtendedEffectPreview
         {
             return ActiveSpines.Count > 0
                 || ActiveAnimators.Count > 0
-                || ActiveLegacyAnimations.Count > 0;
+                || ActiveLegacyAnimations.Count > 0
+                || stateSnapshot != null;
         }
     }
 
@@ -129,27 +140,54 @@ internal static class UIExtendedEffectPreview
     {
         get
         {
-            return $"Spine {ActiveSpines.Count} / Animator {ActiveAnimators.Count} / Animation {ActiveLegacyAnimations.Count}";
+            string animatorSummary = IncludeAnimatorPreview
+                ? $"Animator {ActiveAnimators.Count} / Animation {ActiveLegacyAnimations.Count}"
+                : "Animator 关闭";
+            return $"Spine {ActiveSpines.Count} / {animatorSummary}";
         }
     }
 
     public static bool HasPreviewTargets()
     {
-        return CollectTargets().TotalCount > 0;
+        return CollectTargets().GetPreviewableCount(IncludeAnimatorPreview) > 0;
+    }
+
+    [MenuItem(IncludeAnimatorMenuPath, false, 3000)]
+    private static void ToggleIncludeAnimatorPreview()
+    {
+        bool enabled = !IncludeAnimatorPreview;
+        EditorPrefs.SetBool(IncludeAnimatorPrefKey, enabled);
+        Debug.Log("动态预览包含animator：" + (enabled ? "开启" : "关闭"));
+        SceneView sceneView = SceneView.lastActiveSceneView;
+        if (sceneView != null)
+        {
+            sceneView.ShowNotification(new GUIContent(enabled ? "动态预览将包含 Animator" : "动态预览不包含 Animator"));
+        }
+
+        UIEffectPreviewController.NotifyPreviewSettingsChanged();
+    }
+
+    [MenuItem(IncludeAnimatorMenuPath, true)]
+    private static bool ValidateToggleIncludeAnimatorPreview()
+    {
+        Menu.SetChecked(IncludeAnimatorMenuPath, IncludeAnimatorPreview);
+        return true;
     }
 
     public static bool StartPreview()
     {
         StopPreview();
         Targets targets = CollectTargets();
-        if (targets.TotalCount == 0)
+        bool includeAnimator = IncludeAnimatorPreview;
+        if (targets.GetPreviewableCount(includeAnimator) == 0)
         {
             return false;
         }
 
+        stateSnapshot = PreviewStateSnapshot.Capture(targets.roots);
         StartSpines(targets);
 
-        if (targets.animators.Count > 0 || targets.legacyAnimations.Count > 0)
+        if (includeAnimator && (targets.animators.Count > 0 || targets.legacyAnimations.Count > 0))
         {
             if (AnimationMode.InAnimationMode())
             {
@@ -172,6 +210,8 @@ internal static class UIExtendedEffectPreview
 
     public static void StopPreview()
     {
+        PreviewStateSnapshot snapshot = stateSnapshot;
+        stateSnapshot = null;
         StopOwnedAnimationMode();
 
         for (int i = 0; i < ActiveSpines.Count; i++)
@@ -189,6 +229,11 @@ internal static class UIExtendedEffectPreview
         ActiveSpines.Clear();
         ActiveAnimators.Clear();
         ActiveLegacyAnimations.Clear();
+
+        if (snapshot != null)
+        {
+            snapshot.Restore();
+        }
     }
 
     private static Targets CollectTargets()
@@ -197,6 +242,7 @@ internal static class UIExtendedEffectPreview
         List<GameObject> roots = UIEffectPreviewTargetUtility.CollectTargetRoots();
         for (int i = 0; i < roots.Count; i++)
         {
+            result.AddRoot(roots[i]);
             result.AddUnder(roots[i]);
         }
 
@@ -375,8 +421,242 @@ internal static class UIExtendedEffectPreview
         return !string.IsNullOrEmpty(animationName) && animationName != EmptyAnimationName;
     }
 
+    private sealed class PreviewStateSnapshot
+    {
+        private readonly List<TransformState> transforms = new List<TransformState>();
+        private readonly List<GraphicState> graphics = new List<GraphicState>();
+        private readonly List<CanvasGroupState> canvasGroups = new List<CanvasGroupState>();
+        private readonly List<CanvasRendererState> canvasRenderers = new List<CanvasRendererState>();
+
+        public static PreviewStateSnapshot Capture(List<GameObject> roots)
+        {
+            PreviewStateSnapshot snapshot = new PreviewStateSnapshot();
+            HashSet<int> seenTransforms = new HashSet<int>();
+            HashSet<int> seenGraphics = new HashSet<int>();
+            HashSet<int> seenCanvasGroups = new HashSet<int>();
+            HashSet<int> seenCanvasRenderers = new HashSet<int>();
+
+            for (int i = 0; i < roots.Count; i++)
+            {
+                GameObject root = roots[i];
+                if (root == null)
+                {
+                    continue;
+                }
+
+                Transform[] rootTransforms = root.GetComponentsInChildren<Transform>(false);
+                for (int j = 0; j < rootTransforms.Length; j++)
+                {
+                    Transform transform = rootTransforms[j];
+                    if (transform != null && seenTransforms.Add(transform.GetInstanceID()))
+                    {
+                        snapshot.transforms.Add(new TransformState(transform));
+                    }
+                }
+
+                Graphic[] rootGraphics = root.GetComponentsInChildren<Graphic>(false);
+                for (int j = 0; j < rootGraphics.Length; j++)
+                {
+                    Graphic graphic = rootGraphics[j];
+                    if (graphic != null && seenGraphics.Add(graphic.GetInstanceID()))
+                    {
+                        snapshot.graphics.Add(new GraphicState(graphic));
+                    }
+                }
+
+                CanvasGroup[] rootCanvasGroups = root.GetComponentsInChildren<CanvasGroup>(false);
+                for (int j = 0; j < rootCanvasGroups.Length; j++)
+                {
+                    CanvasGroup canvasGroup = rootCanvasGroups[j];
+                    if (canvasGroup != null && seenCanvasGroups.Add(canvasGroup.GetInstanceID()))
+                    {
+                        snapshot.canvasGroups.Add(new CanvasGroupState(canvasGroup));
+                    }
+                }
+
+                CanvasRenderer[] rootCanvasRenderers = root.GetComponentsInChildren<CanvasRenderer>(false);
+                for (int j = 0; j < rootCanvasRenderers.Length; j++)
+                {
+                    CanvasRenderer canvasRenderer = rootCanvasRenderers[j];
+                    if (canvasRenderer != null && seenCanvasRenderers.Add(canvasRenderer.GetInstanceID()))
+                    {
+                        snapshot.canvasRenderers.Add(new CanvasRendererState(canvasRenderer));
+                    }
+                }
+            }
+
+            return snapshot;
+        }
+
+        public void Restore()
+        {
+            for (int i = 0; i < transforms.Count; i++)
+            {
+                transforms[i].Restore();
+            }
+
+            for (int i = 0; i < graphics.Count; i++)
+            {
+                graphics[i].Restore();
+            }
+
+            for (int i = 0; i < canvasGroups.Count; i++)
+            {
+                canvasGroups[i].Restore();
+            }
+
+            for (int i = 0; i < canvasRenderers.Count; i++)
+            {
+                canvasRenderers[i].Restore();
+            }
+
+            Canvas.ForceUpdateCanvases();
+        }
+    }
+
+    private sealed class TransformState
+    {
+        private readonly Transform transform;
+        private readonly Vector3 localPosition;
+        private readonly Quaternion localRotation;
+        private readonly Vector3 localScale;
+        private readonly bool isRectTransform;
+        private readonly Vector2 anchorMin;
+        private readonly Vector2 anchorMax;
+        private readonly Vector2 anchoredPosition;
+        private readonly Vector3 anchoredPosition3D;
+        private readonly Vector2 sizeDelta;
+        private readonly Vector2 pivot;
+
+        public TransformState(Transform source)
+        {
+            transform = source;
+            localPosition = source.localPosition;
+            localRotation = source.localRotation;
+            localScale = source.localScale;
+            anchorMin = Vector2.zero;
+            anchorMax = Vector2.zero;
+            anchoredPosition = Vector2.zero;
+            anchoredPosition3D = Vector3.zero;
+            sizeDelta = Vector2.zero;
+            pivot = Vector2.zero;
+
+            RectTransform rectTransform = source as RectTransform;
+            isRectTransform = rectTransform != null;
+            if (isRectTransform)
+            {
+                anchorMin = rectTransform.anchorMin;
+                anchorMax = rectTransform.anchorMax;
+                anchoredPosition = rectTransform.anchoredPosition;
+                anchoredPosition3D = rectTransform.anchoredPosition3D;
+                sizeDelta = rectTransform.sizeDelta;
+                pivot = rectTransform.pivot;
+            }
+        }
+
+        public void Restore()
+        {
+            if (transform == null)
+            {
+                return;
+            }
+
+            RectTransform rectTransform = transform as RectTransform;
+            if (isRectTransform && rectTransform != null)
+            {
+                rectTransform.anchorMin = anchorMin;
+                rectTransform.anchorMax = anchorMax;
+                rectTransform.pivot = pivot;
+                rectTransform.sizeDelta = sizeDelta;
+                rectTransform.anchoredPosition = anchoredPosition;
+                rectTransform.anchoredPosition3D = anchoredPosition3D;
+            }
+
+            transform.localPosition = localPosition;
+            transform.localRotation = localRotation;
+            transform.localScale = localScale;
+        }
+    }
+
+    private sealed class GraphicState
+    {
+        private readonly Graphic graphic;
+        private readonly Material material;
+        private readonly Color color;
+
+        public GraphicState(Graphic source)
+        {
+            graphic = source;
+            material = source.material;
+            color = source.color;
+        }
+
+        public void Restore()
+        {
+            if (graphic != null)
+            {
+                graphic.material = material;
+                graphic.color = color;
+                graphic.SetVerticesDirty();
+                graphic.SetMaterialDirty();
+            }
+        }
+    }
+
+    private sealed class CanvasGroupState
+    {
+        private readonly CanvasGroup canvasGroup;
+        private readonly float alpha;
+        private readonly bool interactable;
+        private readonly bool blocksRaycasts;
+        private readonly bool ignoreParentGroups;
+
+        public CanvasGroupState(CanvasGroup source)
+        {
+            canvasGroup = source;
+            alpha = source.alpha;
+            interactable = source.interactable;
+            blocksRaycasts = source.blocksRaycasts;
+            ignoreParentGroups = source.ignoreParentGroups;
+        }
+
+        public void Restore()
+        {
+            if (canvasGroup == null)
+            {
+                return;
+            }
+
+            canvasGroup.alpha = alpha;
+            canvasGroup.interactable = interactable;
+            canvasGroup.blocksRaycasts = blocksRaycasts;
+            canvasGroup.ignoreParentGroups = ignoreParentGroups;
+        }
+    }
+
+    private sealed class CanvasRendererState
+    {
+        private readonly CanvasRenderer canvasRenderer;
+        private readonly float alpha;
+
+        public CanvasRendererState(CanvasRenderer source)
+        {
+            canvasRenderer = source;
+            alpha = source.GetAlpha();
+        }
+
+        public void Restore()
+        {
+            if (canvasRenderer != null)
+            {
+                canvasRenderer.SetAlpha(alpha);
+            }
+        }
+    }
+
     private sealed class Targets
     {
+        public readonly List<GameObject> roots = new List<GameObject>();
         public readonly List<SkeletonGraphic> skeletonGraphics = new List<SkeletonGraphic>();
         public readonly List<SpineSkeletonAnimation> skeletonAnimations = new List<SpineSkeletonAnimation>();
         public readonly List<SkeletonMecanim> skeletonMecanims = new List<SkeletonMecanim>();
@@ -393,6 +673,25 @@ internal static class UIExtendedEffectPreview
                     + skeletonMecanims.Count
                     + animators.Count
                     + legacyAnimations.Count;
+            }
+        }
+
+        public int GetPreviewableCount(bool includeAnimator)
+        {
+            int count = skeletonGraphics.Count + skeletonAnimations.Count + skeletonMecanims.Count;
+            if (includeAnimator)
+            {
+                count += animators.Count + legacyAnimations.Count;
+            }
+
+            return count;
+        }
+
+        public void AddRoot(GameObject root)
+        {
+            if (root != null && !roots.Contains(root))
+            {
+                roots.Add(root);
             }
         }
 

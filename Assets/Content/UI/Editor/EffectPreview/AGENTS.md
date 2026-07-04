@@ -16,10 +16,12 @@ This directory contains editor-only controls for previewing UI dynamic effects w
 - The primary entry is a compact control in the existing `Prefab导航` Scene View overlay; keep a menu fallback under `Tools/UI/Effect Preview`.
 - In Prefab Stage, preview the whole opened prefab's active hierarchy; do not bind preview scope to the current selection.
 - In a regular scene, preview the selected hierarchy subtree only. Never silently simulate every particle in a gameplay scene.
-- Supported preview types are Unity `ParticleSystem`, Spine `SkeletonGraphic` / `SkeletonAnimation` / `SkeletonMecanim`, `Animator`, and legacy `Animation`.
+- Default preview types are Unity `ParticleSystem` and Spine `SkeletonGraphic` / `SkeletonAnimation` / `SkeletonMecanim`.
+- `Animator` and legacy `Animation` preview are optional and must be gated by the checked menu `UITools/动态预览包含animator`, defaulting to off.
 - For project `UIPanelAnimation`, prefer the configured enter animation and automatically continue to the configured loop animation; otherwise use each component's configured default animation.
-- For `Animator` components without `UIPanelAnimation`, rebind and update the Animator so its Controller starts from Entry/default state and follows its own transitions.
-- Animator and legacy Animation preview must use Unity Animation Mode so stopping restores sampled transforms and properties.
+- For optional `Animator` components without `UIPanelAnimation`, rebind and update the Animator so its Controller starts from Entry/default state and follows its own transitions.
+- Optional Animator and legacy Animation preview should stay temporary; use Unity Animation Mode where it helps, and rely on the preview-start snapshot to restore visible UI state on stop.
+- Stopping preview must restore the visible hierarchy to the state captured before preview started, not leave Animator-driven objects paused on their current frame.
 - Spine preview must reset the runtime skeleton state on stop. Do not add `EditorSkeletonPlayer` or other persistent components to source objects.
 - Do not modify serialized effect settings, create Undo records, or mark scenes/prefabs dirty.
 - Stop and clear preview state before assembly reload, Play Mode changes, editor quit, Prefab Stage changes, or preview-target destruction.

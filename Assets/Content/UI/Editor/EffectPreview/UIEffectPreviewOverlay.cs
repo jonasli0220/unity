@@ -51,9 +51,12 @@ public static class UIEffectPreviewController
         bool hasExtendedTargets = UIExtendedEffectPreview.HasPreviewTargets();
         if (targets.Count == 0 && !hasExtendedTargets)
         {
+            bool includeAnimator = UIExtendedEffectPreview.IncludeAnimatorPreview;
             Warn(
                 PrefabStageUtility.GetCurrentPrefabStage() != null
-                    ? "当前 Prefab 中没有可预览的粒子、Spine、Animator 或 Animation。"
+                    ? includeAnimator
+                        ? "当前 Prefab 中没有可预览的粒子、Spine、Animator 或 Animation。"
+                        : "当前 Prefab 中没有可预览的粒子或 Spine；如需预览 Animator，请勾选 UITools/动态预览包含animator。"
                     : "请先选择包含动态效果的节点。",
                 "没有找到可预览的动态效果");
             return false;
@@ -84,8 +87,8 @@ public static class UIEffectPreviewController
 
         lastUpdateTime = EditorApplication.timeSinceStartup;
         string summary = $"粒子 {ActiveParticleSystems.Count} / {UIExtendedEffectPreview.Summary}";
-        Debug.Log("Dynamic effect preview started. " + summary + ". Click ■ 动效 to stop and reset.");
-        NotifySceneView("正在预览：" + summary);
+        Debug.Log("Dynamic preview started. " + summary + ". Click 动态预览 to stop and reset.");
+        NotifySceneView("动态预览开始：" + summary);
         RefreshViews();
         PreviewStateChanged?.Invoke();
         return true;
@@ -94,6 +97,12 @@ public static class UIEffectPreviewController
     public static void StopPreview()
     {
         StopPreview(true);
+    }
+
+    public static void NotifyPreviewSettingsChanged()
+    {
+        PreviewStateChanged?.Invoke();
+        RefreshViews();
     }
 
     [MenuItem(ToggleMenuPath, false, 2309)]
@@ -155,8 +164,8 @@ public static class UIEffectPreviewController
 
         if (notify)
         {
-            Debug.Log("Dynamic effect preview stopped and temporary edit-mode state was reset.");
-            NotifySceneView("动效预览已停止");
+            Debug.Log("Dynamic preview stopped and temporary edit-mode state was restored.");
+            NotifySceneView("动态预览已停止，已复位");
         }
 
         RefreshViews();
@@ -299,13 +308,13 @@ public class UIEffectPreviewButton : Button
 
     public UIEffectPreviewButton()
     {
-        tooltip = "非运行模式预览粒子、Spine、Animator 和 Animation 动效。Prefab 模式下播放当前打开 Prefab 的所有已开启节点；普通 Scene 中播放选中节点。再次点击停止并复位。";
+        tooltip = "非运行模式预览当前 Prefab 的粒子和 Spine。需要包含 Animator/Animation 时，先勾选 UITools/动态预览包含animator。再次点击停止并复位。";
         clicked += OnClicked;
         RegisterCallback<MouseDownEvent>(OnMouseDown, TrickleDown.TrickleDown);
 
         AddToClassList("unity-editor-toolbar-button");
         style.width = StyleKeyword.Auto;
-        style.minWidth = 54;
+        style.minWidth = 72;
         style.paddingLeft = 8;
         style.paddingRight = 8;
         style.unityFontStyleAndWeight = FontStyle.Bold;
@@ -366,7 +375,7 @@ public class UIEffectPreviewButton : Button
     private void RefreshState()
     {
         bool isPreviewing = UIEffectPreviewController.IsPreviewing;
-        text = isPreviewing ? "■ 动效" : "▶ 动效";
+        text = "动态预览";
         SetEnabled(isPreviewing
             || (!EditorApplication.isPlayingOrWillChangePlaymode
                 && UIEffectPreviewController.HasPreviewTargets()));
