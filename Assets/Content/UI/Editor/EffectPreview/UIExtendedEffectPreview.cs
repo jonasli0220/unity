@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using SgrEngine;
 using Spine.Unity;
 using UnityEditor;
+using UnityEditor.Animations;
 using UnityEditor.SceneManagement;
 using UnityEngine;
 using UnityEngine.SceneManagement;
@@ -73,6 +74,12 @@ internal static class UIEffectPreviewTargetUtility
             && !EditorUtility.IsPersistent(component)
             && IsSceneObject(component.gameObject)
             && component.gameObject.activeInHierarchy;
+    }
+
+    public static GameObject GetCurrentPrefabRoot()
+    {
+        PrefabStage prefabStage = PrefabStageUtility.GetCurrentPrefabStage();
+        return prefabStage != null ? prefabStage.prefabContentsRoot : null;
     }
 
     private static bool IsSceneObject(GameObject gameObject)
@@ -203,6 +210,12 @@ internal static class UIExtendedEffectPreview
         for (int i = 0; i < roots.Count; i++)
         {
             result.AddUnder(roots[i]);
+        }
+
+        GameObject prefabRoot = UIEffectPreviewTargetUtility.GetCurrentPrefabRoot();
+        if (prefabRoot != null)
+        {
+            result.AddAnimatorsUnder(prefabRoot);
         }
 
         return result;
@@ -408,6 +421,11 @@ internal static class UIExtendedEffectPreview
             AddComponents(root.GetComponentsInChildren<SkeletonMecanim>(true), skeletonMecanims);
             AddComponents(root.GetComponentsInChildren<Animator>(true), animators);
             AddComponents(root.GetComponentsInChildren<LegacyAnimation>(true), legacyAnimations);
+        }
+
+        public void AddAnimatorsUnder(GameObject root)
+        {
+            AddComponents(root.GetComponentsInChildren<Animator>(true), animators);
         }
 
         private void AddComponents<T>(T[] components, List<T> output) where T : Behaviour
@@ -646,6 +664,7 @@ internal static class UIExtendedEffectPreview
         private readonly Animator animator;
         private AnimationClip currentClip;
         private AnimationClip pendingLoopClip;
+        private List<KeyValuePair<AnimationClip, AnimationClip>> overrideClips;
         private bool currentLoop;
         private float switchToLoopAt;
         private float elapsed;
@@ -699,8 +718,12 @@ internal static class UIExtendedEffectPreview
 
             if (currentClip == null)
             {
-                currentClip = ChooseFallbackClip();
-                currentLoop = ShouldLoop(currentClip);
+                TryUseControllerEntry();
+            }
+
+            if (currentClip == null)
+            {
+                UseFallbackClip();
             }
 
             if (currentClip == null)
@@ -755,7 +778,18 @@ internal static class UIExtendedEffectPreview
 
         private AnimationClip FindClip(string clipName)
         {
-            if (!IsUsableAnimationName(clipName) || animator.runtimeAnimatorController == null)
+            if (!IsUsableAnimationName(clipName))
+            {
+                return null;
+            }
+
+            AnimationClip stateClip = FindStateClip(clipName);
+            if (stateClip != null)
+            {
+                return stateClip;
+            }
+
+            if (animator.runtimeAnimatorController == null)
             {
                 return null;
             }
@@ -772,11 +806,42 @@ internal static class UIExtendedEffectPreview
             return null;
         }
 
-        private AnimationClip ChooseFallbackClip()
+        private void TryUseControllerEntry()
+        {
+            AnimatorController animatorController = GetAnimatorController();
+            if (animatorController == null || animatorController.layers == null || animatorController.layers.Length == 0)
+            {
+                return;
+            }
+
+            AnimatorState entryState = animatorController.layers[0].stateMachine != null
+                ? animatorController.layers[0].stateMachine.defaultState
+                : null;
+            AnimationClip entryClip = ResolveStateClip(entryState);
+            if (entryClip == null)
+            {
+                return;
+            }
+
+            currentClip = entryClip;
+            currentLoop = ShouldLoop(entryClip);
+
+            AnimatorStateTransition loopTransition = FindNextTransition(entryState);
+            AnimationClip loopClip = loopTransition != null
+                ? ResolveStateClip(loopTransition.destinationState)
+                : null;
+            if (loopClip != null && loopClip != entryClip)
+            {
+                pendingLoopClip = loopClip;
+                switchToLoopAt = GetTransitionSwitchTime(entryClip, loopTransition);
+            }
+        }
+
+        private void UseFallbackClip()
         {
             if (animator.runtimeAnimatorController == null)
             {
-                return null;
+                return;
             }
 
             AnimationClip[] clips = animator.runtimeAnimatorController.animationClips;
@@ -784,11 +849,181 @@ internal static class UIExtendedEffectPreview
             {
                 if (clips[i] != null)
                 {
-                    return clips[i];
+                    currentClip = clips[i];
+                    currentLoop = ShouldLoop(currentClip);
+                    return;
+                }
+            }
+        }
+
+        private AnimationClip FindStateClip(string stateName)
+        {
+            AnimatorController animatorController = GetAnimatorController();
+            if (animatorController == null || animatorController.layers == null)
+            {
+                return null;
+            }
+
+            for (int i = 0; i < animatorController.layers.Length; i++)
+            {
+                AnimatorStateMachine stateMachine = animatorController.layers[i].stateMachine;
+                AnimatorState state = FindState(stateMachine, stateName);
+                AnimationClip clip = ResolveStateClip(state);
+                if (clip != null)
+                {
+                    return clip;
                 }
             }
 
             return null;
+        }
+
+        private AnimatorController GetAnimatorController()
+        {
+            RuntimeAnimatorController controller = animator.runtimeAnimatorController;
+            AnimatorOverrideController overrideController = controller as AnimatorOverrideController;
+            if (overrideController != null)
+            {
+                controller = overrideController.runtimeAnimatorController;
+            }
+
+            return controller as AnimatorController;
+        }
+
+        private AnimatorState FindState(AnimatorStateMachine stateMachine, string stateName)
+        {
+            if (stateMachine == null || !IsUsableAnimationName(stateName))
+            {
+                return null;
+            }
+
+            ChildAnimatorState[] states = stateMachine.states;
+            for (int i = 0; i < states.Length; i++)
+            {
+                AnimatorState state = states[i].state;
+                if (state != null && state.name == stateName)
+                {
+                    return state;
+                }
+            }
+
+            ChildAnimatorStateMachine[] childStateMachines = stateMachine.stateMachines;
+            for (int i = 0; i < childStateMachines.Length; i++)
+            {
+                AnimatorState state = FindState(childStateMachines[i].stateMachine, stateName);
+                if (state != null)
+                {
+                    return state;
+                }
+            }
+
+            return null;
+        }
+
+        private AnimationClip ResolveStateClip(AnimatorState state)
+        {
+            return state != null ? ResolveMotionClip(state.motion) : null;
+        }
+
+        private AnimationClip ResolveMotionClip(Motion motion)
+        {
+            AnimationClip clip = motion as AnimationClip;
+            if (clip != null)
+            {
+                return ResolveOverrideClip(clip);
+            }
+
+            BlendTree blendTree = motion as BlendTree;
+            if (blendTree == null)
+            {
+                return null;
+            }
+
+            ChildMotion[] childMotions = blendTree.children;
+            for (int i = 0; i < childMotions.Length; i++)
+            {
+                clip = ResolveMotionClip(childMotions[i].motion);
+                if (clip != null)
+                {
+                    return clip;
+                }
+            }
+
+            return null;
+        }
+
+        private AnimationClip ResolveOverrideClip(AnimationClip originalClip)
+        {
+            AnimatorOverrideController overrideController = animator.runtimeAnimatorController as AnimatorOverrideController;
+            if (overrideController == null || originalClip == null)
+            {
+                return originalClip;
+            }
+
+            if (overrideClips == null)
+            {
+                overrideClips = new List<KeyValuePair<AnimationClip, AnimationClip>>(overrideController.overridesCount);
+                overrideController.GetOverrides(overrideClips);
+            }
+
+            for (int i = 0; i < overrideClips.Count; i++)
+            {
+                if (overrideClips[i].Key == originalClip)
+                {
+                    return overrideClips[i].Value != null ? overrideClips[i].Value : originalClip;
+                }
+            }
+
+            return originalClip;
+        }
+
+        private AnimatorStateTransition FindNextTransition(AnimatorState state)
+        {
+            if (state == null || state.transitions == null)
+            {
+                return null;
+            }
+
+            AnimatorStateTransition fallback = null;
+            AnimatorStateTransition[] transitions = state.transitions;
+            for (int i = 0; i < transitions.Length; i++)
+            {
+                AnimatorStateTransition transition = transitions[i];
+                if (transition == null || transition.destinationState == null)
+                {
+                    continue;
+                }
+
+                if (fallback == null)
+                {
+                    fallback = transition;
+                }
+
+                string destinationName = transition.destinationState.name;
+                AnimationClip destinationClip = ResolveStateClip(transition.destinationState);
+                if ((destinationName != null && destinationName.IndexOf("loop", StringComparison.OrdinalIgnoreCase) >= 0)
+                    || (destinationClip != null && destinationClip.name.IndexOf("loop", StringComparison.OrdinalIgnoreCase) >= 0))
+                {
+                    return transition;
+                }
+            }
+
+            return fallback;
+        }
+
+        private static float GetTransitionSwitchTime(AnimationClip entryClip, AnimatorStateTransition transition)
+        {
+            if (entryClip == null || entryClip.length <= 0f)
+            {
+                return 0f;
+            }
+
+            if (transition != null && transition.hasExitTime)
+            {
+                return Mathf.Clamp01(transition.exitTime) * entryClip.length;
+            }
+
+            return entryClip.length;
         }
 
         private static bool ShouldLoop(AnimationClip clip)
