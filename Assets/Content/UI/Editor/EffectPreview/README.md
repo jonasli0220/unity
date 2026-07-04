@@ -2,11 +2,14 @@
 
 在不进入 Play Mode 的情况下，从 Scene 视图的 `Prefab导航` 工具栏预览当前 UI Prefab 的运行时动效。
 
+脚本入口集中在 `UIEffectPreview.cs`，这是一个独立编辑器工具文件。
+
 ## 使用方式
 
 - 打开一个 UI Prefab。
 - 打开 Prefab 后无需选择节点；工具会扫描当前 Prefab 里所有已开启节点的动效。
 - 点击 `动态预览` 开始播放，再次点击停止并复位到点击前的临时预览状态。
+- Scene 视图飘字只提示 `动态预览开始` / `动态预览已停止`；粒子、Spine、Animator 统计只写入 Console 日志。
 - 默认只预览粒子和 Spine。需要把 `Animator` / legacy `Animation` 也纳入预览时，先勾选 `UITools/动态预览包含animator`。
 - 普通 Scene 中必须先选择目标节点，工具不会自动播放整个场景的动效。
 - 备用菜单：`Tools/UI/Effect Preview/Play or Stop Dynamic Effects`。

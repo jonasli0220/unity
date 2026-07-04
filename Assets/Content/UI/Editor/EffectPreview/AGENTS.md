@@ -7,6 +7,7 @@ This directory contains editor-only controls for previewing UI dynamic effects w
 ## Placement
 
 - Keep effect-preview editor code in this directory.
+- Keep the tool implemented as one independent editor script, `UIEffectPreview.cs`, unless the file becomes genuinely too large to maintain.
 - Keep user-facing usage notes in `README.md`.
 - Do not add runtime gameplay code here.
 
@@ -14,6 +15,7 @@ This directory contains editor-only controls for previewing UI dynamic effects w
 
 - Preview is available only outside Play Mode and must never enter Play Mode automatically.
 - The primary entry is a compact control in the existing `Prefab导航` Scene View overlay; keep a menu fallback under `Tools/UI/Effect Preview`.
+- Scene-view notifications should be short action feedback only, such as `动态预览开始` and `动态预览已停止`; keep detailed counts in Console logs.
 - In Prefab Stage, preview the whole opened prefab's active hierarchy; do not bind preview scope to the current selection.
 - In a regular scene, preview the selected hierarchy subtree only. Never silently simulate every particle in a gameplay scene.
 - Default preview types are Unity `ParticleSystem` and Spine `SkeletonGraphic` / `SkeletonAnimation` / `SkeletonMecanim`.
