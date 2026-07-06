@@ -6,11 +6,14 @@
 - Keep user-facing behavior and maintenance notes in `README.md`.
 - Do not add runtime gameplay code or modify favorited source assets.
 
-## Shared Data
+## Local Data And Exchange
 
-- Store the team-shared favorites library at `Assets/Content/UI/Library/AssetFavoritesLibrary.asset`.
+- Store each user's automatically created local library at `Assets/Content/UI/Library/AssetFavoritesLocalLibrary.asset`; do not treat it as team-authored source data or publish it with reusable scripts.
+- On first creation, copy the legacy `Assets/Content/UI/Library/AssetFavoritesLibrary.asset` into the local library when it exists, without deleting or modifying the legacy asset.
 - Persist project asset references by Unity GUID, not by direct object reference or absolute path.
 - Store generated node-template prefabs only under `Assets/Content/UI/Library/AssetFavoritesNodeTemplates`.
+- Export personal favorites as one `.assetfavorites` exchange file. Include custom-folder metadata, asset GUID records, and embedded node-template prefab bytes so node favorites remain usable on another machine.
+- Import is additive only: never delete, overwrite, rename, or move local favorites. Keep local placement for duplicate asset GUIDs; deduplicate node templates by prefab-content hash or source global object ID; reuse matching custom folder paths and create unique names only for true conflicts.
 - Treat the library asset as relationship data only. Removing an entry or folder must never delete, move, or edit the referenced source asset.
 - Removing a node-template favorite may delete its generated template prefab, but must never delete or edit the original scene or prefab-stage node it was captured from.
 - Keep folders and favorite entries serializable with stable IDs so nested organization survives renames and asset moves.
@@ -28,10 +31,11 @@
 - Preserve standard Unity selection conventions: Ctrl/Cmd toggles, Shift ranges, single click pings, double click opens.
 - Keep the folder tree keyboard navigable and accept dragged favorite entries or Project assets.
 - Treat preview size as one continuous browsing control, not separate clickable list/grid modes. At 64 px the content switches automatically to a compact single-line list; above 64 px it is a grid. Keep the endpoint icons informational only, support Ctrl/Cmd + mouse wheel over the content area, preserve ordinary wheel scrolling, and cap previews at 512 x 512.
-- Keep the visual hierarchy close to Unity's Project browser: a full-width search strip, a clear left-side create-folder action, a compact folder tree with counts, an unboxed preview grid, and a shared bottom status bar with item count plus view/zoom controls.
+- Keep the visual hierarchy close to Unity's Project browser: a fixed-width right-aligned search field, a clear left-side create-folder action, a compact folder tree with counts, an unboxed preview grid, and a shared bottom status bar with item count plus view/zoom controls.
+- Keep Library import/export actions in the top toolbar beside a fixed-width Project-style search field.
 
 ## Validation
 
 - Validate on Unity 2021.3.8f1 and avoid APIs introduced after Unity 2021 LTS.
-- After changes, confirm Editor compilation, menu registration, and shared library creation through the Codex Unity Bridge when available.
-- Do not publish the mutable library asset to the reusable GitHub scripts repository; publish this tool's scripts, `.meta` files, and documentation only.
+- After changes, confirm Editor compilation, menu registration, local library creation, additive import behavior, and node-template restoration through the Codex Unity Bridge when available.
+- Do not publish mutable local library assets, exported `.assetfavorites` files, or generated node templates to the reusable GitHub scripts repository; publish this tool's scripts, `.meta` files, and documentation only.

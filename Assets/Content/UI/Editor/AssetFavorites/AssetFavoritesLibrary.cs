@@ -22,6 +22,7 @@ public sealed class AssetFavoriteEntry
     public AssetFavoriteEntryKind kind = AssetFavoriteEntryKind.Asset;
     public string assetGuid = string.Empty;
     public string templateGuid = string.Empty;
+    public string templateContentHash = string.Empty;
     public string folderId = string.Empty;
     public string displayName = string.Empty;
     public string sourceScenePath = string.Empty;
@@ -40,7 +41,8 @@ public enum AssetFavoriteEntryKind
 
 public sealed partial class AssetFavoritesLibrary : ScriptableObject
 {
-    public const string AssetPath = "Assets/Content/UI/Library/AssetFavoritesLibrary.asset";
+    public const string AssetPath = "Assets/Content/UI/Library/AssetFavoritesLocalLibrary.asset";
+    public const string LegacyAssetPath = "Assets/Content/UI/Library/AssetFavoritesLibrary.asset";
     public const string NodeTemplatesFolder = "Assets/Content/UI/Library/AssetFavoritesNodeTemplates";
     public const string AutoNodeFolderId = "auto-nodes";
 
@@ -88,7 +90,12 @@ public sealed partial class AssetFavoritesLibrary : ScriptableObject
         if (library == null)
         {
             EnsureAssetFolder();
-            library = CreateInstance<AssetFavoritesLibrary>();
+            AssetFavoritesLibrary legacyLibrary = AssetDatabase.LoadAssetAtPath<AssetFavoritesLibrary>(LegacyAssetPath);
+            library = legacyLibrary == null
+                ? CreateInstance<AssetFavoritesLibrary>()
+                : Instantiate(legacyLibrary);
+            library.name = "AssetFavoritesLocalLibrary";
+            library.hideFlags = HideFlags.None;
             library.EnsureDefaultFolders();
             AssetDatabase.CreateAsset(library, AssetPath);
             AssetDatabase.SaveAssets();
@@ -415,6 +422,7 @@ public sealed partial class AssetFavoritesLibrary : ScriptableObject
     {
         if (string.IsNullOrEmpty(path)
             || path == AssetPath
+            || path == LegacyAssetPath
             || path.StartsWith(NodeTemplatesFolder + "/", StringComparison.OrdinalIgnoreCase)
             || AssetDatabase.IsValidFolder(path)
             || AssetDatabase.LoadMainAssetAtPath(path) == null)
@@ -542,6 +550,26 @@ public sealed partial class AssetFavoritesLibrary : ScriptableObject
             Name = name;
             Order = order;
         }
+    }
+}
+
+[InitializeOnLoad]
+internal static class AssetFavoritesLocalLibraryBootstrap
+{
+    static AssetFavoritesLocalLibraryBootstrap()
+    {
+        EditorApplication.delayCall += EnsureLocalLibrary;
+    }
+
+    private static void EnsureLocalLibrary()
+    {
+        if (EditorApplication.isCompiling || EditorApplication.isUpdating)
+        {
+            EditorApplication.delayCall += EnsureLocalLibrary;
+            return;
+        }
+
+        AssetFavoritesLibrary.LoadOrCreate();
     }
 }
 

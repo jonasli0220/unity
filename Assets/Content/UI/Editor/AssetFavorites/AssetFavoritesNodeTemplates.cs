@@ -99,6 +99,7 @@ public sealed partial class AssetFavoritesLibrary
                 id = entryId,
                 kind = AssetFavoriteEntryKind.NodeTemplate,
                 templateGuid = templateGuid,
+                templateContentHash = ComputeTemplateContentHash(templatePath),
                 folderId = IsValidDestination(destinationFolderId) ? destinationFolderId : AutoNodeFolderId,
                 displayName = gameObject.name,
                 sourceScenePath = GetSourcePath(gameObject),

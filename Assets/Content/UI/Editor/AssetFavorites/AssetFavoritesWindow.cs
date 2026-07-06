@@ -14,7 +14,10 @@ public sealed class AssetFavoritesWindow : EditorWindow
 
     private const string MenuPath = "Tools/UI/Asset Favorites";
     private const string PreviewSizePrefsKey = "Dragon.AssetFavorites.PreviewSize";
+    private const string ExchangeDirectoryPrefsKey = "Dragon.AssetFavorites.ExchangeDirectory";
     private const float ToolbarHeight = 30f;
+    private const float SearchFieldWidth = 300f;
+    private const float LibraryButtonWidth = 96f;
     private const float FolderPanelWidth = 238f;
     private const float FolderActionHeight = 36f;
     private const float StatusHeight = 26f;
@@ -101,8 +104,24 @@ public sealed class AssetFavoritesWindow : EditorWindow
         using (new GUILayout.HorizontalScope(EditorStyles.toolbar, GUILayout.Height(ToolbarHeight)))
         {
             GUILayout.Space(4f);
+            GUILayout.FlexibleSpace();
+            if (GUILayout.Button("导入 Library", EditorStyles.toolbarButton, GUILayout.Width(LibraryButtonWidth)))
+            {
+                ImportLibrary();
+            }
+
+            if (GUILayout.Button("导出 Library", EditorStyles.toolbarButton, GUILayout.Width(LibraryButtonWidth)))
+            {
+                ExportLibrary();
+            }
+
+            GUILayout.Space(6f);
             GUIStyle searchStyle = GUI.skin.FindStyle("ToolbarSeachTextField") ?? EditorStyles.toolbarTextField;
-            string nextSearch = GUILayout.TextField(searchText, searchStyle, GUILayout.ExpandWidth(true), GUILayout.Height(20f));
+            string nextSearch = GUILayout.TextField(
+                searchText,
+                searchStyle,
+                GUILayout.Width(SearchFieldWidth),
+                GUILayout.Height(20f));
             if (nextSearch != searchText)
             {
                 searchText = nextSearch;
@@ -115,6 +134,101 @@ public sealed class AssetFavoritesWindow : EditorWindow
                 contentScroll = Vector2.zero;
             }
             GUILayout.Space(4f);
+        }
+    }
+
+    private void ExportLibrary()
+    {
+        string directory = GetExchangeDirectory();
+        string defaultName = "AssetFavorites_" + DateTime.Now.ToString("yyyyMMdd_HHmm");
+        string filePath = EditorUtility.SaveFilePanel(
+            "导出 Asset Favorites Library",
+            directory,
+            defaultName,
+            "assetfavorites");
+        if (string.IsNullOrEmpty(filePath))
+        {
+            return;
+        }
+
+        try
+        {
+            AssetFavoritesExchangeSummary summary = library.ExportExchange(filePath);
+            RememberExchangeDirectory(filePath);
+            statusText = "已导出 " + (summary.exportedAssets + summary.exportedNodes) + " 个收藏";
+            EditorUtility.DisplayDialog(
+                "导出完成",
+                "已导出 " + summary.exportedAssets + " 个资产、"
+                + summary.exportedNodes + " 个节点模板。"
+                + (summary.skippedInvalid > 0 ? "\n跳过 " + summary.skippedInvalid + " 个无效记录。" : string.Empty),
+                "确定");
+        }
+        catch (Exception exception)
+        {
+            Debug.LogException(exception);
+            statusText = "导出失败；本地收藏未受影响";
+            EditorUtility.DisplayDialog("导出失败", exception.Message, "确定");
+        }
+    }
+
+    private void ImportLibrary()
+    {
+        string filePath = EditorUtility.OpenFilePanel(
+            "导入 Asset Favorites Library",
+            GetExchangeDirectory(),
+            "assetfavorites");
+        if (string.IsNullOrEmpty(filePath))
+        {
+            return;
+        }
+
+        try
+        {
+            AssetFavoritesExchangeSummary summary = library.ImportExchange(filePath);
+            RememberExchangeDirectory(filePath);
+            AssetFavoritesNodePreviewRenderer.ClearCache();
+            ReloadTreeKeepingSelection();
+            int added = summary.addedAssets + summary.addedNodes;
+            statusText = added > 0
+                ? "已新增 " + added + " 个收藏；本地原记录完整保留"
+                : "没有新增收藏；本地原记录完整保留";
+            EditorUtility.DisplayDialog(
+                "导入完成",
+                "新增资产：" + summary.addedAssets
+                + "\n新增节点模板：" + summary.addedNodes
+                + "\n新增文件夹：" + summary.createdFolders
+                + "\n跳过本地已有：" + summary.skippedExisting
+                + "\n跳过项目中缺失：" + summary.skippedMissing
+                + "\n跳过无效记录：" + summary.skippedInvalid
+                + "\n\n本地原有收藏没有被删除、覆盖或移动。",
+                "确定");
+        }
+        catch (Exception exception)
+        {
+            Debug.LogException(exception);
+            statusText = "导入失败；本地收藏未受影响";
+            EditorUtility.DisplayDialog("导入失败", exception.Message, "确定");
+        }
+    }
+
+    private static string GetExchangeDirectory()
+    {
+        string saved = EditorPrefs.GetString(ExchangeDirectoryPrefsKey, string.Empty);
+        if (!string.IsNullOrEmpty(saved) && Directory.Exists(saved))
+        {
+            return saved;
+        }
+
+        DirectoryInfo projectRoot = Directory.GetParent(Application.dataPath);
+        return projectRoot == null ? Application.dataPath : projectRoot.FullName;
+    }
+
+    private static void RememberExchangeDirectory(string filePath)
+    {
+        string directory = Path.GetDirectoryName(filePath);
+        if (!string.IsNullOrEmpty(directory))
+        {
+            EditorPrefs.SetString(ExchangeDirectoryPrefsKey, directory);
         }
     }
 
