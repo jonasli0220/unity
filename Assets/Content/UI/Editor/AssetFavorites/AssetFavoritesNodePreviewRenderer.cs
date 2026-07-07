@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using UnityEditor;
 using UnityEngine;
 
 internal static class AssetFavoritesNodePreviewRenderer
@@ -10,16 +11,27 @@ internal static class AssetFavoritesNodePreviewRenderer
     private static readonly Dictionary<string, Texture2D> PreviewCache = new Dictionary<string, Texture2D>();
     private static readonly HashSet<string> FailedCache = new HashSet<string>();
 
-    public static Texture2D GetPreview(AssetFavoriteEntry entry, GameObject template)
+    public static Texture2D GetPreview(AssetFavoriteEntry entry, GameObject prefab)
     {
-        if (entry == null || template == null || !AssetFavoritesLibrary.IsNodeTemplate(entry))
+        if (entry == null || prefab == null)
         {
             return null;
         }
 
-        string cacheKey = string.IsNullOrEmpty(entry.templateGuid)
-            ? AssetFavoritesLibrary.GetEntryId(entry)
-            : entry.templateGuid;
+        bool isNodeTemplate = AssetFavoritesLibrary.IsNodeTemplate(entry);
+        string cacheKey = isNodeTemplate ? entry.templateGuid : entry.assetGuid;
+        string assetPath = AssetDatabase.GUIDToAssetPath(cacheKey);
+        if (!isNodeTemplate
+            && (string.IsNullOrEmpty(assetPath)
+                || !assetPath.EndsWith(".prefab", StringComparison.OrdinalIgnoreCase)))
+        {
+            return null;
+        }
+
+        if (string.IsNullOrEmpty(cacheKey))
+        {
+            cacheKey = AssetFavoritesLibrary.GetEntryId(entry);
+        }
         if (string.IsNullOrEmpty(cacheKey))
         {
             return null;
@@ -36,14 +48,14 @@ internal static class AssetFavoritesNodePreviewRenderer
             return null;
         }
 
-        Texture2D rendered = RenderTemplate(template);
+        Texture2D rendered = RenderPrefab(prefab);
         if (rendered == null)
         {
             FailedCache.Add(cacheKey);
             return null;
         }
 
-        rendered.name = "AssetFavoritesNodePreview_" + template.name;
+        rendered.name = "AssetFavoritesUIPrefabPreview_" + prefab.name;
         rendered.hideFlags = HideFlags.HideAndDontSave;
         rendered.wrapMode = TextureWrapMode.Clamp;
         rendered.filterMode = FilterMode.Bilinear;
@@ -65,19 +77,19 @@ internal static class AssetFavoritesNodePreviewRenderer
         FailedCache.Clear();
     }
 
-    private static Texture2D RenderTemplate(GameObject template)
+    private static Texture2D RenderPrefab(GameObject prefab)
     {
         string error;
         Texture2D texture;
         using (PrefabHistoryLogic.SuppressRecording())
         {
-            texture = UIPrefabPreviewGenerator.Generate(template, PreviewTextureSize, out error);
+            texture = UIPrefabPreviewGenerator.Generate(prefab, PreviewTextureSize, out error);
         }
 
         if (texture == null && !string.Equals(error, NoVisiblePreviewError, StringComparison.Ordinal))
         {
-            Debug.LogWarning("[Asset Favorites] Could not render node template preview for "
-                + template.name + ": " + (string.IsNullOrEmpty(error) ? "Preview generation failed." : error));
+            Debug.LogWarning("[Asset Favorites] Could not render UI prefab preview for "
+                + prefab.name + ": " + (string.IsNullOrEmpty(error) ? "Preview generation failed." : error));
         }
 
         return texture;

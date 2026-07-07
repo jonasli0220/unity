@@ -26,7 +26,7 @@
 - Scene or prefab-stage GameObjects can be saved as node templates. They should feel like favorites to the user, while the generated prefab remains implementation detail.
 - Node templates must be reusable by dragging or placing into a selected Hierarchy parent, and placed instances should be unpacked so designers are not forced into prefab-instance management.
 - Dropping node templates into the Scene view should place them as siblings immediately after the scene node that was selected before the drag started; without a valid scene selection, place them at the scene root.
-- Node template previews should reuse `UIPrefabPreviewGenerator` from `Assets/Content/UI/Editor/UIPrefabPreview/UIPrefabPreviewProjectOverlay.cs` and keep only Asset Favorites-specific memory caching here.
+- Node template and regular prefab favorite previews should reuse `UIPrefabPreviewGenerator` from `Assets/Content/UI/Editor/UIPrefabPreview/UIPrefabPreviewProjectOverlay.cs` and keep only Asset Favorites-specific memory caching here; fall back to Unity's native preview when the UI renderer cannot produce an image.
 - Skip already-favorited assets instead of creating duplicate entries.
 - Preserve standard Unity selection conventions: Ctrl/Cmd toggles, Shift ranges, single click pings, double click opens.
 - Keep the folder tree keyboard navigable and accept dragged favorite entries or Project assets.

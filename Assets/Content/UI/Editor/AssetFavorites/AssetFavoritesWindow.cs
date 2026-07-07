@@ -464,9 +464,10 @@ public sealed class AssetFavoritesWindow : EditorWindow
     private void DrawAssetPreview(Rect rect, EntryView entry)
     {
         Texture preview = null;
-        if (entry.IsNodeTemplate)
+        GameObject prefab = entry.Asset as GameObject;
+        if (prefab != null)
         {
-            preview = AssetFavoritesNodePreviewRenderer.GetPreview(entry.Entry, entry.Asset as GameObject);
+            preview = AssetFavoritesNodePreviewRenderer.GetPreview(entry.Entry, prefab);
         }
 
         if (preview == null)
