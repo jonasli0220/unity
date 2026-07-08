@@ -8,6 +8,7 @@ This repository stores reusable Unity editor tooling exported from the Dragon UI
 - Keep Unity `.meta` files beside their corresponding assets.
 - Put UI editor-only scripts under `Assets/Content/UI/Editor`.
 - Keep durable UI workspace conventions in `Assets/Content/UI/AGENTS.md`.
+- Put standalone Windows QA or workflow tools that are not Unity assets under `Tools/<ToolName>/`; do not add Unity `.meta` files there.
 
 ## Change Rules
 
