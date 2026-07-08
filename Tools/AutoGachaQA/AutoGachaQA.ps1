@@ -50,11 +50,29 @@ namespace DragonQaTools
         [DllImport("user32.dll")]
         public static extern IntPtr GetForegroundWindow();
 
+        [DllImport("user32.dll")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool GetCursorPos(out POINT lpPoint);
+
+        [DllImport("user32.dll")]
+        public static extern short GetAsyncKeyState(int vKey);
+
         [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
         public static extern IntPtr FindWindow(string lpClassName, string lpWindowName);
 
         [DllImport("user32.dll", SetLastError = true)]
         public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
+
+        [DllImport("kernel32.dll")]
+        public static extern uint GetCurrentThreadId();
+
+        [DllImport("user32.dll")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool fAttach);
+
+        [DllImport("user32.dll")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool BringWindowToTop(IntPtr hWnd);
 
         [DllImport("user32.dll")]
         [return: MarshalAs(UnmanagedType.Bool)]
@@ -66,10 +84,6 @@ namespace DragonQaTools
 
         [DllImport("user32.dll")]
         public static extern void mouse_event(uint dwFlags, uint dx, uint dy, uint dwData, UIntPtr dwExtraInfo);
-
-        [DllImport("user32.dll", SetLastError = true)]
-        [return: MarshalAs(UnmanagedType.Bool)]
-        public static extern bool PostMessage(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam);
 
         [DllImport("user32.dll", SetLastError = true)]
         [return: MarshalAs(UnmanagedType.Bool)]
@@ -143,7 +157,6 @@ $script:StartedRounds = 0
 $script:PhaseStartedAt = [DateTime]::MinValue
 $script:LastProbeAt = [DateTime]::MinValue
 $script:BackgroundMode = $false
-$script:BackgroundFallbackLogged = $false
 
 function Get-TargetWindow {
     $candidateHandles = @(
@@ -227,6 +240,44 @@ function Get-ScaledRectangle {
 
 function Test-TargetIsForeground {
     return [DragonQaTools.NativeMethods]::GetForegroundWindow() -eq $script:TargetWindow
+}
+
+function Set-WindowForegroundReliable {
+    param([Parameter(Mandatory = $true)][IntPtr]$WindowHandle)
+
+    $currentForeground = [DragonQaTools.NativeMethods]::GetForegroundWindow()
+    [uint32]$foregroundOwnerProcessId = 0
+    $foregroundThreadId = [DragonQaTools.NativeMethods]::GetWindowThreadProcessId(
+        $currentForeground,
+        [ref]$foregroundOwnerProcessId
+    )
+    $currentThreadId = [DragonQaTools.NativeMethods]::GetCurrentThreadId()
+    $attached = $false
+
+    if ($foregroundThreadId -ne 0 -and $foregroundThreadId -ne $currentThreadId) {
+        $attached = [DragonQaTools.NativeMethods]::AttachThreadInput(
+            $currentThreadId,
+            $foregroundThreadId,
+            $true
+        )
+    }
+
+    try {
+        [DragonQaTools.NativeMethods]::BringWindowToTop($WindowHandle) | Out-Null
+        [DragonQaTools.NativeMethods]::SetForegroundWindow($WindowHandle) | Out-Null
+    }
+    finally {
+        if ($attached) {
+            [DragonQaTools.NativeMethods]::AttachThreadInput(
+                $currentThreadId,
+                $foregroundThreadId,
+                $false
+            ) | Out-Null
+        }
+    }
+
+    Start-Sleep -Milliseconds 120
+    return [DragonQaTools.NativeMethods]::GetForegroundWindow() -eq $WindowHandle
 }
 
 function Get-RegionRedRatio {
@@ -316,25 +367,49 @@ function Invoke-RegionClick {
     $clickRect = Get-ScaledRectangle -Geometry $geometry -Region $Region
     $x = Get-Random -Minimum $clickRect.Left -Maximum ($clickRect.Left + $clickRect.Width)
     $y = Get-Random -Minimum $clickRect.Top -Maximum ($clickRect.Top + $clickRect.Height)
+    $screenX = $geometry.Left + $x
+    $screenY = $geometry.Top + $y
+
     if ($script:BackgroundMode) {
         if ([DragonQaTools.NativeMethods]::IsIconic($WindowHandle)) {
             throw '后台模式不支持最小化窗口，请先恢复游戏窗口。'
         }
 
-        $lParamValue = (($y -band 0xFFFF) -shl 16) -bor ($x -band 0xFFFF)
-        $lParam = [IntPtr]$lParamValue
-        [DragonQaTools.NativeMethods]::PostMessage($WindowHandle, 0x0200, [IntPtr]::Zero, $lParam) | Out-Null
-        $downOk = [DragonQaTools.NativeMethods]::PostMessage($WindowHandle, 0x0201, [IntPtr]1, $lParam)
-        Start-Sleep -Milliseconds 35
-        $upOk = [DragonQaTools.NativeMethods]::PostMessage($WindowHandle, 0x0202, [IntPtr]::Zero, $lParam)
-        if (-not $downOk -or -not $upOk) {
-            throw '目标窗口未接受后台点击消息。'
+        # 用户正在按住鼠标时延后本次点击，避免打断拖拽或框选。
+        if (
+            [DragonQaTools.NativeMethods]::GetAsyncKeyState(0x01) -lt 0 -or
+            [DragonQaTools.NativeMethods]::GetAsyncKeyState(0x02) -lt 0 -or
+            [DragonQaTools.NativeMethods]::GetAsyncKeyState(0x04) -lt 0
+        ) {
+            return $false
+        }
+
+        $previousForeground = [DragonQaTools.NativeMethods]::GetForegroundWindow()
+        $previousCursor = New-Object DragonQaTools.POINT
+        if (-not [DragonQaTools.NativeMethods]::GetCursorPos([ref]$previousCursor)) {
+            throw '无法记录当前鼠标位置。'
+        }
+
+        if (-not (Set-WindowForegroundReliable -WindowHandle $WindowHandle)) {
+            throw '无法临时激活游戏窗口，已阻止点击。'
+        }
+
+        try {
+            if (-not [DragonQaTools.NativeMethods]::SetCursorPos($screenX, $screenY)) {
+                throw '无法移动鼠标到目标按钮。'
+            }
+            [DragonQaTools.NativeMethods]::mouse_event(0x0002, 0, 0, 0, [UIntPtr]::Zero)
+            Start-Sleep -Milliseconds 35
+            [DragonQaTools.NativeMethods]::mouse_event(0x0004, 0, 0, 0, [UIntPtr]::Zero)
+        }
+        finally {
+            [DragonQaTools.NativeMethods]::SetCursorPos($previousCursor.X, $previousCursor.Y) | Out-Null
+            if ($previousForeground -ne [IntPtr]::Zero -and $previousForeground -ne $WindowHandle) {
+                Set-WindowForegroundReliable -WindowHandle $previousForeground | Out-Null
+            }
         }
     }
     else {
-        $screenX = $geometry.Left + $x
-        $screenY = $geometry.Top + $y
-
         if (-not [DragonQaTools.NativeMethods]::SetCursorPos($screenX, $screenY)) {
             throw '无法移动鼠标到目标按钮。'
         }
@@ -343,10 +418,12 @@ function Invoke-RegionClick {
         Start-Sleep -Milliseconds 35
         [DragonQaTools.NativeMethods]::mouse_event(0x0004, 0, 0, 0, [UIntPtr]::Zero)
     }
+
+    return $true
 }
 
 $form = New-Object DragonQaTools.HotKeyForm
-$form.Text = '抽卡回归测试工具'
+$form.Text = '抽卡回归测试工具 v1.1'
 $form.StartPosition = 'CenterScreen'
 $form.ClientSize = New-Object System.Drawing.Size(540, 600)
 $form.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::FixedDialog
@@ -354,7 +431,7 @@ $form.MaximizeBox = $false
 $form.Font = New-Object System.Drawing.Font('Microsoft YaHei UI', 9)
 
 $titleLabel = New-Object System.Windows.Forms.Label
-$titleLabel.Text = 'Dragonheir 抽卡回归测试'
+$titleLabel.Text = 'Dragonheir 抽卡回归测试 v1.1'
 $titleLabel.Font = New-Object System.Drawing.Font('Microsoft YaHei UI', 16, [System.Drawing.FontStyle]::Bold)
 $titleLabel.Location = New-Object System.Drawing.Point(20, 18)
 $titleLabel.Size = New-Object System.Drawing.Size(450, 34)
@@ -395,7 +472,7 @@ $confirmCheck.Size = New-Object System.Drawing.Size(495, 28)
 $form.Controls.Add($confirmCheck)
 
 $backgroundCheck = New-Object System.Windows.Forms.CheckBox
-$backgroundCheck.Text = '后台运行（实验）：不抢鼠标；不支持最小化；首次请只测 1 次十连'
+$backgroundCheck.Text = '后台兼容模式：点击时短暂切到游戏并恢复；不支持最小化'
 $backgroundCheck.Location = New-Object System.Drawing.Point(22, 184)
 $backgroundCheck.Size = New-Object System.Drawing.Size(495, 28)
 $form.Controls.Add($backgroundCheck)
@@ -463,7 +540,7 @@ $logBox.BackColor = [System.Drawing.Color]::White
 $form.Controls.Add($logBox)
 
 $hintLabel = New-Object System.Windows.Forms.Label
-$hintLabel.Text = '开始后请勿操作鼠标；切换到其他窗口会自动暂停。'
+$hintLabel.Text = '前台模式请勿操作鼠标；后台模式点击瞬间会短暂切换焦点。'
 $hintLabel.ForeColor = [System.Drawing.Color]::DimGray
 $hintLabel.Location = New-Object System.Drawing.Point(22, 561)
 $hintLabel.Size = New-Object System.Drawing.Size(496, 24)
@@ -598,7 +675,7 @@ $startButton.Add_Click({
 
     if ($backgroundCheck.Checked -and [int]$roundInput.Value -gt 1) {
         $choice = [System.Windows.Forms.MessageBox]::Show(
-            '后台模式依赖当前客户端接收窗口消息。首次使用建议先设为 1 次十连验证。确定继续执行多次十连吗？',
+            '后台兼容模式会在每次点击时短暂激活游戏，再恢复当前窗口。首次使用建议先设为 1 次十连验证。确定继续执行多次十连吗？',
             '后台模式提示',
             [System.Windows.Forms.MessageBoxButtons]::YesNo,
             [System.Windows.Forms.MessageBoxIcon]::Warning
@@ -628,7 +705,6 @@ $startButton.Add_Click({
     $script:TargetWindow = $window
     $script:TargetRounds = [int]$roundInput.Value
     $script:BackgroundMode = $backgroundCheck.Checked
-    $script:BackgroundFallbackLogged = $false
     $script:StartedRounds = 0
     $script:Phase = 'WaitMain'
     $script:PhaseStartedAt = Get-Date
@@ -643,7 +719,7 @@ $startButton.Add_Click({
         $statusLabel.Text = '运行中：等待召唤首页'
     }
     $statusLabel.ForeColor = [System.Drawing.Color]::DarkGreen
-    $modeText = if ($script:BackgroundMode) { '后台实验模式' } else { '前台稳定模式' }
+    $modeText = if ($script:BackgroundMode) { '后台兼容模式' } else { '前台稳定模式' }
     Add-Log "开始任务：$($script:TargetRounds) 次十连；$modeText。"
     Set-UiForState
 
@@ -687,18 +763,20 @@ $timer.Add_Tick({
             'WaitMain' {
                 $mainTimeout = if ($script:BackgroundMode) { 35 } else { 20 }
                 if ($phaseSeconds -gt $mainTimeout) {
-                    Pause-Automation -Reason "$mainTimeout 秒内未识别到召唤首页按钮"
+                    Pause-Automation -Reason "$mainTimeout 秒内未能点击召唤首页按钮"
                     return
                 }
 
-                $ratio = Get-RegionRedRatio -WindowHandle $script:TargetWindow -Region $script:Regions.MainButtonProbe
-                if ($script:BackgroundMode -and $ratio -lt 0 -and -not $script:BackgroundFallbackLogged) {
-                    Add-Log '当前 DirectX 客户端不支持后台画面捕获，已改用保守固定等待；请先完成 1 次十连验证。'
-                    $script:BackgroundFallbackLogged = $true
+                if ($script:BackgroundMode) {
+                    $mainReady = $phaseSeconds -ge 1.5
                 }
-                $mainReady = ($ratio -ge 0.075) -or ($script:BackgroundMode -and $phaseSeconds -ge 2.5)
+                else {
+                    $ratio = Get-RegionRedRatio -WindowHandle $script:TargetWindow -Region $script:Regions.MainButtonProbe
+                    $mainReady = $ratio -ge 0.075
+                }
                 if ($mainReady) {
-                    Invoke-RegionClick -WindowHandle $script:TargetWindow -Region $script:Regions.MainButton
+                    $clicked = Invoke-RegionClick -WindowHandle $script:TargetWindow -Region $script:Regions.MainButton
+                    if (-not $clicked) { return }
                     $script:StartedRounds = 1
                     $progressBar.Value = 1
                     $script:Phase = 'WaitSkip'
@@ -715,14 +793,16 @@ $timer.Add_Tick({
                 }
                 if ($phaseSeconds -lt 1.0) { return }
 
-                $ratio = Get-RegionRedRatio -WindowHandle $script:TargetWindow -Region $script:Regions.SkipButtonProbe
-                if ($script:BackgroundMode -and $ratio -lt 0 -and -not $script:BackgroundFallbackLogged) {
-                    Add-Log '当前 DirectX 客户端不支持后台画面捕获，已改用保守固定等待；请先完成 1 次十连验证。'
-                    $script:BackgroundFallbackLogged = $true
+                if ($script:BackgroundMode) {
+                    $skipReady = $phaseSeconds -ge 4.0
                 }
-                $skipReady = ($ratio -ge 0.018) -or ($script:BackgroundMode -and $phaseSeconds -ge 6.0)
+                else {
+                    $ratio = Get-RegionRedRatio -WindowHandle $script:TargetWindow -Region $script:Regions.SkipButtonProbe
+                    $skipReady = $ratio -ge 0.018
+                }
                 if ($skipReady) {
-                    Invoke-RegionClick -WindowHandle $script:TargetWindow -Region $script:Regions.SkipButton
+                    $clicked = Invoke-RegionClick -WindowHandle $script:TargetWindow -Region $script:Regions.SkipButton
+                    if (-not $clicked) { return }
                     $script:Phase = 'WaitResult'
                     $script:PhaseStartedAt = Get-Date
                     $statusLabel.Text = "运行中：第 $($script:StartedRounds)/$($script:TargetRounds) 次十连，等待结果页"
@@ -737,19 +817,21 @@ $timer.Add_Tick({
                 }
                 if ($phaseSeconds -lt 1.0) { return }
 
-                $ratio = Get-RegionRedRatio -WindowHandle $script:TargetWindow -Region $script:Regions.ResultButtonProbe
-                if ($script:BackgroundMode -and $ratio -lt 0 -and -not $script:BackgroundFallbackLogged) {
-                    Add-Log '当前 DirectX 客户端不支持后台画面捕获，已改用保守固定等待；请先完成 1 次十连验证。'
-                    $script:BackgroundFallbackLogged = $true
+                if ($script:BackgroundMode) {
+                    $resultReady = $phaseSeconds -ge 10.0
                 }
-                $resultReady = ($ratio -ge 0.075) -or ($script:BackgroundMode -and $phaseSeconds -ge 10.0)
+                else {
+                    $ratio = Get-RegionRedRatio -WindowHandle $script:TargetWindow -Region $script:Regions.ResultButtonProbe
+                    $resultReady = $ratio -ge 0.075
+                }
                 if ($resultReady) {
                     if ($script:StartedRounds -ge $script:TargetRounds) {
                         Complete-Automation
                         return
                     }
 
-                    Invoke-RegionClick -WindowHandle $script:TargetWindow -Region $script:Regions.ResultButton
+                    $clicked = Invoke-RegionClick -WindowHandle $script:TargetWindow -Region $script:Regions.ResultButton
+                    if (-not $clicked) { return }
                     $script:StartedRounds++
                     $progressBar.Value = $script:StartedRounds
                     $script:Phase = 'WaitSkip'
@@ -782,7 +864,7 @@ $form.Add_FormClosing({
 })
 
 $timer.Start()
-Add-Log '工具已就绪。请将游戏停在日芒召唤首页后开始。'
+Add-Log '工具 v1.1 已就绪。请将游戏停在日芒召唤首页后开始。'
 
 if ($SmokeTest) {
     $timer.Stop()
