@@ -14,10 +14,13 @@ internal static class PlayModeUIPrefabDropFitter
     private const string AutoFitEnabledEditorPrefKey =
         "SgrProject.UI.PlayModeUIPrefabDropFitter.Enabled";
     private const float ZeroTolerance = 0.001f;
+    private const double RuntimeCloneFallbackSeconds = 2.0d;
 
     private static readonly HashSet<int> ProcessedInstanceIds = new HashSet<int>();
 
     private static bool isSelectionProcessQueued;
+    private static double lastHierarchyChangedTime;
+    private static double pendingAutoFitUntil;
 
     static PlayModeUIPrefabDropFitter()
     {
@@ -26,10 +29,12 @@ internal static class PlayModeUIPrefabDropFitter
             EditorPrefs.SetBool(AutoFitEnabledEditorPrefKey, true);
         }
 
-        Selection.selectionChanged -= QueueSelectionProcess;
-        Selection.selectionChanged += QueueSelectionProcess;
-        EditorApplication.hierarchyChanged -= QueueSelectionProcess;
-        EditorApplication.hierarchyChanged += QueueSelectionProcess;
+        Selection.selectionChanged -= OnSelectionChanged;
+        Selection.selectionChanged += OnSelectionChanged;
+        EditorApplication.hierarchyChanged -= OnHierarchyChanged;
+        EditorApplication.hierarchyChanged += OnHierarchyChanged;
+        EditorApplication.update -= ProcessPendingAutoFit;
+        EditorApplication.update += ProcessPendingAutoFit;
         EditorApplication.playModeStateChanged -= OnPlayModeStateChanged;
         EditorApplication.playModeStateChanged += OnPlayModeStateChanged;
     }
@@ -42,7 +47,7 @@ internal static class PlayModeUIPrefabDropFitter
         Menu.SetChecked(AutoFitMenuPath, enabled);
         if (enabled)
         {
-            QueueSelectionProcess();
+            QueueSelectionProcess(false);
         }
     }
 
@@ -103,11 +108,41 @@ internal static class PlayModeUIPrefabDropFitter
         return EditorPrefs.GetBool(AutoFitEnabledEditorPrefKey, true);
     }
 
-    private static void QueueSelectionProcess()
+    private static void OnSelectionChanged()
+    {
+        QueueSelectionProcess(false);
+    }
+
+    private static void OnHierarchyChanged()
+    {
+        lastHierarchyChangedTime = EditorApplication.timeSinceStartup;
+        pendingAutoFitUntil =
+            lastHierarchyChangedTime + RuntimeCloneFallbackSeconds;
+        QueueSelectionProcess(true);
+    }
+
+    private static void ProcessPendingAutoFit()
+    {
+        if (!EditorApplication.isPlaying ||
+            !IsAutoFitEnabled() ||
+            EditorApplication.timeSinceStartup > pendingAutoFitUntil)
+        {
+            return;
+        }
+
+        QueueSelectionProcess(true);
+    }
+
+    private static void QueueSelectionProcess(bool hierarchyJustChanged)
     {
         if (isSelectionProcessQueued)
         {
             return;
+        }
+
+        if (hierarchyJustChanged)
+        {
+            lastHierarchyChangedTime = EditorApplication.timeSinceStartup;
         }
 
         isSelectionProcessQueued = true;
@@ -122,23 +157,28 @@ internal static class PlayModeUIPrefabDropFitter
             return;
         }
 
+        bool allowRuntimeCloneFallback =
+            EditorApplication.timeSinceStartup - lastHierarchyChangedTime <=
+            RuntimeCloneFallbackSeconds;
         foreach (GameObject selectedObject in Selection.gameObjects)
         {
-            TryAutoFitDroppedPrefab(selectedObject);
+            TryAutoFitDroppedPrefab(selectedObject, allowRuntimeCloneFallback);
         }
 
         SceneView.RepaintAll();
     }
 
-    private static void TryAutoFitDroppedPrefab(GameObject selectedObject)
+    private static void TryAutoFitDroppedPrefab(
+        GameObject selectedObject,
+        bool allowRuntimeCloneFallback)
     {
         if (selectedObject == null || EditorUtility.IsPersistent(selectedObject))
         {
             return;
         }
 
-        GameObject prefabRoot = PrefabUtility.GetNearestPrefabInstanceRoot(selectedObject);
-        if (prefabRoot == null || prefabRoot != selectedObject)
+        GameObject prefabRoot = ResolveAutoFitCandidate(selectedObject);
+        if (prefabRoot == null)
         {
             return;
         }
@@ -152,7 +192,7 @@ internal static class PlayModeUIPrefabDropFitter
         RectTransform rectTransform = prefabRoot.transform as RectTransform;
         if (rectTransform == null ||
             ResolveFitParent(rectTransform) == null ||
-            !IsUIPrefabAssetInstance(prefabRoot) ||
+            !CanAutoFitCandidate(prefabRoot, allowRuntimeCloneFallback) ||
             !LooksLikeCollapsedUIPrefabRoot(rectTransform))
         {
             return;
@@ -160,6 +200,55 @@ internal static class PlayModeUIPrefabDropFitter
 
         FitToParent(rectTransform, "Auto Fit Dropped UI Prefab");
         ProcessedInstanceIds.Add(instanceId);
+    }
+
+    private static GameObject ResolveAutoFitCandidate(GameObject selectedObject)
+    {
+        GameObject prefabRoot = PrefabUtility.GetNearestPrefabInstanceRoot(selectedObject);
+        if (prefabRoot == selectedObject)
+        {
+            return prefabRoot;
+        }
+
+        Transform current = selectedObject.transform;
+        while (current != null)
+        {
+            RectTransform rectTransform = current as RectTransform;
+            if (rectTransform != null &&
+                ResolveFitParent(rectTransform) != null &&
+                LooksLikeCollapsedUIPrefabRoot(rectTransform))
+            {
+                return current.gameObject;
+            }
+
+            current = current.parent;
+        }
+
+        return null;
+    }
+
+    private static bool CanAutoFitCandidate(
+        GameObject candidate,
+        bool allowRuntimeCloneFallback)
+    {
+        if (IsUIPrefabAssetInstance(candidate))
+        {
+            return true;
+        }
+
+        return allowRuntimeCloneFallback && IsLikelyRuntimeUIPrefabClone(candidate);
+    }
+
+    private static bool IsLikelyRuntimeUIPrefabClone(GameObject candidate)
+    {
+        if (candidate == null ||
+            !candidate.name.EndsWith("(Clone)", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        return candidate.GetComponent<Canvas>() != null ||
+               candidate.GetComponentInChildren<CanvasRenderer>(true) != null;
     }
 
     private static bool IsUIPrefabAssetInstance(GameObject prefabRoot)
