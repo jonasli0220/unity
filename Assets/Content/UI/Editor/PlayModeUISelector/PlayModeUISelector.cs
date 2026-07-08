@@ -12,6 +12,7 @@ internal static class PlayModeUISelector
 {
     private const string MenuPath = "UITools/运行时 Alt+左键选中UI";
     private const string EnabledEditorPrefKey = "SgrProject.UI.PlayModeUISelector.Enabled";
+    private const float DragThreshold = 6f;
 
     private static readonly Type SceneHierarchyWindowType =
         typeof(EditorWindow).Assembly.GetType("UnityEditor.SceneHierarchyWindow");
@@ -35,6 +36,18 @@ internal static class PlayModeUISelector
             : null;
 
     private static PlayModeUISelectorInputBlocker inputBlocker;
+    private static bool isAltPointerDown;
+    private static bool isDraggingSelection;
+    private static bool selectTopmostOnPointerUp;
+    private static bool isLayoutControlledDrag;
+    private static int activePointerTargetDisplay;
+    private static int dragUndoGroup = -1;
+    private static Vector2 pointerDownScreenPosition;
+    private static RectTransform pendingDragRectTransform;
+    private static RectTransform draggedRectTransform;
+    private static Canvas draggedCanvas;
+    private static Vector3 dragStartPointerWorld;
+    private static Vector3 dragStartObjectWorld;
 
     static PlayModeUISelector()
     {
@@ -220,7 +233,77 @@ internal static class PlayModeUISelector
         Vector2 screenPosition,
         int targetDisplay)
     {
-        SelectUIAt(screenPosition, targetDisplay);
+        BeginAltPointerPress(screenPosition, targetDisplay);
+    }
+
+    internal static void HandleAltBeginDrag(Vector2 screenPosition)
+    {
+        TryBeginAltDrag(screenPosition);
+    }
+
+    internal static void HandleAltDrag(Vector2 screenPosition)
+    {
+        if (!isDraggingSelection)
+        {
+            TryBeginAltDrag(screenPosition);
+        }
+
+        UpdateAltDrag(screenPosition);
+    }
+
+    internal static void HandleAltPointerUp(Vector2 screenPosition)
+    {
+        if (!isAltPointerDown)
+        {
+            return;
+        }
+
+        if (isDraggingSelection)
+        {
+            FinishAltDrag(screenPosition);
+        }
+        else if (selectTopmostOnPointerUp)
+        {
+            SelectUIAt(screenPosition, activePointerTargetDisplay);
+        }
+
+        ClearAltPointerState();
+    }
+
+    private static void BeginAltPointerPress(
+        Vector2 screenPosition,
+        int targetDisplay)
+    {
+        ClearAltPointerState();
+
+        if (!IsEnabled() || !EditorApplication.isPlaying)
+        {
+            return;
+        }
+
+        isAltPointerDown = true;
+        activePointerTargetDisplay = targetDisplay;
+        pointerDownScreenPosition = screenPosition;
+
+        RectTransform selectedRectTransform =
+            GetSelectedDraggableRectTransform(screenPosition, targetDisplay);
+        if (selectedRectTransform != null)
+        {
+            pendingDragRectTransform = selectedRectTransform;
+            selectTopmostOnPointerUp = true;
+            return;
+        }
+
+        GameObject pickedObject =
+            PickTopmostVisibleUIObject(screenPosition, targetDisplay);
+        if (pickedObject == null)
+        {
+            return;
+        }
+
+        SelectPickedObject(pickedObject);
+        pendingDragRectTransform =
+            GetDraggableRectTransform(pickedObject, screenPosition, targetDisplay);
     }
 
     private static void SelectUIAt(Vector2 screenPosition, int targetDisplay)
@@ -236,11 +319,211 @@ internal static class PlayModeUISelector
             return;
         }
 
+        SelectPickedObject(pickedObject);
+    }
+
+    private static void SelectPickedObject(GameObject pickedObject)
+    {
+        if (pickedObject == null)
+        {
+            return;
+        }
+
         ExpandHierarchyAncestors(pickedObject.transform);
         Selection.activeGameObject = pickedObject;
         EditorGUIUtility.PingObject(pickedObject);
         FrameObjectInHierarchy(pickedObject);
         EditorApplication.RepaintHierarchyWindow();
+    }
+
+    private static RectTransform GetSelectedDraggableRectTransform(
+        Vector2 screenPosition,
+        int targetDisplay)
+    {
+        return GetDraggableRectTransform(
+            Selection.activeGameObject,
+            screenPosition,
+            targetDisplay);
+    }
+
+    private static RectTransform GetDraggableRectTransform(
+        GameObject target,
+        Vector2 screenPosition,
+        int targetDisplay)
+    {
+        if (target == null ||
+            EditorUtility.IsPersistent(target) ||
+            !target.scene.IsValid() ||
+            !target.scene.isLoaded ||
+            !target.activeInHierarchy ||
+            !IsSceneVisibleAndPickable(target))
+        {
+            return null;
+        }
+
+        RectTransform rectTransform = target.GetComponent<RectTransform>();
+        if (rectTransform == null)
+        {
+            return null;
+        }
+
+        Canvas canvas = rectTransform.GetComponentInParent<Canvas>();
+        if (canvas == null ||
+            canvas.rootCanvas == null ||
+            canvas.rootCanvas.targetDisplay != targetDisplay ||
+            !RectTransformUtility.RectangleContainsScreenPoint(
+                rectTransform,
+                screenPosition,
+                GetEventCamera(canvas)))
+        {
+            return null;
+        }
+
+        return rectTransform;
+    }
+
+    private static void TryBeginAltDrag(Vector2 screenPosition)
+    {
+        if (!isAltPointerDown ||
+            isDraggingSelection ||
+            pendingDragRectTransform == null ||
+            Vector2.Distance(pointerDownScreenPosition, screenPosition) < DragThreshold)
+        {
+            return;
+        }
+
+        if (!IsEnabled() || !EditorApplication.isPlaying)
+        {
+            ClearAltPointerState();
+            return;
+        }
+
+        Canvas canvas = pendingDragRectTransform.GetComponentInParent<Canvas>();
+        if (canvas == null)
+        {
+            ClearAltPointerState();
+            return;
+        }
+
+        Camera eventCamera = GetEventCamera(canvas);
+        if (!RectTransformUtility.ScreenPointToWorldPointInRectangle(
+                pendingDragRectTransform,
+                pointerDownScreenPosition,
+                eventCamera,
+                out Vector3 startPointerWorld) ||
+            !RectTransformUtility.ScreenPointToWorldPointInRectangle(
+                pendingDragRectTransform,
+                screenPosition,
+                eventCamera,
+                out _))
+        {
+            ClearAltPointerState();
+            return;
+        }
+
+        draggedRectTransform = pendingDragRectTransform;
+        draggedCanvas = canvas;
+        dragStartPointerWorld = startPointerWorld;
+        dragStartObjectWorld = draggedRectTransform.position;
+        isLayoutControlledDrag = IsDrivenByParentLayout(draggedRectTransform);
+        isDraggingSelection = true;
+        selectTopmostOnPointerUp = false;
+
+        if (!isLayoutControlledDrag)
+        {
+            Undo.IncrementCurrentGroup();
+            dragUndoGroup = Undo.GetCurrentGroup();
+            Undo.SetCurrentGroupName("Move Play Mode UI Element");
+            Undo.RecordObject(draggedRectTransform, "Move Play Mode UI Element");
+        }
+
+        SelectPickedObject(draggedRectTransform.gameObject);
+    }
+
+    private static void UpdateAltDrag(Vector2 screenPosition)
+    {
+        if (!isDraggingSelection || draggedRectTransform == null)
+        {
+            return;
+        }
+
+        if (isLayoutControlledDrag)
+        {
+            return;
+        }
+
+        Camera eventCamera = GetEventCamera(draggedCanvas);
+        if (!RectTransformUtility.ScreenPointToWorldPointInRectangle(
+                draggedRectTransform,
+                screenPosition,
+                eventCamera,
+                out Vector3 pointerWorld))
+        {
+            return;
+        }
+
+        draggedRectTransform.position =
+            dragStartObjectWorld + (pointerWorld - dragStartPointerWorld);
+        EditorUtility.SetDirty(draggedRectTransform);
+        Canvas.ForceUpdateCanvases();
+    }
+
+    private static void FinishAltDrag(Vector2 screenPosition)
+    {
+        UpdateAltDrag(screenPosition);
+        if (dragUndoGroup >= 0)
+        {
+            Undo.CollapseUndoOperations(dragUndoGroup);
+        }
+    }
+
+    private static bool IsDrivenByParentLayout(RectTransform rectTransform)
+    {
+        if (rectTransform == null || rectTransform.parent == null)
+        {
+            return false;
+        }
+
+        LayoutGroup parentLayout =
+            rectTransform.parent.GetComponent<LayoutGroup>();
+        if (parentLayout == null || !parentLayout.isActiveAndEnabled)
+        {
+            return false;
+        }
+
+        Component[] components = rectTransform.GetComponents<Component>();
+        for (int i = 0; i < components.Length; i++)
+        {
+            ILayoutIgnorer layoutIgnorer = components[i] as ILayoutIgnorer;
+            if (layoutIgnorer == null || !layoutIgnorer.ignoreLayout)
+            {
+                continue;
+            }
+
+            Behaviour behaviour = components[i] as Behaviour;
+            if (behaviour == null || behaviour.isActiveAndEnabled)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static void ClearAltPointerState()
+    {
+        isAltPointerDown = false;
+        isDraggingSelection = false;
+        selectTopmostOnPointerUp = false;
+        isLayoutControlledDrag = false;
+        activePointerTargetDisplay = 0;
+        dragUndoGroup = -1;
+        pointerDownScreenPosition = default(Vector2);
+        pendingDragRectTransform = null;
+        draggedRectTransform = null;
+        draggedCanvas = null;
+        dragStartPointerWorld = default(Vector3);
+        dragStartObjectWorld = default(Vector3);
     }
 
     private static GameObject PickTopmostVisibleUIObject(
@@ -571,6 +854,10 @@ internal static class PlayModeUISelector
 internal sealed class PlayModeUISelectorInputBlocker :
     MonoBehaviour,
     IPointerDownHandler,
+    IPointerUpHandler,
+    IBeginDragHandler,
+    IDragHandler,
+    IEndDragHandler,
     ICanvasRaycastFilter
 {
     private int targetDisplay;
@@ -595,6 +882,54 @@ internal sealed class PlayModeUISelectorInputBlocker :
         }
 
         PlayModeUISelector.HandleAltPointerDown(eventData.position, targetDisplay);
+        eventData.Use();
+    }
+
+    public void OnBeginDrag(PointerEventData eventData)
+    {
+        if (eventData == null ||
+            eventData.button != PointerEventData.InputButton.Left)
+        {
+            return;
+        }
+
+        PlayModeUISelector.HandleAltBeginDrag(eventData.position);
+        eventData.Use();
+    }
+
+    public void OnDrag(PointerEventData eventData)
+    {
+        if (eventData == null ||
+            eventData.button != PointerEventData.InputButton.Left)
+        {
+            return;
+        }
+
+        PlayModeUISelector.HandleAltDrag(eventData.position);
+        eventData.Use();
+    }
+
+    public void OnEndDrag(PointerEventData eventData)
+    {
+        if (eventData == null ||
+            eventData.button != PointerEventData.InputButton.Left)
+        {
+            return;
+        }
+
+        PlayModeUISelector.HandleAltPointerUp(eventData.position);
+        eventData.Use();
+    }
+
+    public void OnPointerUp(PointerEventData eventData)
+    {
+        if (eventData == null ||
+            eventData.button != PointerEventData.InputButton.Left)
+        {
+            return;
+        }
+
+        PlayModeUISelector.HandleAltPointerUp(eventData.position);
         eventData.Use();
     }
 }

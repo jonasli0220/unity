@@ -7,7 +7,7 @@
 
 ## Structure
 
-- `PlayModeUISelector.cs`: input capture, visible UI picking, selection, and Hierarchy reveal behavior.
+- `PlayModeUISelector.cs`: input capture, visible UI picking, selection, Hierarchy reveal, and Play Mode drag behavior.
 - `README.md`: designer-facing usage and limitations.
 
 ## Behavior Contract
@@ -17,6 +17,9 @@
 - Create a hidden, non-serialized UGUI interception layer only while Play Mode is active and the tool is enabled.
 - Let that layer participate in raycasts only while `Alt` is held, so ordinary runtime input remains untouched and the first `Alt + Left Click` press can be caught before runtime Buttons receive it.
 - Route the matching pointer press to selection and keep it from reaching the runtime button underneath.
+- When a visible selected UI `RectTransform` is pressed with `Alt + Left Click`, dragging should move that selected node in Play Mode using the same plane-based world-position delta as prefab direct dragging.
+- If the press does not start on the selected node, keep `Alt + Left Click` as "select under cursor"; dragging after that press may move the newly selected node.
+- Do not write positions for direct children driven by an active parent `LayoutGroup`, unless an enabled `ILayoutIgnorer.ignoreLayout` component opts the child out of layout.
 - Do not rewrite scene objects, prefabs, serialized data, or unrelated runtime input.
 - Respect visible `Mask` and `RectMask2D` bounds when choosing a target.
 - Reveal the selected object in Hierarchy by expanding only its ancestor chain.
@@ -25,4 +28,4 @@
 ## Validation
 
 - Verify Unity editor compilation after changes.
-- Test in Play Mode with nested UI, overlapping UI, a runtime Button, and a `Graphic` whose `Raycast Target` is disabled.
+- Test in Play Mode with nested UI, overlapping UI, a runtime Button, a selected draggable `RectTransform`, a LayoutGroup-controlled child, and a `Graphic` whose `Raycast Target` is disabled.
