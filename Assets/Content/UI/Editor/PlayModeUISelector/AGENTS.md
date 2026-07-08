@@ -14,7 +14,9 @@
 
 - Respond only to `Alt + Left Click` inside the Game view while the Editor is in Play Mode.
 - Select the topmost visible UI `Graphic` under the pointer even when `Raycast Target` is disabled.
-- Consume only the matching `Alt + Left Click` editor event so inspecting a runtime button does not also activate it.
+- Create a hidden, non-serialized UGUI interception layer only while Play Mode is active and the tool is enabled.
+- Let that layer participate in raycasts only while `Alt` is held, so ordinary runtime input remains untouched and the first `Alt + Left Click` press can be caught before runtime Buttons receive it.
+- Route the matching pointer press to selection and keep it from reaching the runtime button underneath.
 - Do not rewrite scene objects, prefabs, serialized data, or unrelated runtime input.
 - Respect visible `Mask` and `RectMask2D` bounds when choosing a target.
 - Reveal the selected object in Hierarchy by expanding only its ancestor chain.
@@ -23,4 +25,4 @@
 ## Validation
 
 - Verify Unity editor compilation after changes.
-- Test in Play Mode with nested UI, overlapping UI, and a `Graphic` whose `Raycast Target` is disabled.
+- Test in Play Mode with nested UI, overlapping UI, a runtime Button, and a `Graphic` whose `Raycast Target` is disabled.

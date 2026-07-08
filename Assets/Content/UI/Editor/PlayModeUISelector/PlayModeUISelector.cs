@@ -4,26 +4,17 @@ using System.Reflection;
 using TMPro;
 using UnityEditor;
 using UnityEngine;
+using UnityEngine.EventSystems;
 using UnityEngine.UI;
-using UnityEngine.UIElements;
 
 [InitializeOnLoad]
 internal static class PlayModeUISelector
 {
     private const string MenuPath = "UITools/运行时 Alt+左键选中UI";
     private const string EnabledEditorPrefKey = "SgrProject.UI.PlayModeUISelector.Enabled";
-    private const double GameViewScanInterval = 0.75d;
 
-    private static readonly Type GameViewType =
-        typeof(EditorWindow).Assembly.GetType("UnityEditor.GameView");
     private static readonly Type SceneHierarchyWindowType =
         typeof(EditorWindow).Assembly.GetType("UnityEditor.SceneHierarchyWindow");
-    private static readonly PropertyInfo GameViewTargetDisplayProperty =
-        GameViewType != null
-            ? GameViewType.GetProperty(
-                "targetDisplay",
-                BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
-            : null;
     private static readonly MethodInfo HierarchySetExpandedMethod =
         SceneHierarchyWindowType != null
             ? SceneHierarchyWindowType.GetMethod(
@@ -43,11 +34,7 @@ internal static class PlayModeUISelector
                 null)
             : null;
 
-    private static readonly Dictionary<EditorWindow, EventCallback<MouseDownEvent>>
-        GameViewCallbacks =
-            new Dictionary<EditorWindow, EventCallback<MouseDownEvent>>();
-
-    private static double nextGameViewScanTime;
+    private static PlayModeUISelectorInputBlocker inputBlocker;
 
     static PlayModeUISelector()
     {
@@ -56,11 +43,13 @@ internal static class PlayModeUISelector
             EditorPrefs.SetBool(EnabledEditorPrefKey, true);
         }
 
-        EditorApplication.update -= OnEditorUpdate;
-        EditorApplication.update += OnEditorUpdate;
-        AssemblyReloadEvents.beforeAssemblyReload -= UnhookAllGameViews;
-        AssemblyReloadEvents.beforeAssemblyReload += UnhookAllGameViews;
-        EditorApplication.delayCall += EnsureGameViewHooks;
+        EditorApplication.update -= EnsureInputBlocker;
+        EditorApplication.update += EnsureInputBlocker;
+        EditorApplication.playModeStateChanged -= OnPlayModeStateChanged;
+        EditorApplication.playModeStateChanged += OnPlayModeStateChanged;
+        AssemblyReloadEvents.beforeAssemblyReload -= DestroyInputBlocker;
+        AssemblyReloadEvents.beforeAssemblyReload += DestroyInputBlocker;
+        EditorApplication.delayCall += EnsureInputBlocker;
     }
 
     [MenuItem(MenuPath)]
@@ -69,6 +58,15 @@ internal static class PlayModeUISelector
         bool enabled = !IsEnabled();
         EditorPrefs.SetBool(EnabledEditorPrefKey, enabled);
         Menu.SetChecked(MenuPath, enabled);
+
+        if (enabled)
+        {
+            EnsureInputBlocker();
+        }
+        else
+        {
+            DestroyInputBlocker();
+        }
     }
 
     [MenuItem(MenuPath, true)]
@@ -83,159 +81,146 @@ internal static class PlayModeUISelector
         return EditorPrefs.GetBool(EnabledEditorPrefKey, true);
     }
 
-    private static void OnEditorUpdate()
+    private static void OnPlayModeStateChanged(PlayModeStateChange state)
     {
-        if (EditorApplication.timeSinceStartup < nextGameViewScanTime)
+        if (state == PlayModeStateChange.EnteredPlayMode)
+        {
+            EnsureInputBlocker();
+            return;
+        }
+
+        if (state == PlayModeStateChange.ExitingPlayMode ||
+            state == PlayModeStateChange.EnteredEditMode)
+        {
+            DestroyInputBlocker();
+        }
+    }
+
+    private static void EnsureInputBlocker()
+    {
+        if (!EditorApplication.isPlaying ||
+            EditorApplication.isCompiling ||
+            !IsEnabled())
+        {
+            DestroyInputBlocker();
+            return;
+        }
+
+        if (inputBlocker != null)
         {
             return;
         }
 
-        nextGameViewScanTime = EditorApplication.timeSinceStartup + GameViewScanInterval;
-        EnsureGameViewHooks();
-    }
-
-    private static void EnsureGameViewHooks()
-    {
-        if (GameViewType == null)
+        PlayModeUISelectorInputBlocker[] existingBlockers =
+            Resources.FindObjectsOfTypeAll<PlayModeUISelectorInputBlocker>();
+        for (int i = 0; i < existingBlockers.Length; i++)
         {
+            PlayModeUISelectorInputBlocker existing = existingBlockers[i];
+            if (existing == null || EditorUtility.IsPersistent(existing))
+            {
+                continue;
+            }
+
+            inputBlocker = existing;
             return;
         }
 
-        UnityEngine.Object[] foundViews = Resources.FindObjectsOfTypeAll(GameViewType);
-        HashSet<EditorWindow> liveViews = new HashSet<EditorWindow>();
+        GameObject blockerObject = new GameObject(
+            "[Editor] Play Mode UI Selector",
+            typeof(RectTransform),
+            typeof(Canvas),
+            typeof(GraphicRaycaster),
+            typeof(Image),
+            typeof(PlayModeUISelectorInputBlocker));
+        blockerObject.hideFlags = HideFlags.HideAndDontSave;
 
-        for (int i = 0; i < foundViews.Length; i++)
+        int uiLayer = LayerMask.NameToLayer("UI");
+        if (uiLayer >= 0)
         {
-            EditorWindow gameView = foundViews[i] as EditorWindow;
-            if (gameView == null)
-            {
-                continue;
-            }
-
-            liveViews.Add(gameView);
-            if (GameViewCallbacks.ContainsKey(gameView))
-            {
-                continue;
-            }
-
-            EditorWindow capturedGameView = gameView;
-            EventCallback<MouseDownEvent> callback =
-                evt => OnGameViewMouseDown(capturedGameView, evt);
-            gameView.rootVisualElement.RegisterCallback(
-                callback,
-                TrickleDown.TrickleDown);
-            GameViewCallbacks.Add(gameView, callback);
+            blockerObject.layer = uiLayer;
         }
 
-        List<EditorWindow> staleViews = new List<EditorWindow>();
-        foreach (KeyValuePair<EditorWindow, EventCallback<MouseDownEvent>> pair in GameViewCallbacks)
+        Canvas canvas = blockerObject.GetComponent<Canvas>();
+        canvas.renderMode = RenderMode.ScreenSpaceOverlay;
+        canvas.overrideSorting = true;
+        canvas.sortingLayerID = GetHighestSortingLayerID();
+        canvas.sortingOrder = short.MaxValue;
+        canvas.targetDisplay = 0;
+
+        Image image = blockerObject.GetComponent<Image>();
+        image.color = Color.clear;
+        image.raycastTarget = true;
+
+        Component[] components = blockerObject.GetComponents<Component>();
+        for (int i = 0; i < components.Length; i++)
         {
-            if (pair.Key == null || !liveViews.Contains(pair.Key))
+            if (components[i] != null)
             {
-                staleViews.Add(pair.Key);
+                components[i].hideFlags = HideFlags.HideAndDontSave;
             }
         }
 
-        for (int i = 0; i < staleViews.Count; i++)
-        {
-            EditorWindow staleView = staleViews[i];
-            if (staleView != null)
-            {
-                staleView.rootVisualElement.UnregisterCallback(
-                    GameViewCallbacks[staleView],
-                    TrickleDown.TrickleDown);
-            }
+        inputBlocker = blockerObject.GetComponent<PlayModeUISelectorInputBlocker>();
+        inputBlocker.Configure(canvas.targetDisplay);
+        UnityEngine.Object.DontDestroyOnLoad(blockerObject);
+    }
 
-            GameViewCallbacks.Remove(staleView);
+    private static int GetHighestSortingLayerID()
+    {
+        SortingLayer[] layers = SortingLayer.layers;
+        if (layers == null || layers.Length == 0)
+        {
+            return 0;
+        }
+
+        int highestLayerID = layers[0].id;
+        int highestLayerValue = SortingLayer.GetLayerValueFromID(highestLayerID);
+        for (int i = 1; i < layers.Length; i++)
+        {
+            int value = SortingLayer.GetLayerValueFromID(layers[i].id);
+            if (value > highestLayerValue)
+            {
+                highestLayerID = layers[i].id;
+                highestLayerValue = value;
+            }
+        }
+
+        return highestLayerID;
+    }
+
+    private static void DestroyInputBlocker()
+    {
+        if (inputBlocker != null)
+        {
+            UnityEngine.Object.DestroyImmediate(inputBlocker.gameObject);
+            inputBlocker = null;
         }
     }
 
-    private static void UnhookAllGameViews()
+    internal static bool ShouldInterceptAltLeftClick()
     {
-        foreach (KeyValuePair<EditorWindow, EventCallback<MouseDownEvent>> pair in GameViewCallbacks)
+        if (!IsEnabled() || !EditorApplication.isPlaying)
         {
-            if (pair.Key == null)
-            {
-                continue;
-            }
-
-            pair.Key.rootVisualElement.UnregisterCallback(
-                pair.Value,
-                TrickleDown.TrickleDown);
+            return false;
         }
 
-        GameViewCallbacks.Clear();
-    }
-
-    private static void OnGameViewMouseDown(EditorWindow gameView, MouseDownEvent evt)
-    {
-        if (!IsEnabled() ||
-            !EditorApplication.isPlaying ||
-            gameView == null ||
-            EditorWindow.mouseOverWindow != gameView ||
-            evt.button != 0 ||
-            !evt.altKey)
-        {
-            return;
-        }
-
-        Vector2 screenPosition;
         try
         {
-            screenPosition = Input.mousePosition;
+            bool isAltHeld =
+                Input.GetKey(KeyCode.LeftAlt) || Input.GetKey(KeyCode.RightAlt);
+            return isAltHeld;
         }
         catch (InvalidOperationException)
         {
-            return;
-        }
-
-        int targetDisplay = GetTargetDisplay(gameView);
-        if (!IsInsideTargetDisplay(screenPosition, targetDisplay))
-        {
-            return;
-        }
-
-        evt.StopImmediatePropagation();
-        evt.PreventDefault();
-        EditorApplication.delayCall += () => SelectUIAt(screenPosition, targetDisplay);
-    }
-
-    private static int GetTargetDisplay(EditorWindow gameView)
-    {
-        if (GameViewTargetDisplayProperty == null || gameView == null)
-        {
-            return 0;
-        }
-
-        try
-        {
-            return (int)GameViewTargetDisplayProperty.GetValue(gameView, null);
-        }
-        catch
-        {
-            return 0;
+            return false;
         }
     }
 
-    private static bool IsInsideTargetDisplay(Vector2 screenPosition, int targetDisplay)
+    internal static void HandleAltPointerDown(
+        Vector2 screenPosition,
+        int targetDisplay)
     {
-        float width = Screen.width;
-        float height = Screen.height;
-
-        if (targetDisplay >= 0 && targetDisplay < Display.displays.Length)
-        {
-            Display display = Display.displays[targetDisplay];
-            if (display.renderingWidth > 0 && display.renderingHeight > 0)
-            {
-                width = display.renderingWidth;
-                height = display.renderingHeight;
-            }
-        }
-
-        return screenPosition.x >= 0f &&
-               screenPosition.y >= 0f &&
-               screenPosition.x <= width &&
-               screenPosition.y <= height;
+        SelectUIAt(screenPosition, targetDisplay);
     }
 
     private static void SelectUIAt(Vector2 screenPosition, int targetDisplay)
@@ -580,5 +565,36 @@ internal static class PlayModeUISelector
 
             return hierarchyOrder > other.hierarchyOrder;
         }
+    }
+}
+
+internal sealed class PlayModeUISelectorInputBlocker :
+    MonoBehaviour,
+    IPointerDownHandler,
+    ICanvasRaycastFilter
+{
+    private int targetDisplay;
+
+    internal void Configure(int display)
+    {
+        targetDisplay = display;
+    }
+
+    public bool IsRaycastLocationValid(Vector2 screenPoint, Camera eventCamera)
+    {
+        return PlayModeUISelector.ShouldInterceptAltLeftClick();
+    }
+
+    public void OnPointerDown(PointerEventData eventData)
+    {
+        if (eventData == null ||
+            eventData.button != PointerEventData.InputButton.Left ||
+            !PlayModeUISelector.ShouldInterceptAltLeftClick())
+        {
+            return;
+        }
+
+        PlayModeUISelector.HandleAltPointerDown(eventData.position, targetDisplay);
+        eventData.Use();
     }
 }
