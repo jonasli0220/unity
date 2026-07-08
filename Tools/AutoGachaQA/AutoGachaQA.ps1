@@ -57,6 +57,9 @@ namespace DragonQaTools
         [DllImport("user32.dll")]
         public static extern short GetAsyncKeyState(int vKey);
 
+        [DllImport("user32.dll")]
+        public static extern IntPtr SetThreadDpiAwarenessContext(IntPtr dpiContext);
+
         [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
         public static extern IntPtr FindWindow(string lpClassName, string lpWindowName);
 
@@ -136,6 +139,9 @@ namespace DragonQaTools
 '@
 Add-Type -TypeDefinition $nativeSource -ReferencedAssemblies 'System.Windows.Forms', 'System.Drawing'
 
+# 统一使用物理像素坐标，避免多显示器与 125%/150% 缩放造成 ClientToScreen 坐标虚拟化。
+$script:PreviousDpiContext = [DragonQaTools.NativeMethods]::SetThreadDpiAwarenessContext([IntPtr](-4))
+
 $script:WindowTitlePattern = '^龙息\s*[:：]\s*神寂$'
 $script:ProcessName = 'Dragonheir'
 
@@ -157,6 +163,15 @@ $script:StartedRounds = 0
 $script:PhaseStartedAt = [DateTime]::MinValue
 $script:LastProbeAt = [DateTime]::MinValue
 $script:BackgroundMode = $false
+$script:LastClickX = 0
+$script:LastClickY = 0
+
+function Restore-InitialDpiContext {
+    if ($script:PreviousDpiContext -ne [IntPtr]::Zero) {
+        [DragonQaTools.NativeMethods]::SetThreadDpiAwarenessContext($script:PreviousDpiContext) | Out-Null
+        $script:PreviousDpiContext = [IntPtr]::Zero
+    }
+}
 
 function Get-TargetWindow {
     $candidateHandles = @(
@@ -276,7 +291,7 @@ function Set-WindowForegroundReliable {
         }
     }
 
-    Start-Sleep -Milliseconds 120
+    Start-Sleep -Milliseconds 300
     return [DragonQaTools.NativeMethods]::GetForegroundWindow() -eq $WindowHandle
 }
 
@@ -369,6 +384,8 @@ function Invoke-RegionClick {
     $y = Get-Random -Minimum $clickRect.Top -Maximum ($clickRect.Top + $clickRect.Height)
     $screenX = $geometry.Left + $x
     $screenY = $geometry.Top + $y
+    $script:LastClickX = $screenX
+    $script:LastClickY = $screenY
 
     if ($script:BackgroundMode) {
         if ([DragonQaTools.NativeMethods]::IsIconic($WindowHandle)) {
@@ -398,9 +415,11 @@ function Invoke-RegionClick {
             if (-not [DragonQaTools.NativeMethods]::SetCursorPos($screenX, $screenY)) {
                 throw '无法移动鼠标到目标按钮。'
             }
+            Start-Sleep -Milliseconds 100
             [DragonQaTools.NativeMethods]::mouse_event(0x0002, 0, 0, 0, [UIntPtr]::Zero)
-            Start-Sleep -Milliseconds 35
+            Start-Sleep -Milliseconds 100
             [DragonQaTools.NativeMethods]::mouse_event(0x0004, 0, 0, 0, [UIntPtr]::Zero)
+            Start-Sleep -Milliseconds 350
         }
         finally {
             [DragonQaTools.NativeMethods]::SetCursorPos($previousCursor.X, $previousCursor.Y) | Out-Null
@@ -415,7 +434,7 @@ function Invoke-RegionClick {
         }
 
         [DragonQaTools.NativeMethods]::mouse_event(0x0002, 0, 0, 0, [UIntPtr]::Zero)
-        Start-Sleep -Milliseconds 35
+        Start-Sleep -Milliseconds 100
         [DragonQaTools.NativeMethods]::mouse_event(0x0004, 0, 0, 0, [UIntPtr]::Zero)
     }
 
@@ -423,7 +442,7 @@ function Invoke-RegionClick {
 }
 
 $form = New-Object DragonQaTools.HotKeyForm
-$form.Text = '抽卡回归测试工具 v1.1'
+$form.Text = '抽卡回归测试工具 v1.2'
 $form.StartPosition = 'CenterScreen'
 $form.ClientSize = New-Object System.Drawing.Size(540, 600)
 $form.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::FixedDialog
@@ -431,7 +450,7 @@ $form.MaximizeBox = $false
 $form.Font = New-Object System.Drawing.Font('Microsoft YaHei UI', 9)
 
 $titleLabel = New-Object System.Windows.Forms.Label
-$titleLabel.Text = 'Dragonheir 抽卡回归测试 v1.1'
+$titleLabel.Text = 'Dragonheir 抽卡回归测试 v1.2'
 $titleLabel.Font = New-Object System.Drawing.Font('Microsoft YaHei UI', 16, [System.Drawing.FontStyle]::Bold)
 $titleLabel.Location = New-Object System.Drawing.Point(20, 18)
 $titleLabel.Size = New-Object System.Drawing.Size(450, 34)
@@ -782,7 +801,7 @@ $timer.Add_Tick({
                     $script:Phase = 'WaitSkip'
                     $script:PhaseStartedAt = Get-Date
                     $statusLabel.Text = "运行中：第 1/$($script:TargetRounds) 次十连，等待跳过"
-                    Add-Log '已点击召唤10次，等待跳过按钮。'
+                    Add-Log "已点击召唤10次（X=$($script:LastClickX), Y=$($script:LastClickY)），等待跳过按钮。"
                 }
             }
             'WaitSkip' {
@@ -806,7 +825,7 @@ $timer.Add_Tick({
                     $script:Phase = 'WaitResult'
                     $script:PhaseStartedAt = Get-Date
                     $statusLabel.Text = "运行中：第 $($script:StartedRounds)/$($script:TargetRounds) 次十连，等待结果页"
-                    Add-Log '已点击跳过，等待抽卡结果。'
+                    Add-Log "已点击跳过（X=$($script:LastClickX), Y=$($script:LastClickY)），等待抽卡结果。"
                 }
             }
             'WaitResult' {
@@ -837,7 +856,7 @@ $timer.Add_Tick({
                     $script:Phase = 'WaitSkip'
                     $script:PhaseStartedAt = Get-Date
                     $statusLabel.Text = "运行中：第 $($script:StartedRounds)/$($script:TargetRounds) 次十连，等待跳过"
-                    Add-Log "已从结果页发起第 $($script:StartedRounds) 次十连。"
+                    Add-Log "已从结果页发起第 $($script:StartedRounds) 次十连（X=$($script:LastClickX), Y=$($script:LastClickY)）。"
                 }
             }
         }
@@ -864,11 +883,12 @@ $form.Add_FormClosing({
 })
 
 $timer.Start()
-Add-Log '工具 v1.1 已就绪。请将游戏停在日芒召唤首页后开始。'
+Add-Log '工具 v1.2 已就绪。已启用多显示器 DPI 物理坐标，请将游戏停在日芒召唤首页后开始。'
 
 if ($SmokeTest) {
     $timer.Stop()
     Write-Output 'Smoke test: OK'
+    Restore-InitialDpiContext
     return
 }
 
@@ -880,12 +900,21 @@ if ($InspectTarget) {
     }
     $script:TargetWindow = $inspectWindow
     $geometry = Get-ClientGeometry -WindowHandle $inspectWindow
+    $mainRect = Get-ScaledRectangle -Geometry $geometry -Region $script:Regions.MainButton
+    $mainCenterX = $geometry.Left + [int]($mainRect.Left + $mainRect.Width / 2)
+    $mainCenterY = $geometry.Top + [int]($mainRect.Top + $mainRect.Height / 2)
     $script:BackgroundMode = $false
     $foregroundRatio = Get-RegionRedRatio -WindowHandle $inspectWindow -Region $script:Regions.MainButtonProbe
     $script:BackgroundMode = $true
     $backgroundRatio = Get-RegionRedRatio -WindowHandle $inspectWindow -Region $script:Regions.MainButtonProbe
-    Write-Output ("Inspect target: {0}x{1}; foregroundRatio={2:N4}; backgroundRatio={3:N4}" -f $geometry.Width, $geometry.Height, $foregroundRatio, $backgroundRatio)
+    Write-Output ("Inspect target: origin=({0},{1}); size={2}x{3}; mainCenter=({4},{5}); foregroundRatio={6:N4}; backgroundRatio={7:N4}" -f $geometry.Left, $geometry.Top, $geometry.Width, $geometry.Height, $mainCenterX, $mainCenterY, $foregroundRatio, $backgroundRatio)
+    Restore-InitialDpiContext
     return
 }
 
-[System.Windows.Forms.Application]::Run($form)
+try {
+    [System.Windows.Forms.Application]::Run($form)
+}
+finally {
+    Restore-InitialDpiContext
+}
