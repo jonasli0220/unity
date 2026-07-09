@@ -14,6 +14,7 @@
 
 - Respond only to `Alt + Left Click` inside the Game view while the Editor is in Play Mode.
 - Select the topmost visible UI `Graphic` under the pointer even when `Raycast Target` is disabled.
+- Ignore the runtime click-feedback subtree named `common_click_feedback` / `common_click_feedback(Clone)` so transient click effects are never selected or dragged.
 - Create a hidden, non-serialized UGUI interception layer only while Play Mode is active and the tool is enabled.
 - Let that layer participate in raycasts only while `Alt` is held, so ordinary runtime input remains untouched and the first `Alt + Left Click` press can be caught before runtime Buttons receive it.
 - Route the matching pointer press to selection and keep it from reaching the runtime button underneath.

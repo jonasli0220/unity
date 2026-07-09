@@ -12,6 +12,8 @@ internal static class PlayModeUISelector
 {
     private const string MenuPath = "UITools/运行时 Alt+左键选中UI";
     private const string EnabledEditorPrefKey = "SgrProject.UI.PlayModeUISelector.Enabled";
+    private const string IgnoredClickFeedbackRootName = "common_click_feedback";
+    private const string CloneNameSuffix = "(Clone)";
     private const float DragThreshold = 6f;
 
     private static readonly Type SceneHierarchyWindowType =
@@ -324,7 +326,7 @@ internal static class PlayModeUISelector
 
     private static void SelectPickedObject(GameObject pickedObject)
     {
-        if (pickedObject == null)
+        if (pickedObject == null || IsIgnoredClickFeedbackObject(pickedObject))
         {
             return;
         }
@@ -356,6 +358,7 @@ internal static class PlayModeUISelector
             !target.scene.IsValid() ||
             !target.scene.isLoaded ||
             !target.activeInHierarchy ||
+            IsIgnoredClickFeedbackObject(target) ||
             !IsSceneVisibleAndPickable(target))
         {
             return null;
@@ -575,6 +578,7 @@ internal static class PlayModeUISelector
             EditorUtility.IsPersistent(graphic) ||
             !graphic.gameObject.scene.IsValid() ||
             !graphic.gameObject.scene.isLoaded ||
+            IsIgnoredClickFeedbackObject(graphic.gameObject) ||
             !graphic.IsActive() ||
             graphic.canvas == null ||
             graphic.canvas.rootCanvas == null ||
@@ -648,6 +652,46 @@ internal static class PlayModeUISelector
         }
 
         return true;
+    }
+
+    private static bool IsIgnoredClickFeedbackObject(GameObject target)
+    {
+        if (target == null)
+        {
+            return false;
+        }
+
+        for (Transform current = target.transform; current != null; current = current.parent)
+        {
+            string normalizedName = NormalizeCloneName(current.name);
+            if (string.Equals(
+                    normalizedName,
+                    IgnoredClickFeedbackRootName,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static string NormalizeCloneName(string objectName)
+    {
+        if (string.IsNullOrEmpty(objectName))
+        {
+            return string.Empty;
+        }
+
+        string trimmedName = objectName.Trim();
+        if (trimmedName.EndsWith(CloneNameSuffix, StringComparison.Ordinal))
+        {
+            trimmedName = trimmedName
+                .Substring(0, trimmedName.Length - CloneNameSuffix.Length)
+                .TrimEnd();
+        }
+
+        return trimmedName;
     }
 
     private static bool IsSceneVisibleAndPickable(GameObject target)
