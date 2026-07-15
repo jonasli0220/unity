@@ -43,6 +43,9 @@ namespace SgrUnity
         [Tooltip("失去输入或窗口焦点后，回到中心的平滑时间。")]
         [SerializeField, Min(0f)] private float returnSmoothTime = 0.24f;
 
+        [Tooltip("归一化输入每秒允许的最大变化速度。减小会更柔和，增大会更跟手。")]
+        [SerializeField, Min(0.01f)] private float maxInputSpeed = 8f;
+
         [Tooltip("UI 动效通常应在 Time.timeScale 为 0 时继续播放。")]
         [SerializeField] private bool useUnscaledTime = true;
 
@@ -70,6 +73,7 @@ namespace SgrUnity
         [SerializeField] private List<ParallaxLayer> layers = new List<ParallaxLayer>();
 
         private Vector2 _currentInput;
+        private Vector2 _inputVelocity;
         private Vector2 _externalInput;
         private Quaternion _baseRootRotation;
         private Vector3 _baseRootScale;
@@ -92,6 +96,7 @@ namespace SgrUnity
         {
             RestoreBaseline();
             _currentInput = Vector2.zero;
+            _inputVelocity = Vector2.zero;
         }
 
         private void OnApplicationFocus(bool hasFocus)
@@ -111,7 +116,13 @@ namespace SgrUnity
             float smoothTime = hasActiveInput ? followSmoothTime : returnSmoothTime;
             float deltaTime = useUnscaledTime ? Time.unscaledDeltaTime : Time.deltaTime;
 
-            _currentInput = SmoothToward(_currentInput, targetInput, smoothTime, deltaTime);
+            _currentInput = SmoothToward(
+                _currentInput,
+                targetInput,
+                ref _inputVelocity,
+                smoothTime,
+                maxInputSpeed,
+                deltaTime);
             ApplyRootTilt();
             ApplyLayerOffsets();
         }
@@ -297,15 +308,42 @@ namespace SgrUnity
             }
         }
 
-        private static Vector2 SmoothToward(Vector2 current, Vector2 target, float smoothTime, float deltaTime)
+        private static Vector2 SmoothToward(
+            Vector2 current,
+            Vector2 target,
+            ref Vector2 velocity,
+            float smoothTime,
+            float maxSpeed,
+            float deltaTime)
         {
-            if (smoothTime <= 0f || deltaTime <= 0f)
+            if (smoothTime <= 0f)
             {
+                velocity = Vector2.zero;
                 return target;
             }
 
-            float blend = 1f - Mathf.Exp(-deltaTime / smoothTime);
-            return Vector2.LerpUnclamped(current, target, blend);
+            if (deltaTime <= 0f)
+            {
+                return current;
+            }
+
+            Vector2 result = Vector2.SmoothDamp(
+                current,
+                target,
+                ref velocity,
+                smoothTime,
+                Mathf.Max(0.01f, maxSpeed),
+                deltaTime);
+
+            const float settleThreshold = 0.0001f;
+            if ((result - target).sqrMagnitude <= settleThreshold * settleThreshold &&
+                velocity.sqrMagnitude <= settleThreshold * settleThreshold)
+            {
+                result = target;
+                velocity = Vector2.zero;
+            }
+
+            return result;
         }
 
         private static Vector2 ClampAxes(Vector2 value)
@@ -320,6 +358,7 @@ namespace SgrUnity
         {
             followSmoothTime = Mathf.Max(0f, followSmoothTime);
             returnSmoothTime = Mathf.Max(0f, returnSmoothTime);
+            maxInputSpeed = Mathf.Max(0.01f, maxInputSpeed);
             edgeScale = Mathf.Max(1f, edgeScale);
             maxLayerOffset.x = Mathf.Max(0f, maxLayerOffset.x);
             maxLayerOffset.y = Mathf.Max(0f, maxLayerOffset.y);
