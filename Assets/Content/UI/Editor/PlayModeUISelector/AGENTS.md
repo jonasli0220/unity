@@ -7,8 +7,7 @@
 
 ## Structure
 
-- `PlayModeUISelector.cs`: input capture, visible UI picking, selection, Hierarchy reveal, and Play Mode drag behavior.
-- `PlayModeUIPrefabOpener.cs`: Inspector and Hierarchy actions that resolve a selected runtime UI object back to its source prefab and open it.
+- `PlayModeUISelector.cs`: input capture, visible UI picking, selection, Hierarchy reveal, Play Mode drag behavior, and source-prefab opening from the Inspector or Hierarchy.
 - `README.md`: designer-facing usage and limitations.
 
 ## Behavior Contract
