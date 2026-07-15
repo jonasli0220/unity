@@ -8,6 +8,7 @@
 ## Structure
 
 - `PlayModeUISelector.cs`: input capture, visible UI picking, selection, Hierarchy reveal, and Play Mode drag behavior.
+- `PlayModeUIPrefabOpener.cs`: Inspector and Hierarchy actions that resolve a selected runtime UI object back to its source prefab and open it.
 - `README.md`: designer-facing usage and limitations.
 
 ## Behavior Contract
@@ -25,6 +26,9 @@
 - Respect visible `Mask` and `RectMask2D` bounds when choosing a target.
 - Reveal the selected object in Hierarchy by expanding only its ancestor chain.
 - Keep a checked `UITools` menu toggle and default the feature to enabled for first-time use.
+- While Play Mode is active, show a single-click Inspector action for a selected runtime UI object and keep a matching Hierarchy context-menu fallback.
+- Resolve the source prefab without adding runtime components: prefer Unity's native prefab correspondence, then search exact prefab filenames from the nearest `(Clone)` ancestor upward.
+- Open a unique match immediately. If exact duplicate filenames exist, let the user choose from the matching asset paths instead of guessing.
 
 ## Validation
 
