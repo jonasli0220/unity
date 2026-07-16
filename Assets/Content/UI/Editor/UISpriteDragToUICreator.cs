@@ -876,12 +876,20 @@ internal static class UISpriteDragToUICreator
         PrefabStage prefabStage = PrefabStageUtility.GetCurrentPrefabStage();
         Transform selectedTransform = Selection.activeTransform;
         RectTransform selectedRect = selectedTransform as RectTransform;
-        if (selectedRect != null &&
-            IsInsideCurrentEditingContext(selectedRect, prefabStage) &&
-            (prefabStage != null
+        if (selectedRect != null
+            && IsInsideCurrentEditingContext(selectedRect, prefabStage)
+            && (prefabStage != null
                 ? IsUIPrefabStage(prefabStage)
                 : selectedRect.GetComponentInParent<Canvas>() != null))
         {
+            RectTransform selectedParentRect = selectedRect.parent as RectTransform;
+            if (selectedParentRect != null
+                && selectedRect.GetComponent<Canvas>() == null
+                && IsInsideCurrentEditingContext(selectedParentRect, prefabStage))
+            {
+                return selectedParentRect;
+            }
+
             return selectedRect;
         }
 
