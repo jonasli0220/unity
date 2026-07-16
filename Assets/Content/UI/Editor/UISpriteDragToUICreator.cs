@@ -164,7 +164,8 @@ internal static class UISpriteDragToUICreator
             return;
         }
 
-        RectTransform parent = ResolveSpriteDropParent();
+        int insertSiblingIndex;
+        RectTransform parent = ResolveSpriteDropParent(out insertSiblingIndex);
         if (parent == null)
         {
             ClearSpriteDragPreview(sceneView);
@@ -206,7 +207,7 @@ internal static class UISpriteDragToUICreator
             }
         }
 
-        CreateDraggedSgrImages(parent, sprites, currentEvent.mousePosition);
+        CreateDraggedSgrImages(parent, insertSiblingIndex, sprites, currentEvent.mousePosition);
         currentEvent.Use();
     }
 
@@ -871,8 +872,9 @@ internal static class UISpriteDragToUICreator
         return foundSprite;
     }
 
-    private static RectTransform ResolveSpriteDropParent()
+    private static RectTransform ResolveSpriteDropParent(out int insertSiblingIndex)
     {
+        insertSiblingIndex = -1;
         PrefabStage prefabStage = PrefabStageUtility.GetCurrentPrefabStage();
         Transform selectedTransform = Selection.activeTransform;
         RectTransform selectedRect = selectedTransform as RectTransform;
@@ -887,6 +889,7 @@ internal static class UISpriteDragToUICreator
                 && selectedRect.GetComponent<Canvas>() == null
                 && IsInsideCurrentEditingContext(selectedParentRect, prefabStage))
             {
+                insertSiblingIndex = selectedRect.GetSiblingIndex() + 1;
                 return selectedParentRect;
             }
 
@@ -970,6 +973,7 @@ internal static class UISpriteDragToUICreator
 
     private static void CreateDraggedSgrImages(
         RectTransform parent,
+        int insertSiblingIndex,
         List<Sprite> sprites,
         Vector2 mousePosition)
     {
@@ -994,6 +998,11 @@ internal static class UISpriteDragToUICreator
 
             RectTransform rectTransform = imageObject.GetComponent<RectTransform>();
             Undo.SetTransformParent(rectTransform, parent, "Create UI Image From Sprite");
+            if (insertSiblingIndex >= 0)
+            {
+                rectTransform.SetSiblingIndex(insertSiblingIndex + i);
+            }
+
             rectTransform.anchorMin = new Vector2(0.5f, 0.5f);
             rectTransform.anchorMax = new Vector2(0.5f, 0.5f);
             rectTransform.pivot = new Vector2(0.5f, 0.5f);
