@@ -18,6 +18,7 @@ public sealed class AssetFavoritesWindow : EditorWindow
     private const float ToolbarHeight = 30f;
     private const float SearchFieldWidth = 300f;
     private const float LibraryButtonWidth = 96f;
+    private const float RefreshButtonWidth = 82f;
     private const float FolderPanelWidth = 238f;
     private const float FolderActionHeight = 36f;
     private const float StatusHeight = 26f;
@@ -62,6 +63,10 @@ public sealed class AssetFavoritesWindow : EditorWindow
     {
         previewSize = Mathf.Clamp(EditorPrefs.GetFloat(PreviewSizePrefsKey, DefaultPreviewSize), MinPreviewSize, MaxPreviewSize);
         ReloadLibrary();
+        EditorApplication.playModeStateChanged -= OnPlayModeStateChanged;
+        EditorApplication.playModeStateChanged += OnPlayModeStateChanged;
+        AssemblyReloadEvents.beforeAssemblyReload -= OnBeforeAssemblyReload;
+        AssemblyReloadEvents.beforeAssemblyReload += OnBeforeAssemblyReload;
     }
 
     private void OnInspectorUpdate()
@@ -78,6 +83,8 @@ public sealed class AssetFavoritesWindow : EditorWindow
 
     private void OnDisable()
     {
+        EditorApplication.playModeStateChanged -= OnPlayModeStateChanged;
+        AssemblyReloadEvents.beforeAssemblyReload -= OnBeforeAssemblyReload;
         AssetFavoritesNodePreviewRenderer.ClearCache();
     }
 
@@ -105,6 +112,12 @@ public sealed class AssetFavoritesWindow : EditorWindow
         {
             GUILayout.Space(4f);
             GUILayout.FlexibleSpace();
+            if (GUILayout.Button(new GUIContent("刷新预览", "清理选中收藏的预览缓存；未选中时刷新当前列表。播放模式中只清理，退出后自动重新生成。"), EditorStyles.toolbarButton, GUILayout.Width(RefreshButtonWidth)))
+            {
+                RefreshPreviews();
+            }
+
+            GUILayout.Space(4f);
             if (GUILayout.Button("导入 Library", EditorStyles.toolbarButton, GUILayout.Width(LibraryButtonWidth)))
             {
                 ImportLibrary();
@@ -135,6 +148,65 @@ public sealed class AssetFavoritesWindow : EditorWindow
             }
             GUILayout.Space(4f);
         }
+    }
+
+    private void RefreshPreviews()
+    {
+        List<EntryView> targetViews = GetPreviewRefreshTargets();
+        int invalidated = AssetFavoritesNodePreviewRenderer.InvalidateCacheForEntries(targetViews.Select(view => view.Entry));
+        if (invalidated <= 0)
+        {
+            statusText = "当前没有可刷新的 Prefab / 节点预览";
+        }
+        else if (AssetFavoritesNodePreviewRenderer.CanGeneratePreviewNow())
+        {
+            statusText = (selectedGuids.Count > 0 ? "已刷新选中 " : "已刷新当前列表 ")
+                + invalidated + " 个预览；稍后自动重新生成";
+        }
+        else
+        {
+            statusText = "已清理 " + invalidated + " 个预览；退出播放模式后自动重新生成";
+        }
+
+        Repaint();
+    }
+
+    private List<EntryView> GetPreviewRefreshTargets()
+    {
+        List<EntryView> visibleEntries = GetVisibleEntries();
+        if (selectedGuids.Count > 0)
+        {
+            List<EntryView> selectedVisibleEntries = visibleEntries
+                .Where(view => selectedGuids.Contains(view.Id))
+                .ToList();
+            if (selectedVisibleEntries.Count > 0)
+            {
+                return selectedVisibleEntries;
+            }
+        }
+
+        return visibleEntries;
+    }
+
+    private void OnPlayModeStateChanged(PlayModeStateChange state)
+    {
+        if (state != PlayModeStateChange.ExitingEditMode
+            && state != PlayModeStateChange.EnteredEditMode
+            && state != PlayModeStateChange.EnteredPlayMode)
+        {
+            return;
+        }
+
+        AssetFavoritesNodePreviewRenderer.ClearCache();
+        statusText = state == PlayModeStateChange.EnteredEditMode
+            ? "已退出播放模式，预览会自动重新生成"
+            : "播放模式中暂停生成新预览，避免运行时状态污染";
+        Repaint();
+    }
+
+    private void OnBeforeAssemblyReload()
+    {
+        AssetFavoritesNodePreviewRenderer.ClearCache();
     }
 
     private void ExportLibrary()
@@ -550,6 +622,7 @@ public sealed class AssetFavoritesWindow : EditorWindow
                 menu.AddItem(new GUIContent("Open"), false, () => Open(entry.Asset));
             }
             menu.AddSeparator(string.Empty);
+            menu.AddItem(new GUIContent("刷新预览"), false, RefreshPreviews);
             menu.AddItem(new GUIContent("Remove from Favorites"), false, RemoveSelectedEntries);
             menu.ShowAsContext();
             current.Use();

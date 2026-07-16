@@ -12,7 +12,7 @@
 
 - 直接把 Project 中的资产或文件夹拖到右侧内容区。
 - 直接把 Hierarchy 中的 UI 节点拖到右侧内容区，可收藏为节点模板。
-- 顶部工具栏提供 `导入 Library`、`导出 Library` 和固定宽度搜索框。
+- 顶部工具栏提供 `刷新预览`、`导入 Library`、`导出 Library` 和固定宽度搜索框。
 - 当前选择了左侧文件夹时，拖入内容收藏到该目录；选择 `All Favorites` 时，按 Prefab、Node、Sprite、VFX、Animation、Material、Other 自动分类。
 - `图片 Sprite` 接收 Sprite 与 Texture2D；`特效 VFX` 接收 Visual Effect Graph 资源，以及根节点为特效组件，或同时具备粒子 / Trail / VFX 组件和 VX、VFX、FX、Effect 命名特征的 prefab，避免把仅内嵌少量粒子的完整 UI 页面误判为特效。
 - Audio、Scene、Script、Font 不再单独显示，收藏时统一进入 `其他 Other`；已有收藏会保留，自定义文件夹中的手动整理不会被迁移。
@@ -20,6 +20,7 @@
 - 右侧支持路径搜索，以及由预览尺寸自动驱动的 Grid / List 浏览。
 - 节点模板在列表中显示为 `Node · 宽×高 · 主要组件`，并可按来源层级路径、组件类型搜索。
 - 普通 Prefab 收藏和节点模板都会复用 `UIPrefabPreviewProjectOverlay.cs` 里的 UI prefab 预览生成逻辑绘制真实缩略图；Asset Favorites 侧只做 Editor 内存缓存，不额外生成图片资产。无法生成 UI 预览时会回退到 Unity 原生缩略图。
+- 点击 `刷新预览` 会清理已选收藏的 UI 预览缓存；没有选中收藏时刷新当前目录 / 搜索结果中的可预览项。进入或退出 Play Mode、项目资源变化时也会自动清理内存预览缓存，且 Play Mode 期间不会生成新的 UI 预览，避免运行时状态污染缩略图。
 - 右下角滑杆范围为 `64–512 px`：拖到 `64 px` 时自动变为紧凑单行列表，放大到 `>64 px` 时自动恢复网格；两端图标只提示当前形态，不能点击切换。
 - 鼠标悬停滑杆时可直接滚轮缩放，在内容区使用 `Ctrl` / `Cmd + 滚轮` 缩放。普通滚轮仍用于上下浏览。
 - `Ctrl` / `Cmd` 点击切换多选，`Shift` 点击连续多选；多选后可一起拖到左侧文件夹。

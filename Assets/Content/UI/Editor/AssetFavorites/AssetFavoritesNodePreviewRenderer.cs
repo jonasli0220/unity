@@ -18,21 +18,13 @@ internal static class AssetFavoritesNodePreviewRenderer
             return null;
         }
 
-        bool isNodeTemplate = AssetFavoritesLibrary.IsNodeTemplate(entry);
-        string cacheKey = isNodeTemplate ? entry.templateGuid : entry.assetGuid;
-        string assetPath = AssetDatabase.GUIDToAssetPath(cacheKey);
-        if (!isNodeTemplate
-            && (string.IsNullOrEmpty(assetPath)
-                || !assetPath.EndsWith(".prefab", StringComparison.OrdinalIgnoreCase)))
+        string cacheKey = GetCacheKey(entry);
+        if (string.IsNullOrEmpty(cacheKey))
         {
             return null;
         }
 
-        if (string.IsNullOrEmpty(cacheKey))
-        {
-            cacheKey = AssetFavoritesLibrary.GetEntryId(entry);
-        }
-        if (string.IsNullOrEmpty(cacheKey))
+        if (!AssetFavoritesLibrary.IsNodeTemplate(entry) && !IsPrefabAssetGuid(cacheKey))
         {
             return null;
         }
@@ -44,6 +36,11 @@ internal static class AssetFavoritesNodePreviewRenderer
         }
 
         if (FailedCache.Contains(cacheKey))
+        {
+            return null;
+        }
+
+        if (!CanGeneratePreviewNow())
         {
             return null;
         }
@@ -75,6 +72,78 @@ internal static class AssetFavoritesNodePreviewRenderer
 
         PreviewCache.Clear();
         FailedCache.Clear();
+    }
+
+    public static int InvalidateCacheForEntries(IEnumerable<AssetFavoriteEntry> entries)
+    {
+        if (entries == null)
+        {
+            return 0;
+        }
+
+        HashSet<string> invalidatedKeys = new HashSet<string>();
+        foreach (AssetFavoriteEntry entry in entries)
+        {
+            string cacheKey = GetCacheKey(entry);
+            if (string.IsNullOrEmpty(cacheKey))
+            {
+                continue;
+            }
+
+            if (!AssetFavoritesLibrary.IsNodeTemplate(entry) && !IsPrefabAssetGuid(cacheKey))
+            {
+                continue;
+            }
+
+            if (invalidatedKeys.Add(cacheKey))
+            {
+                ClearCacheKey(cacheKey);
+            }
+        }
+
+        return invalidatedKeys.Count;
+    }
+
+    public static bool CanGeneratePreviewNow()
+    {
+        return !EditorApplication.isCompiling
+            && !EditorApplication.isUpdating
+            && !EditorApplication.isPlayingOrWillChangePlaymode;
+    }
+
+    private static string GetCacheKey(AssetFavoriteEntry entry)
+    {
+        if (entry == null)
+        {
+            return string.Empty;
+        }
+
+        string cacheKey = AssetFavoritesLibrary.IsNodeTemplate(entry) ? entry.templateGuid : entry.assetGuid;
+        if (string.IsNullOrEmpty(cacheKey))
+        {
+            cacheKey = AssetFavoritesLibrary.GetEntryId(entry);
+        }
+
+        return cacheKey ?? string.Empty;
+    }
+
+    private static bool IsPrefabAssetGuid(string guid)
+    {
+        string assetPath = AssetDatabase.GUIDToAssetPath(guid);
+        return !string.IsNullOrEmpty(assetPath)
+            && assetPath.EndsWith(".prefab", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static void ClearCacheKey(string cacheKey)
+    {
+        Texture2D cached;
+        if (PreviewCache.TryGetValue(cacheKey, out cached) && cached != null)
+        {
+            UnityEngine.Object.DestroyImmediate(cached);
+        }
+
+        PreviewCache.Remove(cacheKey);
+        FailedCache.Remove(cacheKey);
     }
 
     private static Texture2D RenderPrefab(GameObject prefab)
