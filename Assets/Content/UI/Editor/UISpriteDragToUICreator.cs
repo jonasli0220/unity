@@ -47,6 +47,9 @@ internal static class UISpriteDragToUICreator
         SceneView.duringSceneGui -= HandleSpriteDragIntoUI;
         SceneView.beforeSceneGui -= HandleSpriteDragIntoUI;
         SceneView.beforeSceneGui += HandleSpriteDragIntoUI;
+
+        EditorApplication.hierarchyWindowItemOnGUI -= HandleSpriteDragIntoHierarchy;
+        EditorApplication.hierarchyWindowItemOnGUI += HandleSpriteDragIntoHierarchy;
     }
 
     [MenuItem(SpriteDragMenuPath)]
@@ -208,6 +211,73 @@ internal static class UISpriteDragToUICreator
         }
 
         CreateDraggedSgrImages(parent, insertSiblingIndex, sprites, currentEvent.mousePosition);
+        currentEvent.Use();
+    }
+
+    private static void HandleSpriteDragIntoHierarchy(int instanceId, Rect selectionRect)
+    {
+        if (!IsSpriteDragToUIEnabled() ||
+            !IsStructuralEditingAllowedInCurrentContext())
+        {
+            return;
+        }
+
+        Event currentEvent = Event.current;
+        if (currentEvent == null ||
+            (currentEvent.type != EventType.DragUpdated &&
+                currentEvent.type != EventType.DragPerform))
+        {
+            return;
+        }
+
+        Rect rowRect = selectionRect;
+        rowRect.x = 0f;
+        rowRect.width = EditorGUIUtility.currentViewWidth;
+        if (!rowRect.Contains(currentEvent.mousePosition))
+        {
+            return;
+        }
+
+        List<Sprite> sprites = new List<Sprite>();
+        List<string> externalImagePaths = new List<string>();
+        bool isExternalImageDrag = TryGetExternalImagePaths(externalImagePaths);
+        if (!isExternalImageDrag && !TryGetDraggedSprites(sprites))
+        {
+            return;
+        }
+
+        if (isExternalImageDrag && !IsUIPrefabStage(PrefabStageUtility.GetCurrentPrefabStage()))
+        {
+            return;
+        }
+
+        GameObject targetObject = EditorUtility.InstanceIDToObject(instanceId) as GameObject;
+        int insertSiblingIndex;
+        RectTransform parent = ResolveHierarchyDropParent(targetObject, out insertSiblingIndex);
+        if (parent == null)
+        {
+            return;
+        }
+
+        DragAndDrop.visualMode = DragAndDropVisualMode.Copy;
+        if (currentEvent.type == EventType.DragPerform)
+        {
+            DragAndDrop.AcceptDrag();
+
+            if (isExternalImageDrag)
+            {
+                sprites = ImportExternalImagesForCurrentPrefab(externalImagePaths);
+                if (sprites.Count == 0)
+                {
+                    currentEvent.Use();
+                    return;
+                }
+            }
+
+            CreateDraggedSgrImages(parent, insertSiblingIndex, sprites, parent.position);
+            EditorApplication.RepaintHierarchyWindow();
+        }
+
         currentEvent.Use();
     }
 
@@ -945,6 +1015,42 @@ internal static class UISpriteDragToUICreator
         return null;
     }
 
+    private static RectTransform ResolveHierarchyDropParent(
+        GameObject targetObject,
+        out int insertSiblingIndex)
+    {
+        insertSiblingIndex = -1;
+        if (targetObject == null)
+        {
+            return null;
+        }
+
+        PrefabStage prefabStage = PrefabStageUtility.GetCurrentPrefabStage();
+        RectTransform targetRect = targetObject.transform as RectTransform;
+        if (targetRect == null
+            || !IsInsideCurrentEditingContext(targetRect, prefabStage)
+            || (prefabStage != null
+                ? !IsUIPrefabStage(prefabStage)
+                : targetRect.GetComponentInParent<Canvas>() == null))
+        {
+            return null;
+        }
+
+        if (targetRect.GetComponent<Canvas>() != null)
+        {
+            return targetRect;
+        }
+
+        RectTransform parentRect = targetRect.parent as RectTransform;
+        if (parentRect == null || !IsInsideCurrentEditingContext(parentRect, prefabStage))
+        {
+            return targetRect;
+        }
+
+        insertSiblingIndex = targetRect.GetSiblingIndex() + 1;
+        return parentRect;
+    }
+
     private static bool IsInsideCurrentEditingContext(
         Transform transform,
         PrefabStage prefabStage)
@@ -977,7 +1083,19 @@ internal static class UISpriteDragToUICreator
         List<Sprite> sprites,
         Vector2 mousePosition)
     {
-        Vector3 dropWorldPosition = GetDropWorldPosition(parent, mousePosition);
+        CreateDraggedSgrImages(
+            parent,
+            insertSiblingIndex,
+            sprites,
+            GetDropWorldPosition(parent, mousePosition));
+    }
+
+    private static void CreateDraggedSgrImages(
+        RectTransform parent,
+        int insertSiblingIndex,
+        List<Sprite> sprites,
+        Vector3 dropWorldPosition)
+    {
         List<GameObject> createdObjects = new List<GameObject>();
         float horizontalOffset = 0f;
 
