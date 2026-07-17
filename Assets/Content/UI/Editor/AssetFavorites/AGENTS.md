@@ -13,7 +13,7 @@
 - Persist project asset references by Unity GUID, not by direct object reference or absolute path.
 - Store generated node-template prefabs only under `Assets/Content/UI/Library/AssetFavoritesNodeTemplates`.
 - Export personal favorites as one `.assetfavorites` exchange file. Include custom-folder metadata, asset GUID records, and embedded node-template prefab bytes so node favorites remain usable on another machine.
-- Import is additive only: never delete, overwrite, rename, or move local favorites. Keep local placement for duplicate asset GUIDs; deduplicate node templates by prefab-content hash or source global object ID; reuse matching custom folder paths and create unique names only for true conflicts.
+- Import is additive only: never delete, overwrite, rename, or move local favorites. Keep local placement for duplicate asset GUIDs; deduplicate imported node templates by prefab-content hash first, and only fall back to source global object ID when no usable content hash exists; reuse matching custom folder paths and create unique names only for true conflicts.
 - Treat the library asset as relationship data only. Removing an entry or folder must never delete, move, or edit the referenced source asset.
 - Removing a node-template favorite may delete its generated template prefab, but must never delete or edit the original scene or prefab-stage node it was captured from.
 - Keep folders and favorite entries serializable with stable IDs so nested organization survives renames and asset moves.
@@ -27,7 +27,7 @@
 - Node templates must be reusable by dragging or placing into a selected Hierarchy parent, and placed instances should be unpacked so designers are not forced into prefab-instance management.
 - Dropping node templates into the Scene view should place them as siblings immediately after the scene node that was selected before the drag started; without a valid scene selection, place them at the scene root.
 - Node template and regular prefab favorite previews should reuse `UIPrefabPreviewGenerator` from `Assets/Content/UI/Editor/UIPrefabPreview/UIPrefabPreviewProjectOverlay.cs` and keep only Asset Favorites-specific memory caching here; fall back to Unity's native preview when the UI renderer cannot produce an image.
-- Skip already-favorited assets instead of creating duplicate entries.
+- Skip already-favorited Project assets instead of creating duplicate entries. When the same scene or prefab-stage node is added again, ask whether to replace the existing node template or add a new copy.
 - Preserve standard Unity selection conventions: Ctrl/Cmd toggles, Shift ranges, single click pings, double click opens.
 - Keep the folder tree keyboard navigable and accept dragged favorite entries or Project assets.
 - Treat preview size as one continuous browsing control, not separate clickable list/grid modes. At 64 px the content switches automatically to a compact single-line list; above 64 px it is a grid. Keep the endpoint icons informational only, support Ctrl/Cmd + mouse wheel over the content area, preserve ordinary wheel scrolling, and cap previews at 512 x 512.

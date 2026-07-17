@@ -39,6 +39,13 @@ public enum AssetFavoriteEntryKind
     NodeTemplate = 1
 }
 
+public enum AssetFavoritesNodeDuplicateAction
+{
+    Skip = 0,
+    ReplaceExisting = 1,
+    AddNew = 2
+}
+
 public sealed partial class AssetFavoritesLibrary : ScriptableObject
 {
     public const string AssetPath = "Assets/Content/UI/Library/AssetFavoritesLocalLibrary.asset";

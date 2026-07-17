@@ -770,11 +770,70 @@ public sealed class AssetFavoritesWindow : EditorWindow
 
     private void AddGameObjects(IEnumerable<GameObject> gameObjects, string destinationFolderId)
     {
+        GameObject[] targets = (gameObjects ?? Enumerable.Empty<GameObject>()).ToArray();
+        AssetFavoritesNodeDuplicateAction duplicateAction = ResolveNodeDuplicateAction(targets);
         int skipped;
-        int added = library.AddGameObjectTemplates(gameObjects, destinationFolderId, out skipped);
-        statusText = "已收藏 " + added + " 个节点模板；跳过 " + skipped + " 个已收藏或无效节点";
+        int replaced;
+        int added = library.AddGameObjectTemplates(targets, destinationFolderId, duplicateAction, out skipped, out replaced);
+        if (added > 0 || replaced > 0)
+        {
+            AssetFavoritesNodePreviewRenderer.ClearCache();
+        }
+
+        statusText = BuildNodeAddStatusText(added, replaced, skipped);
         ReloadTreeKeepingSelection();
         Repaint();
+    }
+
+    private AssetFavoritesNodeDuplicateAction ResolveNodeDuplicateAction(IEnumerable<GameObject> gameObjects)
+    {
+        int duplicateCount = library.CountExistingNodeTemplateSources(gameObjects);
+        if (duplicateCount <= 0)
+        {
+            return AssetFavoritesNodeDuplicateAction.Skip;
+        }
+
+        int choice = EditorUtility.DisplayDialogComplex(
+            "节点已收藏",
+            "发现 " + duplicateCount + " 个节点已经在收藏夹里。\n\n"
+            + "替换原收藏：保留原卡片和目录，只更新节点样式与预览。\n"
+            + "新增一份：创建新的收藏卡片，放到当前目录。\n"
+            + "取消：重复节点不处理；未收藏的新节点仍会加入。",
+            "替换原收藏",
+            "取消",
+            "新增一份");
+        if (choice == 0)
+        {
+            return AssetFavoritesNodeDuplicateAction.ReplaceExisting;
+        }
+
+        if (choice == 2)
+        {
+            return AssetFavoritesNodeDuplicateAction.AddNew;
+        }
+
+        return AssetFavoritesNodeDuplicateAction.Skip;
+    }
+
+    private static string BuildNodeAddStatusText(int added, int replaced, int skipped)
+    {
+        List<string> parts = new List<string>();
+        if (added > 0)
+        {
+            parts.Add("新增 " + added + " 个");
+        }
+        if (replaced > 0)
+        {
+            parts.Add("替换 " + replaced + " 个");
+        }
+        if (skipped > 0)
+        {
+            parts.Add("跳过 " + skipped + " 个");
+        }
+
+        return parts.Count == 0
+            ? "没有新增或替换节点模板"
+            : "节点模板：" + string.Join("；", parts.ToArray());
     }
 
     private void MoveEntries(IEnumerable<string> guids, string destinationFolderId)

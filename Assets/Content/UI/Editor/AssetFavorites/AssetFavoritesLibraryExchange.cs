@@ -189,11 +189,7 @@ public sealed partial class AssetFavoritesLibrary
                 .Select(entry => entry.assetGuid)
                 .Where(guid => !string.IsNullOrEmpty(guid)),
             StringComparer.Ordinal);
-        HashSet<string> sourceIds = new HashSet<string>(
-            entries.Where(IsNodeTemplate)
-                .Select(entry => entry.sourceGlobalObjectId)
-                .Where(id => !string.IsNullOrEmpty(id)),
-            StringComparer.Ordinal);
+        HashSet<string> sourceIdsWithoutTemplateHash = new HashSet<string>(StringComparer.Ordinal);
         HashSet<string> templateHashes = new HashSet<string>(StringComparer.Ordinal);
         foreach (AssetFavoriteEntry localNode in entries.Where(IsNodeTemplate))
         {
@@ -203,6 +199,10 @@ public sealed partial class AssetFavoritesLibrary
             if (!string.IsNullOrEmpty(hash))
             {
                 templateHashes.Add(hash);
+            }
+            else if (!string.IsNullOrEmpty(localNode.sourceGlobalObjectId))
+            {
+                sourceIdsWithoutTemplateHash.Add(localNode.sourceGlobalObjectId);
             }
         }
 
@@ -267,10 +267,11 @@ public sealed partial class AssetFavoritesLibrary
                 continue;
             }
 
-            bool duplicateSource = !string.IsNullOrEmpty(imported.sourceGlobalObjectId)
-                                   && !sourceIds.Add(imported.sourceGlobalObjectId);
-            bool duplicateTemplate = !templateHashes.Add(actualHash);
-            if (duplicateSource || duplicateTemplate)
+            bool duplicateTemplate = !string.IsNullOrEmpty(actualHash) && !templateHashes.Add(actualHash);
+            bool duplicateFallbackSource = string.IsNullOrEmpty(actualHash)
+                                           && !string.IsNullOrEmpty(imported.sourceGlobalObjectId)
+                                           && !sourceIdsWithoutTemplateHash.Add(imported.sourceGlobalObjectId);
+            if (duplicateTemplate || duplicateFallbackSource)
             {
                 summary.skippedExisting++;
                 continue;

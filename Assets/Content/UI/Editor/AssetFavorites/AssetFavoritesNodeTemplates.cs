@@ -48,18 +48,35 @@ public sealed partial class AssetFavoritesLibrary
         return gameObject != null && !EditorUtility.IsPersistent(gameObject);
     }
 
+    public int CountExistingNodeTemplateSources(IEnumerable<GameObject> gameObjects)
+    {
+        HashSet<string> existingSourceIds = BuildExistingNodeTemplateSourceIds();
+        return NormalizeGameObjects(gameObjects)
+            .Select(GetGlobalObjectId)
+            .Count(sourceId => !string.IsNullOrEmpty(sourceId) && existingSourceIds.Contains(sourceId));
+    }
+
     public int AddGameObjectTemplates(IEnumerable<GameObject> gameObjects, string destinationFolderId, out int skippedCount)
+    {
+        int replacedCount;
+        return AddGameObjectTemplates(gameObjects, destinationFolderId, AssetFavoritesNodeDuplicateAction.Skip, out skippedCount, out replacedCount);
+    }
+
+    public int AddGameObjectTemplates(
+        IEnumerable<GameObject> gameObjects,
+        string destinationFolderId,
+        AssetFavoritesNodeDuplicateAction duplicateAction,
+        out int skippedCount,
+        out int replacedCount)
     {
         EnsureDefaultFolders();
         EnsureNodeTemplatesFolder();
 
         List<GameObject> normalizedObjects = NormalizeGameObjects(gameObjects);
-        HashSet<string> existingSourceIds = new HashSet<string>(entries
-            .Where(IsNodeTemplate)
-            .Select(entry => entry.sourceGlobalObjectId)
-            .Where(id => !string.IsNullOrEmpty(id)));
+        Dictionary<string, AssetFavoriteEntry> existingBySourceId = BuildExistingNodeTemplateSourceMap();
 
         int addedCount = 0;
+        replacedCount = 0;
         skippedCount = 0;
 
         foreach (GameObject gameObject in normalizedObjects)
@@ -71,59 +88,160 @@ public sealed partial class AssetFavoritesLibrary
             }
 
             string sourceId = GetGlobalObjectId(gameObject);
-            if (!string.IsNullOrEmpty(sourceId) && existingSourceIds.Contains(sourceId))
+            AssetFavoriteEntry existingEntry = null;
+            bool hasExistingSource = !string.IsNullOrEmpty(sourceId)
+                                     && existingBySourceId.TryGetValue(sourceId, out existingEntry);
+            if (hasExistingSource && duplicateAction == AssetFavoritesNodeDuplicateAction.Skip)
             {
                 skippedCount++;
                 continue;
             }
 
-            string entryId = Guid.NewGuid().ToString("N");
-            string templatePath = AssetDatabase.GenerateUniqueAssetPath(NodeTemplatesFolder + "/" + SanitizeFileName(gameObject.name) + "_" + entryId.Substring(0, 8) + ".prefab");
-            if (!SaveNodeTemplatePrefab(gameObject, templatePath))
+            if (hasExistingSource && duplicateAction == AssetFavoritesNodeDuplicateAction.ReplaceExisting)
+            {
+                if (ReplaceNodeTemplateEntry(existingEntry, gameObject, sourceId))
+                {
+                    replacedCount++;
+                }
+                else
+                {
+                    skippedCount++;
+                }
+                continue;
+            }
+
+            AssetFavoriteEntry createdEntry;
+            if (!TryCreateNodeTemplateEntry(gameObject, destinationFolderId, sourceId, out createdEntry))
             {
                 skippedCount++;
                 continue;
             }
 
-            string templateGuid = AssetDatabase.AssetPathToGUID(templatePath);
-            if (string.IsNullOrEmpty(templateGuid))
+            entries.Add(createdEntry);
+            if (!string.IsNullOrEmpty(sourceId) && !existingBySourceId.ContainsKey(sourceId))
             {
-                AssetDatabase.DeleteAsset(templatePath);
-                skippedCount++;
-                continue;
-            }
-
-            RectTransform rectTransform = gameObject.GetComponent<RectTransform>();
-            entries.Add(new AssetFavoriteEntry
-            {
-                id = entryId,
-                kind = AssetFavoriteEntryKind.NodeTemplate,
-                templateGuid = templateGuid,
-                templateContentHash = ComputeTemplateContentHash(templatePath),
-                folderId = IsValidDestination(destinationFolderId) ? destinationFolderId : AutoNodeFolderId,
-                displayName = gameObject.name,
-                sourceScenePath = GetSourcePath(gameObject),
-                sourceHierarchyPath = BuildHierarchyPath(gameObject.transform),
-                sourceGlobalObjectId = sourceId,
-                primaryComponent = GetPrimaryComponentName(gameObject),
-                rectWidth = rectTransform == null ? 0 : Mathf.RoundToInt(rectTransform.rect.width),
-                rectHeight = rectTransform == null ? 0 : Mathf.RoundToInt(rectTransform.rect.height)
-            });
-
-            if (!string.IsNullOrEmpty(sourceId))
-            {
-                existingSourceIds.Add(sourceId);
+                existingBySourceId.Add(sourceId, createdEntry);
             }
             addedCount++;
         }
 
-        if (addedCount > 0)
+        if (addedCount > 0 || replacedCount > 0)
         {
             Save();
             AssetDatabase.SaveAssets();
         }
 
         return addedCount;
+    }
+
+    private bool TryCreateNodeTemplateEntry(
+        GameObject gameObject,
+        string destinationFolderId,
+        string sourceId,
+        out AssetFavoriteEntry entry)
+    {
+        entry = null;
+        string entryId = Guid.NewGuid().ToString("N");
+        string templatePath = AssetDatabase.GenerateUniqueAssetPath(
+            NodeTemplatesFolder + "/" + SanitizeFileName(gameObject.name) + "_" + entryId.Substring(0, 8) + ".prefab");
+        if (!SaveNodeTemplatePrefab(gameObject, templatePath))
+        {
+            return false;
+        }
+
+        string templateGuid = AssetDatabase.AssetPathToGUID(templatePath);
+        if (string.IsNullOrEmpty(templateGuid))
+        {
+            AssetDatabase.DeleteAsset(templatePath);
+            return false;
+        }
+
+        entry = new AssetFavoriteEntry
+        {
+            id = entryId,
+            kind = AssetFavoriteEntryKind.NodeTemplate,
+            folderId = IsValidDestination(destinationFolderId) ? destinationFolderId : AutoNodeFolderId
+        };
+        UpdateNodeTemplateEntryMetadata(entry, gameObject, templateGuid, templatePath, sourceId);
+        return true;
+    }
+
+    private bool ReplaceNodeTemplateEntry(AssetFavoriteEntry entry, GameObject gameObject, string sourceId)
+    {
+        if (!IsNodeTemplate(entry) || gameObject == null)
+        {
+            return false;
+        }
+
+        string templatePath = AssetDatabase.GUIDToAssetPath(entry.templateGuid);
+        if (string.IsNullOrEmpty(templatePath)
+            || !templatePath.StartsWith(NodeTemplatesFolder + "/", StringComparison.OrdinalIgnoreCase)
+            || !templatePath.EndsWith(".prefab", StringComparison.OrdinalIgnoreCase))
+        {
+            string entryId = string.IsNullOrEmpty(entry.id) ? Guid.NewGuid().ToString("N") : entry.id;
+            if (string.IsNullOrEmpty(entry.id))
+            {
+                entry.id = entryId;
+            }
+            templatePath = AssetDatabase.GenerateUniqueAssetPath(
+                NodeTemplatesFolder + "/" + SanitizeFileName(gameObject.name) + "_" + entryId.Substring(0, 8) + ".prefab");
+        }
+
+        if (!SaveNodeTemplatePrefab(gameObject, templatePath))
+        {
+            return false;
+        }
+
+        string templateGuid = AssetDatabase.AssetPathToGUID(templatePath);
+        if (string.IsNullOrEmpty(templateGuid))
+        {
+            return false;
+        }
+
+        UpdateNodeTemplateEntryMetadata(entry, gameObject, templateGuid, templatePath, sourceId);
+        return true;
+    }
+
+    private static void UpdateNodeTemplateEntryMetadata(
+        AssetFavoriteEntry entry,
+        GameObject gameObject,
+        string templateGuid,
+        string templatePath,
+        string sourceId)
+    {
+        RectTransform rectTransform = gameObject.GetComponent<RectTransform>();
+        entry.kind = AssetFavoriteEntryKind.NodeTemplate;
+        entry.templateGuid = templateGuid;
+        entry.templateContentHash = ComputeTemplateContentHash(templatePath);
+        entry.displayName = gameObject.name;
+        entry.sourceScenePath = GetSourcePath(gameObject);
+        entry.sourceHierarchyPath = BuildHierarchyPath(gameObject.transform);
+        entry.sourceGlobalObjectId = sourceId;
+        entry.primaryComponent = GetPrimaryComponentName(gameObject);
+        entry.rectWidth = rectTransform == null ? 0 : Mathf.RoundToInt(rectTransform.rect.width);
+        entry.rectHeight = rectTransform == null ? 0 : Mathf.RoundToInt(rectTransform.rect.height);
+    }
+
+    private HashSet<string> BuildExistingNodeTemplateSourceIds()
+    {
+        return new HashSet<string>(entries
+            .Where(IsNodeTemplate)
+            .Select(entry => entry.sourceGlobalObjectId)
+            .Where(id => !string.IsNullOrEmpty(id)));
+    }
+
+    private Dictionary<string, AssetFavoriteEntry> BuildExistingNodeTemplateSourceMap()
+    {
+        Dictionary<string, AssetFavoriteEntry> map = new Dictionary<string, AssetFavoriteEntry>();
+        foreach (AssetFavoriteEntry entry in entries.Where(IsNodeTemplate))
+        {
+            if (!string.IsNullOrEmpty(entry.sourceGlobalObjectId) && !map.ContainsKey(entry.sourceGlobalObjectId))
+            {
+                map.Add(entry.sourceGlobalObjectId, entry);
+            }
+        }
+
+        return map;
     }
 
     public int InstantiateNodeTemplates(IEnumerable<string> entryIds, Transform parent, out List<GameObject> createdObjects)
@@ -438,16 +556,57 @@ public static class AssetFavoritesGameObjectMenu
             .Where(AssetFavoritesLibrary.CanFavoriteGameObject)
             .ToArray();
         AssetFavoritesLibrary library = AssetFavoritesLibrary.LoadOrCreate();
+        AssetFavoritesNodeDuplicateAction duplicateAction = ResolveDuplicateAction(library, gameObjects);
         int skipped;
-        int added = library.AddGameObjectTemplates(gameObjects, string.Empty, out skipped);
+        int replaced;
+        int added = library.AddGameObjectTemplates(gameObjects, string.Empty, duplicateAction, out skipped, out replaced);
+        if (added > 0 || replaced > 0)
+        {
+            AssetFavoritesNodePreviewRenderer.ClearCache();
+        }
         AssetFavoritesWindow.OpenAndFocus();
-        EditorUtility.DisplayDialog("Asset Favorites", "本次收藏 " + added + " 个节点模板。\n已收藏或无效节点跳过 " + skipped + " 个。", "知道了");
+        EditorUtility.DisplayDialog(
+            "Asset Favorites",
+            "新增节点模板：" + added
+            + "\n替换节点模板：" + replaced
+            + "\n跳过已收藏或无效节点：" + skipped,
+            "知道了");
     }
 
     [MenuItem(MenuPath, true)]
     private static bool ValidateAddSelectedGameObjects()
     {
         return Selection.gameObjects.Any(AssetFavoritesLibrary.CanFavoriteGameObject);
+    }
+
+    private static AssetFavoritesNodeDuplicateAction ResolveDuplicateAction(AssetFavoritesLibrary library, IEnumerable<GameObject> gameObjects)
+    {
+        int duplicateCount = library.CountExistingNodeTemplateSources(gameObjects);
+        if (duplicateCount <= 0)
+        {
+            return AssetFavoritesNodeDuplicateAction.Skip;
+        }
+
+        int choice = EditorUtility.DisplayDialogComplex(
+            "节点已收藏",
+            "发现 " + duplicateCount + " 个节点已经在收藏夹里。\n\n"
+            + "替换原收藏：保留原卡片和目录，只更新节点样式与预览。\n"
+            + "新增一份：创建新的收藏卡片，放到节点分类。\n"
+            + "取消：重复节点不处理；未收藏的新节点仍会加入。",
+            "替换原收藏",
+            "取消",
+            "新增一份");
+        if (choice == 0)
+        {
+            return AssetFavoritesNodeDuplicateAction.ReplaceExisting;
+        }
+
+        if (choice == 2)
+        {
+            return AssetFavoritesNodeDuplicateAction.AddNew;
+        }
+
+        return AssetFavoritesNodeDuplicateAction.Skip;
     }
 }
 
