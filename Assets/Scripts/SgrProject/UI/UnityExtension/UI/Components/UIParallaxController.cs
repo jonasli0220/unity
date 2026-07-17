@@ -14,6 +14,13 @@ namespace SgrUnity
     [RequireComponent(typeof(RectTransform))]
     public sealed class UIParallaxController : MonoBehaviour
     {
+        private enum InputSourceMode
+        {
+            Auto,
+            Pointer,
+            Gyroscope
+        }
+
         [Serializable]
         private sealed class ParallaxLayer
         {
@@ -34,6 +41,9 @@ namespace SgrUnity
         }
 
         [Header("Input / 输入")]
+        [Tooltip("Auto：手机优先使用陀螺仪，不支持时回退鼠标/触摸；Pointer：只用鼠标/触摸；Gyroscope：只用陀螺仪。")]
+        [SerializeField] private InputSourceMode inputSource = InputSourceMode.Auto;
+
         [Tooltip("鼠标或触摸离开有效屏幕区域后，是否自动回到中心。")]
         [SerializeField] private bool returnToCenterOutsideScreen = true;
 
@@ -48,6 +58,22 @@ namespace SgrUnity
 
         [Tooltip("UI 动效通常应在 Time.timeScale 为 0 时继续播放。")]
         [SerializeField] private bool useUnscaledTime = true;
+
+        [Header("Gyroscope / 陀螺仪")]
+        [Tooltip("设备从校准角度倾斜多少度时达到最大视差。数值越小越灵敏。")]
+        [SerializeField, Range(2f, 45f)] private float gyroscopeResponseAngle = 12f;
+
+        [Tooltip("忽略校准点附近的小幅传感器抖动，单位为度。")]
+        [SerializeField, Range(0f, 5f)] private float gyroscopeDeadZone = 0.35f;
+
+        [Tooltip("反转陀螺仪的左右方向。")]
+        [SerializeField] private bool invertGyroscopeX;
+
+        [Tooltip("反转陀螺仪的上下方向。")]
+        [SerializeField] private bool invertGyroscopeY;
+
+        [Tooltip("应用从后台返回时，以当前持机角度重新校准为中心。")]
+        [SerializeField] private bool recenterGyroscopeOnFocus = true;
 
         [Header("Root Tilt / 根节点倾斜")]
         [Tooltip("负责整体倾斜的专用包装节点。为空时使用当前物体的 RectTransform。")]
@@ -76,10 +102,19 @@ namespace SgrUnity
         private Vector2 _inputVelocity;
         private Vector2 _externalInput;
         private Quaternion _baseRootRotation;
+        private Quaternion _gyroscopeNeutralAttitude;
         private Vector3 _baseRootScale;
+        private Gyroscope _gyroscope;
+        private ScreenOrientation _gyroscopeOrientation;
+        private float _gyroscopeReadyTime;
         private bool _externalInputEnabled;
+        private bool _gyroscopeAvailable;
+        private bool _gyroscopeCalibrated;
+        private bool _gyroscopeInitialized;
         private bool _hasFocus = true;
         private bool _hasRootBaseline;
+
+        private const float GyroscopeWarmupSeconds = 0.15f;
 
         private void Reset()
         {
@@ -89,6 +124,8 @@ namespace SgrUnity
         private void OnEnable()
         {
             _hasFocus = true;
+            _gyroscopeInitialized = false;
+            TryInitializeGyroscope();
             CaptureBaseline();
         }
 
@@ -97,11 +134,16 @@ namespace SgrUnity
             RestoreBaseline();
             _currentInput = Vector2.zero;
             _inputVelocity = Vector2.zero;
+            _gyroscopeCalibrated = false;
         }
 
         private void OnApplicationFocus(bool hasFocus)
         {
             _hasFocus = hasFocus;
+            if (hasFocus && recenterGyroscopeOnFocus)
+            {
+                RecenterGyroscope();
+            }
         }
 
         private void LateUpdate()
@@ -153,6 +195,21 @@ namespace SgrUnity
         public void ReleaseExternalInput()
         {
             _externalInputEnabled = false;
+        }
+
+        /// <summary>
+        /// Uses the device's current pose as the gyroscope's neutral center.
+        /// The sensor is given a short warm-up before the pose is captured.
+        /// </summary>
+        public void RecenterGyroscope()
+        {
+            if (!TryInitializeGyroscope())
+            {
+                return;
+            }
+
+            _gyroscopeCalibrated = false;
+            _gyroscopeReadyTime = Time.realtimeSinceStartup + GyroscopeWarmupSeconds;
         }
 
         private void CaptureBaseline()
@@ -230,6 +287,22 @@ namespace SgrUnity
                 return _externalInput;
             }
 
+            if (ShouldUseGyroscope())
+            {
+                return GetGyroscopeInput(out hasActiveInput);
+            }
+
+            if (inputSource == InputSourceMode.Gyroscope)
+            {
+                hasActiveInput = false;
+                return Vector2.zero;
+            }
+
+            return GetPointerInput(out hasActiveInput);
+        }
+
+        private Vector2 GetPointerInput(out bool hasActiveInput)
+        {
             Vector2 pointerPosition;
             if (Input.touchCount > 0)
             {
@@ -263,6 +336,162 @@ namespace SgrUnity
             return ClampAxes(new Vector2(
                 pointerPosition.x / Screen.width * 2f - 1f,
                 pointerPosition.y / Screen.height * 2f - 1f));
+        }
+
+        private bool ShouldUseGyroscope()
+        {
+            bool wantsGyroscope = inputSource == InputSourceMode.Gyroscope ||
+                                  inputSource == InputSourceMode.Auto && Application.isMobilePlatform;
+            return wantsGyroscope && TryInitializeGyroscope();
+        }
+
+        private bool TryInitializeGyroscope()
+        {
+            bool wantsGyroscope = inputSource == InputSourceMode.Gyroscope ||
+                                  inputSource == InputSourceMode.Auto && Application.isMobilePlatform;
+            if (!wantsGyroscope)
+            {
+                return false;
+            }
+
+            if (_gyroscopeInitialized)
+            {
+                return _gyroscopeAvailable;
+            }
+
+            _gyroscopeInitialized = true;
+            _gyroscopeAvailable = SystemInfo.supportsGyroscope;
+            if (!_gyroscopeAvailable)
+            {
+                return false;
+            }
+
+            _gyroscope = Input.gyro;
+            _gyroscope.enabled = true;
+            _gyroscopeAvailable = _gyroscope.enabled;
+            if (_gyroscopeAvailable)
+            {
+                _gyroscopeCalibrated = false;
+                _gyroscopeReadyTime = Time.realtimeSinceStartup + GyroscopeWarmupSeconds;
+            }
+
+            return _gyroscopeAvailable;
+        }
+
+        private Vector2 GetGyroscopeInput(out bool hasActiveInput)
+        {
+            if (_gyroscope == null || Time.realtimeSinceStartup < _gyroscopeReadyTime)
+            {
+                hasActiveInput = false;
+                return Vector2.zero;
+            }
+
+            ScreenOrientation orientation = GetEffectiveScreenOrientation();
+            Quaternion attitude = GetScreenAlignedAttitude(_gyroscope.attitude, orientation);
+            if (!_gyroscopeCalibrated || orientation != _gyroscopeOrientation)
+            {
+                _gyroscopeNeutralAttitude = attitude;
+                _gyroscopeOrientation = orientation;
+                _gyroscopeCalibrated = true;
+                hasActiveInput = false;
+                return Vector2.zero;
+            }
+
+            Quaternion relativeAttitude = Quaternion.Inverse(_gyroscopeNeutralAttitude) * attitude;
+            Vector3 relativeEuler = relativeAttitude.eulerAngles;
+            float yaw = NormalizeAngle(relativeEuler.y);
+            float pitch = NormalizeAngle(relativeEuler.x);
+
+            Vector2 input = new Vector2(
+                NormalizeGyroscopeAngle(yaw),
+                NormalizeGyroscopeAngle(-pitch));
+            if (invertGyroscopeX)
+            {
+                input.x = -input.x;
+            }
+
+            if (invertGyroscopeY)
+            {
+                input.y = -input.y;
+            }
+
+            hasActiveInput = true;
+            return ClampAxes(input);
+        }
+
+        private float NormalizeGyroscopeAngle(float angle)
+        {
+            float absoluteAngle = Mathf.Abs(angle);
+            if (absoluteAngle <= gyroscopeDeadZone)
+            {
+                return 0f;
+            }
+
+            float usableAngle = Mathf.Max(0.01f, gyroscopeResponseAngle - gyroscopeDeadZone);
+            float magnitude = Mathf.Clamp01((absoluteAngle - gyroscopeDeadZone) / usableAngle);
+            return Mathf.Sign(angle) * magnitude;
+        }
+
+        private static Quaternion GetScreenAlignedAttitude(Quaternion attitude, ScreenOrientation orientation)
+        {
+            Quaternion unityAttitude = new Quaternion(attitude.x, attitude.y, -attitude.z, -attitude.w);
+            if (Input.compensateSensors)
+            {
+                return unityAttitude;
+            }
+
+            float screenRotation;
+            switch (orientation)
+            {
+                case ScreenOrientation.LandscapeLeft:
+                    screenRotation = -90f;
+                    break;
+                case ScreenOrientation.LandscapeRight:
+                    screenRotation = 90f;
+                    break;
+                case ScreenOrientation.PortraitUpsideDown:
+                    screenRotation = 180f;
+                    break;
+                default:
+                    screenRotation = 0f;
+                    break;
+            }
+
+            return unityAttitude * Quaternion.Euler(0f, 0f, screenRotation);
+        }
+
+        private ScreenOrientation GetEffectiveScreenOrientation()
+        {
+            if (Screen.orientation != ScreenOrientation.AutoRotation)
+            {
+                return Screen.orientation;
+            }
+
+            switch (Input.deviceOrientation)
+            {
+                case DeviceOrientation.LandscapeLeft:
+                    return ScreenOrientation.LandscapeLeft;
+                case DeviceOrientation.LandscapeRight:
+                    return ScreenOrientation.LandscapeRight;
+                case DeviceOrientation.PortraitUpsideDown:
+                    return ScreenOrientation.PortraitUpsideDown;
+                case DeviceOrientation.Portrait:
+                    return ScreenOrientation.Portrait;
+                default:
+                    if (_gyroscopeCalibrated)
+                    {
+                        return _gyroscopeOrientation;
+                    }
+
+                    return Screen.width >= Screen.height
+                        ? ScreenOrientation.LandscapeLeft
+                        : ScreenOrientation.Portrait;
+            }
+        }
+
+        private static float NormalizeAngle(float angle)
+        {
+            return Mathf.DeltaAngle(0f, angle);
         }
 
         private void ApplyRootTilt()
@@ -359,6 +588,8 @@ namespace SgrUnity
             followSmoothTime = Mathf.Max(0f, followSmoothTime);
             returnSmoothTime = Mathf.Max(0f, returnSmoothTime);
             maxInputSpeed = Mathf.Max(0.01f, maxInputSpeed);
+            gyroscopeResponseAngle = Mathf.Clamp(gyroscopeResponseAngle, 2f, 45f);
+            gyroscopeDeadZone = Mathf.Clamp(gyroscopeDeadZone, 0f, gyroscopeResponseAngle - 0.01f);
             edgeScale = Mathf.Max(1f, edgeScale);
             maxLayerOffset.x = Mathf.Max(0f, maxLayerOffset.x);
             maxLayerOffset.y = Mathf.Max(0f, maxLayerOffset.y);
