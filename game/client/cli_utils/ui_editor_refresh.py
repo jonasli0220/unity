@@ -2,21 +2,53 @@
 """Editor-only helper for rebuilding the foreground Dragon UI in Play Mode."""
 
 import inspect
-
-import XSolution
-import xgui.ui_enum as ui_enum
-from game_manager import game_mgr
-from xgui.ui_cache_mgr import ui_cache_mgr
+import sys
 
 
 _CONTEXT_ATTR = "_dragon_editor_refresh_create_context"
 _WRAPPER_ATTR = "_dragon_editor_refresh_wrapper"
 _original_create = None
+XSolution = None
+ui_enum = None
+game_mgr = None
+ui_cache_mgr = None
+
+
+def _bind_runtime_if_ready():
+    """Bind game modules only after the normal startup path created UIManager."""
+    global XSolution, ui_enum, game_mgr, ui_cache_mgr
+
+    if game_mgr is not None and getattr(game_mgr, "ui_mgr", None) is not None:
+        return True
+
+    game_manager = sys.modules.get("game_manager")
+    candidate_game_mgr = getattr(game_manager, "game_mgr", None)
+    if candidate_game_mgr is None:
+        return False
+    if getattr(candidate_game_mgr, "ui_mgr", None) is None:
+        return False
+
+    # Importing game_manager before sgr_init.InitTimerMgr completes initializes
+    # sgr_data with an empty clock and leaves several modules partially loaded.
+    # Once UIManager exists, the regular sgr_main startup path has already passed
+    # that unsafe phase and these supporting imports are safe.
+    import XSolution as runtime_xsolution
+    import xgui.ui_enum as runtime_ui_enum
+    from xgui.ui_cache_mgr import ui_cache_mgr as runtime_ui_cache_mgr
+
+    XSolution = runtime_xsolution
+    ui_enum = runtime_ui_enum
+    game_mgr = candidate_game_mgr
+    ui_cache_mgr = runtime_ui_cache_mgr
+    return True
 
 
 def Install():
     """Capture subsequent UIManager.Create calls without changing gameplay APIs."""
     global _original_create
+
+    if not _bind_runtime_if_ready():
+        return False
 
     manager = getattr(game_mgr, "ui_mgr", None)
     if manager is None:

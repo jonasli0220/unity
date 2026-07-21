@@ -21,6 +21,14 @@ internal static class UIPlayModeRefreshButton
 
     private static readonly Type GameViewType =
         typeof(EditorWindow).Assembly.GetType("UnityEditor.GameView");
+    private static readonly Color EnabledButtonBackground =
+        new Color32(76, 76, 76, 255);
+    private static readonly Color EnabledButtonText =
+        new Color32(224, 224, 224, 255);
+    private static readonly Color DisabledButtonBackground =
+        new Color32(52, 52, 52, 255);
+    private static readonly Color DisabledButtonText =
+        new Color32(112, 112, 112, 255);
 
     private static double nextUpdateTime;
     private static bool pythonBridgeInstalled;
@@ -132,6 +140,15 @@ internal static class UIPlayModeRefreshButton
         button.style.paddingLeft = 7f;
         button.style.paddingRight = 7f;
         button.style.unityTextAlign = TextAnchor.MiddleCenter;
+        button.style.borderLeftWidth = 0f;
+        button.style.borderRightWidth = 0f;
+        button.style.borderTopWidth = 0f;
+        button.style.borderBottomWidth = 0f;
+        button.style.borderTopLeftRadius = 3f;
+        button.style.borderTopRightRadius = 3f;
+        button.style.borderBottomLeftRadius = 3f;
+        button.style.borderBottomRightRadius = 3f;
+        ApplyButtonVisual(button, false);
         button.clicked += () => RefreshCurrentUI(gameView, button);
         return button;
     }
@@ -162,6 +179,7 @@ internal static class UIPlayModeRefreshButton
 
             button.style.display = isPlaying ? DisplayStyle.Flex : DisplayStyle.None;
             button.SetEnabled(canRefresh);
+            ApplyButtonVisual(button, canRefresh);
 
             if (!pythonReady)
             {
@@ -180,6 +198,22 @@ internal static class UIPlayModeRefreshButton
                 button.tooltip = "保存当前 UI Prefab 后点击，重新加载运行中的最前层界面。";
             }
         }
+    }
+
+    private static void ApplyButtonVisual(Button button, bool isEnabled)
+    {
+        button.style.backgroundColor = isEnabled
+            ? EnabledButtonBackground
+            : DisabledButtonBackground;
+        button.style.color = isEnabled
+            ? EnabledButtonText
+            : DisabledButtonText;
+        button.style.unityFontStyleAndWeight = isEnabled
+            ? FontStyle.Bold
+            : FontStyle.Normal;
+        // Unity's toolbar stylesheet lowers disabled opacity by default. Keep
+        // explicit colors at full opacity so only the true disabled palette dims.
+        button.style.opacity = 1f;
     }
 
     private static void TryInstallPythonBridge()
