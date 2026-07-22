@@ -5,6 +5,10 @@ Shows cached static previews for UI prefabs directly in the Unity Project window
 ## Entry Points
 
 - `Tools/UI/UI Prefab Preview/Project Thumbnails Enabled`
+- `Tools/UI/UI Prefab Preview/Project Grid Max/96 (Unity Default)`
+- `Tools/UI/UI Prefab Preview/Project Grid Max/160`
+- `Tools/UI/UI Prefab Preview/Project Grid Max/192 (Recommended)`
+- `Tools/UI/UI Prefab Preview/Project Grid Max/256`
 - `Tools/UI/UI Prefab Preview/Refresh Selected Previews`
 - `Tools/UI/UI Prefab Preview/Clear Preview Cache`
 
@@ -16,6 +20,16 @@ Shows cached static previews for UI prefabs directly in the Unity Project window
 4. The Project window replaces the default blue prefab cube with the cached preview image when ready.
 
 The Project window GUI only draws existing cached textures. Prefab loading and rendering happen later in the editor update loop so normal browsing stays responsive.
+
+## Native Project Grid Size
+
+Unity 2021.3 normally caps the two-column Project Browser grid at 96. This tool raises only that internal maximum while preserving Unity's native Project window, including selection, search, drag/drop, rename, context menus, and the bottom size slider.
+
+The editor-local default maximum is 192. When the patch first raises the limit, a Project window already at or within one zoom step of Unity's old maximum expands to the new maximum immediately. Windows using a deliberately smaller grid keep their current size. The setting is stored in `EditorPrefs` and is reapplied after assembly reloads and to newly opened Project windows.
+
+Choose `96 (Unity Default)` to restore the native limit. The hook uses version-specific UnityEditor reflection and fails safely: if the expected internals are unavailable, Unity keeps its normal 96 limit and the Console receives one warning for that assembly reload.
+
+Project grid size and cached preview resolution are independent. A 192 grid can reuse the existing 256 or 512 preview cache without generating source assets under `Assets/`.
 
 Prefabs with no visible UI graphics in their default active state are shown as plain black thumbnails. They are treated as intentionally empty previews instead of failed previews, because many runtime-driven UI prefabs are intentionally empty before data binding.
 

@@ -26,6 +26,15 @@ This directory contains the Unity Editor MVP for showing cached UI prefab previe
 - If preview generation fails, show the normal Unity icon and avoid repeatedly retrying every repaint.
 - The overlay must be optional through an EditorPrefs-backed menu toggle.
 
+## Project Grid Size Rules
+
+- Preserve Unity's native Project Browser. Extend only its internal maximum grid size; do not replace selection, search, drag/drop, rename, or context-menu behavior with a custom asset browser.
+- The editor-local default maximum is 192, with explicit choices for 96 (Unity default), 160, 192, and 256.
+- Store the configured maximum in `EditorPrefs` and reapply it after assembly reloads and to newly opened Project windows.
+- When raising the maximum, automatically expand only Project windows already at or near the previous maximum. Preserve intentionally smaller grid sizes.
+- Treat the reflection hook as version-specific. If Unity internals cannot be resolved, keep the native 96 limit and emit at most one actionable warning per assembly reload.
+- Keep preview render resolution independent from Project grid size. Larger cells should reuse the existing 128/256/512 preview cache sizes.
+
 ## Rendering Rules
 
 - Render in a temporary preview scene.
