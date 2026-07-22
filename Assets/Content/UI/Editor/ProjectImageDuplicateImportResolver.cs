@@ -158,7 +158,9 @@ public class ProjectImageDuplicateImportResolver : AssetPostprocessor
             return;
         }
 
-        ProcessDuplicateImports(candidatePaths.ToArray());
+        ProcessDuplicateImports(
+            candidatePaths.ToArray(),
+            allowNumberedSuffixInference: true);
     }
 
     [MenuItem(ResolveSelectedFolderMenuPath, true)]
@@ -364,7 +366,10 @@ public class ProjectImageDuplicateImportResolver : AssetPostprocessor
         string[] movedAssets,
         string[] movedFromAssetPaths)
     {
-        if (isProcessing || importedAssets == null || importedAssets.Length == 0)
+        if (isProcessing
+            || !HasActiveExternalProjectDrop()
+            || importedAssets == null
+            || importedAssets.Length == 0)
         {
             return;
         }
@@ -403,10 +408,14 @@ public class ProjectImageDuplicateImportResolver : AssetPostprocessor
         PendingAssetPaths.CopyTo(candidatePaths);
         PendingAssetPaths.Clear();
 
-        ProcessDuplicateImports(candidatePaths);
+        ProcessDuplicateImports(
+            candidatePaths,
+            allowNumberedSuffixInference: false);
     }
 
-    private static void ProcessDuplicateImports(string[] candidatePaths)
+    private static void ProcessDuplicateImports(
+        string[] candidatePaths,
+        bool allowNumberedSuffixInference)
     {
         if (candidatePaths == null || candidatePaths.Length == 0)
         {
@@ -417,7 +426,9 @@ public class ProjectImageDuplicateImportResolver : AssetPostprocessor
         try
         {
             List<DuplicateImportResolution> resolutions =
-                ResolveDuplicateImports(candidatePaths);
+                ResolveDuplicateImports(
+                    candidatePaths,
+                    allowNumberedSuffixInference);
             bool replaceAll = false;
             int replaceCount = resolutions.Count;
             for (int i = 0; i < resolutions.Count; i++)
@@ -452,30 +463,36 @@ public class ProjectImageDuplicateImportResolver : AssetPostprocessor
     }
 
     private static List<DuplicateImportResolution> ResolveDuplicateImports(
-        string[] candidatePaths)
+        string[] candidatePaths,
+        bool allowNumberedSuffixInference)
     {
         List<DuplicateImportResolution> resolutions = new List<DuplicateImportResolution>();
         HashSet<string> resolvedDuplicatePaths =
             new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-        bool hasActiveExternalDrop = HasActiveExternalProjectDrop();
-
-        AddExactExternalDropResolutions(
-            candidatePaths,
-            resolvedDuplicatePaths,
-            resolutions);
-
-        // During an external Project-window drop, the source filenames are the
-        // authority. A deliberately named image such as name_3.png must remain
-        // a new asset even when name.png or name_2.png already exists.
-        // Numeric-suffix inference is reserved for imports where no external
-        // drag context was captured (for example, legacy/manual cleanup).
-        if (hasActiveExternalDrop)
+        if (!allowNumberedSuffixInference)
         {
+            // Automatic postprocessing is valid only for the external drop that
+            // recorded the source filenames and hashes. Asset imports caused by
+            // Unity startup, SVN updates, refreshes, or reimports must never be
+            // interpreted as numbered duplicate imports.
+            if (!HasActiveExternalProjectDrop())
+            {
+                pendingExternalProjectDrop = null;
+                return resolutions;
+            }
+
+            AddExactExternalDropResolutions(
+                candidatePaths,
+                resolvedDuplicatePaths,
+                resolutions);
             pendingExternalProjectDrop = null;
             return resolutions;
         }
 
+        // Numbered-suffix inference is intentionally limited to the explicit
+        // manual cleanup command. Names such as name_2.png can be legitimate
+        // SVN-managed sequence assets and are unsafe to infer automatically.
         for (int i = 0; i < candidatePaths.Length; i++)
         {
             string duplicateAssetPath = NormalizeAssetPath(candidatePaths[i]);
