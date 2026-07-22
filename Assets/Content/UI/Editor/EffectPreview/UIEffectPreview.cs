@@ -12,6 +12,7 @@ using UnityEngine.UIElements;
 using LegacyAnimation = UnityEngine.Animation;
 using SpineSkeletonAnimation = Spine.Unity.SkeletonAnimation;
 using UIGraphic = UnityEngine.UI.Graphic;
+using UIShaderParamHelper = UITest.UIShaderParamHelper_vx_common_shader;
 [InitializeOnLoad]
 public static class UIEffectPreviewController
 {
@@ -61,8 +62,8 @@ public static class UIEffectPreviewController
             Warn(
                 PrefabStageUtility.GetCurrentPrefabStage() != null
                     ? includeAnimator
-                        ? "当前 Prefab 中没有可预览的粒子、Spine、Animator 或 Animation。"
-                        : "当前 Prefab 中没有可预览的粒子或 Spine；如需预览 Animator，请勾选 UITools/动态预览包含animator。"
+                        ? "当前 Prefab 中没有可预览的粒子、Spine、Shader、Animator 或 Animation。"
+                        : "当前 Prefab 中没有可预览的粒子、Spine 或 Shader 动态；如需预览 Animator，请勾选 UITools/动态预览包含animator。"
                     : "请先选择包含动态效果的节点。",
                 "没有找到可预览的动态效果");
             return false;
@@ -87,7 +88,7 @@ public static class UIEffectPreviewController
 
         if (ActiveParticleSystems.Count == 0 && !extendedStarted)
         {
-            Warn("找到的动态效果没有可播放的动画或有效资源。", "动态效果没有可播放内容");
+            Warn("找到的动态效果没有可播放的动画、材质参数或有效资源。", "动态效果没有可播放内容");
             return false;
         }
 
@@ -314,7 +315,7 @@ public class UIEffectPreviewButton : Button
 
     public UIEffectPreviewButton()
     {
-        tooltip = "非运行模式预览当前 Prefab 的粒子和 Spine。需要包含 Animator/Animation 时，先勾选 UITools/动态预览包含animator。再次点击停止并复位。";
+        tooltip = "非运行模式预览当前 Prefab 的粒子、Spine 和 Shader 材质动态。需要包含 Animator/Animation 时，先勾选 UITools/动态预览包含animator。再次点击停止并复位。";
         clicked += OnClicked;
         RegisterCallback<MouseDownEvent>(OnMouseDown, TrickleDown.TrickleDown);
 
@@ -479,6 +480,7 @@ internal static class UIEffectPreviewTargetUtility
             || root.GetComponentInChildren<SkeletonGraphic>(true) != null
             || root.GetComponentInChildren<SpineSkeletonAnimation>(true) != null
             || root.GetComponentInChildren<SkeletonMecanim>(true) != null
+            || root.GetComponentInChildren<UIShaderParamHelper>(true) != null
             || (UIExtendedEffectPreview.IncludeAnimatorPreview
                 && (root.GetComponentInChildren<Animator>(true) != null
                     || root.GetComponentInChildren<LegacyAnimation>(true) != null));
@@ -490,13 +492,20 @@ internal static class UIExtendedEffectPreview
     private const string EmptyAnimationName = "__Empty__";
     private const string IncludeAnimatorMenuPath = "UITools/动态预览包含animator";
     private const string IncludeAnimatorPrefKey = "Dragon.UI.EffectPreview.IncludeAnimator";
+    private const string UnscaleTimeShaderProperty = "_UnscaleTime";
+    private const float ShaderTimeWrap = 314.15f;
 
     private static readonly List<SpinePreview> ActiveSpines = new List<SpinePreview>();
+    private static readonly List<ShaderMaterialPreview> ActiveShaderMaterials = new List<ShaderMaterialPreview>();
     private static readonly List<AnimatorPreview> ActiveAnimators = new List<AnimatorPreview>();
     private static readonly List<LegacyAnimationPreview> ActiveLegacyAnimations = new List<LegacyAnimationPreview>();
+    private static readonly int UnscaleTimeShaderId = Shader.PropertyToID(UnscaleTimeShaderProperty);
 
     private static PreviewStateSnapshot stateSnapshot;
     private static bool ownsAnimationMode;
+    private static bool ownsShaderTime;
+    private static Vector4 previousUnscaleTime;
+    private static float shaderPreviewTime;
 
     public static bool IncludeAnimatorPreview
     {
@@ -508,6 +517,7 @@ internal static class UIExtendedEffectPreview
         get
         {
             return ActiveSpines.Count > 0
+                || ActiveShaderMaterials.Count > 0
                 || ActiveAnimators.Count > 0
                 || ActiveLegacyAnimations.Count > 0
                 || stateSnapshot != null;
@@ -521,13 +531,21 @@ internal static class UIExtendedEffectPreview
             string animatorSummary = IncludeAnimatorPreview
                 ? $"Animator {ActiveAnimators.Count} / Animation {ActiveLegacyAnimations.Count}"
                 : "Animator 关闭";
-            return $"Spine {ActiveSpines.Count} / {animatorSummary}";
+            return $"Spine {ActiveSpines.Count} / Shader {ActiveShaderMaterials.Count} / {animatorSummary}";
         }
     }
 
     public static bool HasPreviewTargets()
     {
         return CollectTargets().GetPreviewableCount(IncludeAnimatorPreview) > 0;
+    }
+
+    private static bool HasActivePreviewPlayers()
+    {
+        return ActiveSpines.Count > 0
+            || ActiveShaderMaterials.Count > 0
+            || ActiveAnimators.Count > 0
+            || ActiveLegacyAnimations.Count > 0;
     }
 
     [MenuItem(IncludeAnimatorMenuPath, false, 3000)]
@@ -563,6 +581,7 @@ internal static class UIExtendedEffectPreview
         }
 
         stateSnapshot = PreviewStateSnapshot.Capture(targets.roots);
+        StartShaderMaterials(targets);
         StartSpines(targets);
 
         if (includeAnimator && (targets.animators.Count > 0 || targets.legacyAnimations.Count > 0))
@@ -577,11 +596,18 @@ internal static class UIExtendedEffectPreview
             }
         }
 
-        return IsPreviewing;
+        if (!HasActivePreviewPlayers())
+        {
+            StopPreview();
+            return false;
+        }
+
+        return true;
     }
 
     public static void Update(float deltaTime)
     {
+        UpdateShaderMaterials(deltaTime);
         UpdateUnityAnimations(deltaTime);
         UpdateSpines(deltaTime);
     }
@@ -605,6 +631,20 @@ internal static class UIExtendedEffectPreview
         }
 
         ActiveSpines.Clear();
+        for (int i = 0; i < ActiveShaderMaterials.Count; i++)
+        {
+            try
+            {
+                ActiveShaderMaterials[i].Reset();
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning("Effect preview could not reset Shader material component: " + ex.Message);
+            }
+        }
+
+        ActiveShaderMaterials.Clear();
+        StopShaderTime();
         ActiveAnimators.Clear();
         ActiveLegacyAnimations.Clear();
 
@@ -657,6 +697,36 @@ internal static class UIExtendedEffectPreview
         catch (Exception ex)
         {
             Debug.LogWarning("Effect preview skipped Spine component: " + ex.Message);
+        }
+    }
+
+    private static void StartShaderMaterials(Targets targets)
+    {
+        UIShaderParamHelper.SetUseVertexData(false);
+
+        for (int i = 0; i < targets.shaderHelpers.Count; i++)
+        {
+            TryStartShaderMaterial(new ShaderMaterialPreview(targets.shaderHelpers[i]));
+        }
+
+        if (ActiveShaderMaterials.Count > 0)
+        {
+            StartShaderTime();
+        }
+    }
+
+    private static void TryStartShaderMaterial(ShaderMaterialPreview preview)
+    {
+        try
+        {
+            if (preview.Start())
+            {
+                ActiveShaderMaterials.Add(preview);
+            }
+        }
+        catch (Exception ex)
+        {
+            Debug.LogWarning("Effect preview skipped Shader material component: " + ex.Message);
         }
     }
 
@@ -757,6 +827,47 @@ internal static class UIExtendedEffectPreview
         }
     }
 
+    private static void UpdateShaderMaterials(float deltaTime)
+    {
+        if (ActiveShaderMaterials.Count == 0)
+        {
+            return;
+        }
+
+        if (!ownsShaderTime)
+        {
+            StartShaderTime();
+        }
+
+        shaderPreviewTime += deltaTime;
+        SetShaderPreviewTime(shaderPreviewTime);
+
+        for (int i = ActiveShaderMaterials.Count - 1; i >= 0; i--)
+        {
+            ShaderMaterialPreview preview = ActiveShaderMaterials[i];
+            if (!preview.IsValid)
+            {
+                ActiveShaderMaterials.RemoveAt(i);
+                continue;
+            }
+
+            try
+            {
+                preview.Update();
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning("Effect preview stopped a Shader material component: " + ex.Message);
+                ActiveShaderMaterials.RemoveAt(i);
+            }
+        }
+
+        if (ActiveShaderMaterials.Count == 0)
+        {
+            StopShaderTime();
+        }
+    }
+
     private static void UpdateSpines(float deltaTime)
     {
         for (int i = ActiveSpines.Count - 1; i >= 0; i--)
@@ -778,6 +889,40 @@ internal static class UIExtendedEffectPreview
                 ActiveSpines.RemoveAt(i);
             }
         }
+    }
+
+    private static void StartShaderTime()
+    {
+        if (ownsShaderTime)
+        {
+            return;
+        }
+
+        previousUnscaleTime = Shader.GetGlobalVector(UnscaleTimeShaderProperty);
+        shaderPreviewTime = 0f;
+        ownsShaderTime = true;
+        SetShaderPreviewTime(shaderPreviewTime);
+    }
+
+    private static void StopShaderTime()
+    {
+        if (!ownsShaderTime)
+        {
+            return;
+        }
+
+        ownsShaderTime = false;
+        shaderPreviewTime = 0f;
+        Shader.SetGlobalVector(UnscaleTimeShaderId, previousUnscaleTime);
+        previousUnscaleTime = Vector4.zero;
+    }
+
+    private static void SetShaderPreviewTime(float time)
+    {
+        float wrappedTime = Mathf.Repeat(time, ShaderTimeWrap);
+        Shader.SetGlobalVector(
+            UnscaleTimeShaderId,
+            wrappedTime * new Vector4(1f / 20f, 1f, 2f, 3f));
     }
 
     private static void StopOwnedAnimationMode()
@@ -1038,6 +1183,7 @@ internal static class UIExtendedEffectPreview
         public readonly List<SkeletonGraphic> skeletonGraphics = new List<SkeletonGraphic>();
         public readonly List<SpineSkeletonAnimation> skeletonAnimations = new List<SpineSkeletonAnimation>();
         public readonly List<SkeletonMecanim> skeletonMecanims = new List<SkeletonMecanim>();
+        public readonly List<UIShaderParamHelper> shaderHelpers = new List<UIShaderParamHelper>();
         public readonly List<Animator> animators = new List<Animator>();
         public readonly List<LegacyAnimation> legacyAnimations = new List<LegacyAnimation>();
         private readonly HashSet<int> seen = new HashSet<int>();
@@ -1049,6 +1195,7 @@ internal static class UIExtendedEffectPreview
                 return skeletonGraphics.Count
                     + skeletonAnimations.Count
                     + skeletonMecanims.Count
+                    + shaderHelpers.Count
                     + animators.Count
                     + legacyAnimations.Count;
             }
@@ -1056,7 +1203,10 @@ internal static class UIExtendedEffectPreview
 
         public int GetPreviewableCount(bool includeAnimator)
         {
-            int count = skeletonGraphics.Count + skeletonAnimations.Count + skeletonMecanims.Count;
+            int count = skeletonGraphics.Count
+                + skeletonAnimations.Count
+                + skeletonMecanims.Count
+                + shaderHelpers.Count;
             if (includeAnimator)
             {
                 count += animators.Count + legacyAnimations.Count;
@@ -1078,6 +1228,7 @@ internal static class UIExtendedEffectPreview
             AddComponents(root.GetComponentsInChildren<SkeletonGraphic>(true), skeletonGraphics);
             AddComponents(root.GetComponentsInChildren<SpineSkeletonAnimation>(true), skeletonAnimations);
             AddComponents(root.GetComponentsInChildren<SkeletonMecanim>(true), skeletonMecanims);
+            AddComponents(root.GetComponentsInChildren<UIShaderParamHelper>(true), shaderHelpers);
             AddComponents(root.GetComponentsInChildren<Animator>(true), animators);
             AddComponents(root.GetComponentsInChildren<LegacyAnimation>(true), legacyAnimations);
         }
@@ -1101,6 +1252,114 @@ internal static class UIExtendedEffectPreview
 
                 output.Add(component);
             }
+        }
+    }
+
+    private sealed class ShaderMaterialPreview
+    {
+        private readonly UIShaderParamHelper helper;
+        private readonly UIGraphic graphic;
+        private readonly CanvasRenderer canvasRenderer;
+
+        public ShaderMaterialPreview(UIShaderParamHelper component)
+        {
+            helper = component;
+            if (component != null)
+            {
+                graphic = component.GetComponent<UIGraphic>();
+                canvasRenderer = component.GetComponent<CanvasRenderer>();
+            }
+        }
+
+        public bool IsValid
+        {
+            get { return UIEffectPreviewTargetUtility.IsPreviewable(helper) && helper.enabled; }
+        }
+
+        public bool Start()
+        {
+            if (!IsValid || graphic == null)
+            {
+                return false;
+            }
+
+            EnsurePreviewMaterial();
+            RefreshMaterialParams();
+            return HasVisibleMaterial();
+        }
+
+        public void Update()
+        {
+            RefreshMaterialParams();
+        }
+
+        public void Reset()
+        {
+            if (graphic == null)
+            {
+                return;
+            }
+
+            graphic.SetVerticesDirty();
+            graphic.SetMaterialDirty();
+        }
+
+        private void EnsurePreviewMaterial()
+        {
+            Material material = graphic != null ? graphic.material : null;
+            if (material != null && EditorUtility.IsPersistent(material))
+            {
+                helper.InitMaterial();
+            }
+        }
+
+        private bool HasVisibleMaterial()
+        {
+            if (graphic != null && graphic.material != null)
+            {
+                return true;
+            }
+
+            return canvasRenderer != null && canvasRenderer.GetMaterial() != null;
+        }
+
+        private void RefreshMaterialParams()
+        {
+            if (helper == null)
+            {
+                return;
+            }
+
+            Material graphicMaterial = graphic != null ? graphic.material : null;
+            ApplyMaterialParams(graphicMaterial);
+
+            Material renderingMaterial = graphic != null ? graphic.materialForRendering : null;
+            if (renderingMaterial != graphicMaterial)
+            {
+                ApplyMaterialParams(renderingMaterial);
+            }
+
+            Material rendererMaterial = canvasRenderer != null ? canvasRenderer.GetMaterial() : null;
+            if (rendererMaterial != graphicMaterial && rendererMaterial != renderingMaterial)
+            {
+                ApplyMaterialParams(rendererMaterial);
+            }
+
+            if (graphic != null)
+            {
+                graphic.SetVerticesDirty();
+                graphic.SetMaterialDirty();
+            }
+        }
+
+        private void ApplyMaterialParams(Material material)
+        {
+            if (material == null || EditorUtility.IsPersistent(material))
+            {
+                return;
+            }
+
+            helper.SetMaterialParam(material);
         }
     }
 
