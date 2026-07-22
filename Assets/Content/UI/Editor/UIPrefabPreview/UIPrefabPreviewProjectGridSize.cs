@@ -1,5 +1,7 @@
 using System;
+using System.Collections.Generic;
 using System.Reflection;
+using System.Runtime.InteropServices;
 using UnityEditor;
 using UnityEngine;
 
@@ -15,10 +17,12 @@ public static class UIPrefabPreviewProjectGridSize
     private const int MinIconGridSize = 32;
     private const int WheelZoomLevelCount = 8;
     private const int WheelZoomRounding = 8;
+    private const int VirtualKeyControl = 0x11;
+    private const int VirtualKeyLeftMouseButton = 0x01;
+    private const int AsyncKeyPressedMask = 0x8000;
     private const double PatchIntervalSeconds = 0.5d;
 
     private const BindingFlags InstanceMemberFlags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
-    private const BindingFlags StaticMemberFlags = BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic;
 
     private static readonly Type ProjectBrowserType = typeof(EditorWindow).Assembly.GetType("UnityEditor.ProjectBrowser");
     private static readonly Type ObjectListAreaType = typeof(EditorWindow).Assembly.GetType("UnityEditor.ObjectListArea");
@@ -28,9 +32,6 @@ public static class UIPrefabPreviewProjectGridSize
     private static readonly FieldInfo MaxGridSizeField = ObjectListAreaType == null
         ? null
         : ObjectListAreaType.GetField("m_MaxGridSize", InstanceMemberFlags);
-    private static readonly FieldInfo TotalRectField = ObjectListAreaType == null
-        ? null
-        : ObjectListAreaType.GetField("m_TotalRect", InstanceMemberFlags);
     private static readonly PropertyInfo GridSizeProperty = ObjectListAreaType == null
         ? null
         : ObjectListAreaType.GetProperty("gridSize", InstanceMemberFlags);
@@ -40,24 +41,27 @@ public static class UIPrefabPreviewProjectGridSize
     private static readonly FieldInfo LastFoldersGridSizeField = ProjectBrowserType == null
         ? null
         : ProjectBrowserType.GetField("m_LastFoldersGridSize", InstanceMemberFlags);
-    private static readonly FieldInfo GlobalEventHandlerField = typeof(EditorApplication).GetField(
-        "globalEventHandler",
-        StaticMemberFlags);
+
+    private static readonly Dictionary<int, int> ObservedGridSizes = new Dictionary<int, int>();
 
     private static double nextPatchTime;
     private static bool warnedUnavailable;
-    private static bool warnedWheelHookUnavailable;
-    private static bool wheelHookInstalled;
-    private static Delegate wheelEventCallback;
+    private static bool warnedWheelSnapUnavailable;
+    private static bool loggedWheelSnapSuccess;
+    private static int wheelSnapCount;
     private static int lastProjectBrowserCount;
     private static int lastObservedGridSize = -1;
     private static int lastObservedMaximum = -1;
 
     static UIPrefabPreviewProjectGridSize()
     {
-        TryInstallWheelZoomHook();
         EditorApplication.update += OnEditorUpdate;
         EditorApplication.delayCall += ApplyConfiguredMaximumToAllProjectBrowsers;
+
+        if (!WheelReflectionIsAvailable)
+        {
+            WarnWheelSnapUnavailableOnce(null);
+        }
     }
 
     [MenuItem(MenuRoot + "96 (Unity Default)", false, 140)]
@@ -141,10 +145,7 @@ public static class UIPrefabPreviewProjectGridSize
     {
         get
         {
-            return ReflectionIsAvailable
-                && TotalRectField != null
-                && GlobalEventHandlerField != null
-                && typeof(Delegate).IsAssignableFrom(GlobalEventHandlerField.FieldType);
+            return ReflectionIsAvailable;
         }
     }
 
@@ -166,113 +167,127 @@ public static class UIPrefabPreviewProjectGridSize
                 + currentGrid
                 + ", active maximum: "
                 + currentMaximum
-                + ". Wheel hook: "
-                + (wheelHookInstalled ? "active" : "native fallback")
+                + ". Wheel snaps completed since reload: "
+                + wheelSnapCount
                 + ". Ctrl/Cmd + wheel levels: "
                 + FormatWheelZoomLevels(maxGridSize)
                 + ".");
         }
     }
 
-    private static void TryInstallWheelZoomHook()
+    private static void PollProjectGridChanges()
     {
         if (!WheelReflectionIsAvailable)
         {
-            WarnWheelHookUnavailableOnce(null);
             return;
+        }
+
+        var controlHeld = false;
+        var leftMouseHeld = false;
+        if (!TryGetWindowsInputState(out controlHeld, out leftMouseHeld))
+        {
+            controlHeld = false;
         }
 
         try
         {
-            var callbackMethod = typeof(UIPrefabPreviewProjectGridSize).GetMethod(
-                nameof(OnGlobalEditorEvent),
-                StaticMemberFlags);
-            if (callbackMethod == null)
+            var projectBrowsers = Resources.FindObjectsOfTypeAll(ProjectBrowserType);
+            foreach (var projectBrowserObject in projectBrowsers)
             {
-                WarnWheelHookUnavailableOnce(null);
-                return;
-            }
+                var projectBrowser = projectBrowserObject as EditorWindow;
+                var listArea = projectBrowser == null ? null : ListAreaField.GetValue(projectBrowser);
+                if (listArea == null)
+                {
+                    continue;
+                }
 
-            wheelEventCallback = Delegate.CreateDelegate(GlobalEventHandlerField.FieldType, callbackMethod);
-            var existingCallbacks = GlobalEventHandlerField.GetValue(null) as Delegate;
-            GlobalEventHandlerField.SetValue(null, Delegate.Combine(existingCallbacks, wheelEventCallback));
-            wheelHookInstalled = true;
+                var currentGridSize = (int)GridSizeProperty.GetValue(listArea, null);
+                var instanceId = projectBrowser.GetInstanceID();
+                int previousGridSize;
+                if (!ObservedGridSizes.TryGetValue(instanceId, out previousGridSize))
+                {
+                    ObservedGridSizes[instanceId] = currentGridSize;
+                    continue;
+                }
+
+                if (currentGridSize == previousGridSize)
+                {
+                    continue;
+                }
+
+                var finalGridSize = currentGridSize;
+                if (controlHeld && !leftMouseHeld)
+                {
+                    var activeMaximum = (int)MaxGridSizeField.GetValue(listArea);
+                    var nextGridSize = FindPostNativeWheelGridSize(
+                        currentGridSize,
+                        activeMaximum,
+                        currentGridSize > previousGridSize);
+
+                    if (nextGridSize != currentGridSize)
+                    {
+                        GridSizeProperty.SetValue(listArea, nextGridSize, null);
+                        SetBrowserGridPersistence(projectBrowser, nextGridSize);
+                        RecordObservedValues(listArea);
+                        wheelSnapCount++;
+                        finalGridSize = nextGridSize;
+                        projectBrowser.Repaint();
+
+                        if (!loggedWheelSnapSuccess)
+                        {
+                            loggedWheelSnapSuccess = true;
+                            Debug.Log(
+                                "[UI Prefab Preview] Eight-level Project wheel snap confirmed: "
+                                + currentGridSize
+                                + " -> "
+                                + nextGridSize
+                                + ".");
+                        }
+                    }
+                }
+
+                ObservedGridSizes[instanceId] = finalGridSize;
+            }
         }
         catch (Exception exception)
         {
-            WarnWheelHookUnavailableOnce(exception);
+            WarnWheelSnapUnavailableOnce(exception);
         }
     }
 
-    private static void OnGlobalEditorEvent()
+    private static bool TryGetWindowsInputState(out bool controlHeld, out bool leftMouseHeld)
     {
-        if (!wheelHookInstalled)
+        controlHeld = false;
+        leftMouseHeld = false;
+        if (Application.platform != RuntimePlatform.WindowsEditor)
         {
-            return;
-        }
-
-        var currentEvent = Event.current;
-        if (currentEvent == null
-            || currentEvent.type != EventType.ScrollWheel
-            || !EditorGUI.actionKey
-            || Mathf.Approximately(currentEvent.delta.y, 0f))
-        {
-            return;
-        }
-
-        var projectBrowser = EditorWindow.mouseOverWindow;
-        if (projectBrowser == null || !ProjectBrowserType.IsInstanceOfType(projectBrowser))
-        {
-            return;
+            return false;
         }
 
         try
         {
-            var listArea = ListAreaField.GetValue(projectBrowser);
-            if (listArea == null)
-            {
-                return;
-            }
-
-            var listAreaRect = (Rect)TotalRectField.GetValue(listArea);
-            if (!listAreaRect.Contains(currentEvent.mousePosition))
-            {
-                return;
-            }
-
-            var currentGridSize = (int)GridSizeProperty.GetValue(listArea, null);
-            var activeMaximum = (int)MaxGridSizeField.GetValue(listArea);
-            var nextGridSize = FindNextWheelGridSize(
-                currentGridSize,
-                activeMaximum,
-                currentEvent.delta.y < 0f);
-
-            if (nextGridSize != currentGridSize)
-            {
-                GridSizeProperty.SetValue(listArea, nextGridSize, null);
-                SetBrowserGridPersistence(projectBrowser, nextGridSize);
-                RecordObservedValues(listArea);
-                projectBrowser.Repaint();
-            }
-
-            currentEvent.Use();
-            GUI.changed = true;
+            controlHeld = (GetAsyncKeyState(VirtualKeyControl) & AsyncKeyPressedMask) != 0;
+            leftMouseHeld = (GetAsyncKeyState(VirtualKeyLeftMouseButton) & AsyncKeyPressedMask) != 0;
+            return true;
         }
         catch (Exception exception)
         {
-            wheelHookInstalled = false;
-            WarnWheelHookUnavailableOnce(exception);
+            WarnWheelSnapUnavailableOnce(exception);
+            return false;
         }
     }
 
-    private static int FindNextWheelGridSize(int currentGridSize, int maxGridSize, bool zoomIn)
+    [DllImport("user32.dll")]
+    private static extern short GetAsyncKeyState(int virtualKey);
+
+    private static int FindPostNativeWheelGridSize(int currentGridSize, int maxGridSize, bool zoomIn)
     {
         var levels = BuildWheelZoomLevels(maxGridSize);
         if (zoomIn)
         {
             foreach (var level in levels)
             {
-                if (level > currentGridSize)
+                if (level >= currentGridSize)
                 {
                     return level;
                 }
@@ -283,7 +298,7 @@ public static class UIPrefabPreviewProjectGridSize
 
         for (var index = levels.Length - 1; index >= 0; index--)
         {
-            if (levels[index] < currentGridSize)
+            if (levels[index] <= currentGridSize)
             {
                 return levels[index];
             }
@@ -320,6 +335,8 @@ public static class UIPrefabPreviewProjectGridSize
 
     private static void OnEditorUpdate()
     {
+        PollProjectGridChanges();
+
         if (EditorApplication.timeSinceStartup < nextPatchTime)
         {
             return;
@@ -398,14 +415,24 @@ public static class UIPrefabPreviewProjectGridSize
 
         if (nextGridSize == currentGridSize)
         {
+            RememberGridSize(projectBrowser, currentGridSize);
             RecordObservedValues(listArea);
             return changed;
         }
 
         GridSizeProperty.SetValue(listArea, nextGridSize, null);
         SetBrowserGridPersistence(projectBrowser, nextGridSize);
+        RememberGridSize(projectBrowser, nextGridSize);
         RecordObservedValues(listArea);
         return true;
+    }
+
+    private static void RememberGridSize(UnityEngine.Object projectBrowser, int gridSize)
+    {
+        if (projectBrowser != null)
+        {
+            ObservedGridSizes[projectBrowser.GetInstanceID()] = gridSize;
+        }
     }
 
     private static void RecordObservedValues(object listArea)
@@ -442,17 +469,17 @@ public static class UIPrefabPreviewProjectGridSize
             + details);
     }
 
-    private static void WarnWheelHookUnavailableOnce(Exception exception)
+    private static void WarnWheelSnapUnavailableOnce(Exception exception)
     {
-        if (warnedWheelHookUnavailable)
+        if (warnedWheelSnapUnavailable)
         {
             return;
         }
 
-        warnedWheelHookUnavailable = true;
+        warnedWheelSnapUnavailable = true;
         var details = exception == null ? string.Empty : " " + exception.GetType().Name + ": " + exception.Message;
         Debug.LogWarning(
-            "[UI Prefab Preview] Could not accelerate Ctrl/Cmd + wheel zoom in this Unity version. "
+            "[UI Prefab Preview] Could not apply post-native Ctrl/Cmd + wheel snapping in this Unity version. "
             + "The native seven-pixel wheel step remains active; the bottom grid-size slider is unaffected."
             + details);
     }
