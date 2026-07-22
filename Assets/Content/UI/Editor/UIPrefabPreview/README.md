@@ -27,6 +27,8 @@ Unity 2021.3 normally caps the two-column Project Browser grid at 96. This tool 
 
 The editor-local default maximum is 192. When the patch first raises the limit, a Project window already at or within one zoom step of Unity's old maximum expands to the new maximum immediately. Windows using a deliberately smaller grid keep their current size. The setting is stored in `EditorPrefs` and is reapplied after assembly reloads and to newly opened Project windows.
 
+`Ctrl/Cmd + mouse wheel` over the right-hand asset list uses eight practical zoom levels instead of Unity's native seven-pixel increments. With the recommended 192 maximum, the levels are `16 → 32 → 56 → 88 → 112 → 136 → 168 → 192`, so list view reaches the largest thumbnails in seven wheel notches. The bottom size slider remains continuous for fine adjustment; normal scrolling and wheel input over the folder tree are unchanged. If the slider is between two levels, the next wheel notch moves to the next level in the requested direction.
+
 Choose `96 (Unity Default)` to restore the native limit. The hook uses version-specific UnityEditor reflection and fails safely: if the expected internals are unavailable, Unity keeps its normal 96 limit and the Console receives one warning for that assembly reload.
 
 Project grid size and cached preview resolution are independent. A 192 grid can reuse the existing 256 or 512 preview cache without generating source assets under `Assets/`.

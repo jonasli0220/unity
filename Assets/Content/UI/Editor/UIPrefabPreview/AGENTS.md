@@ -32,7 +32,10 @@ This directory contains the Unity Editor MVP for showing cached UI prefab previe
 - The editor-local default maximum is 192, with explicit choices for 96 (Unity default), 160, 192, and 256.
 - Store the configured maximum in `EditorPrefs` and reapply it after assembly reloads and to newly opened Project windows.
 - When raising the maximum, automatically expand only Project windows already at or near the previous maximum. Preserve intentionally smaller grid sizes.
+- Accelerate `Ctrl/Cmd + mouse wheel` zoom in the native Project content area to about eight discrete levels from list view to the configured maximum.
+- Keep the bottom grid-size slider continuous. Do not consume ordinary scrolling, wheel input over the folder tree, or wheel input outside the native asset list area.
 - Treat the reflection hook as version-specific. If Unity internals cannot be resolved, keep the native 96 limit and emit at most one actionable warning per assembly reload.
+- If the wheel interception hook cannot be installed, preserve Unity's native seven-pixel wheel step and emit at most one warning per assembly reload.
 - Keep preview render resolution independent from Project grid size. Larger cells should reuse the existing 128/256/512 preview cache sizes.
 
 ## Rendering Rules
