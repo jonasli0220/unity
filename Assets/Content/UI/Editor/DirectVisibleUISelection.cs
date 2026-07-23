@@ -11,6 +11,7 @@ internal static class DirectVisibleUISelection
     private const string MenuPath = "UITools/点击直选可见UI图层";
     private const string EnabledEditorPrefKey = "SgrProject.UI.DirectVisibleUISelection.Enabled";
     private const float DragThreshold = 6f;
+    private const float SceneEdgeInteractionMargin = 8f;
     private const string InlineTextControlName = "DirectVisibleUISelection.InlineTMPText";
     private const float InlineTextMinWidth = 120f;
     private const float InlineTextMinHeight = 28f;
@@ -30,8 +31,10 @@ internal static class DirectVisibleUISelection
     private static Vector2 mouseDownPosition;
     private static Vector2 layoutPreviewMousePosition;
     private static GameObject pressedObject;
+    private static SceneView pressedSceneView;
     private static GameObject hoveredObject;
     private static RectTransform draggedRectTransform;
+    private static SceneView directDragSceneView;
     private static Plane directDragPlane;
     private static Vector3 directDragStartPointerWorld;
     private static Vector3 directDragStartObjectWorld;
@@ -42,6 +45,7 @@ internal static class DirectVisibleUISelection
     private static string inlineEditingOriginalValue;
     private static int inlineTextUndoGroup = -1;
     private static bool shouldFocusInlineTextEditor;
+    private static bool shouldCancelTransientInteraction;
     private static GUIStyle inlineTextAreaStyle;
 
     static DirectVisibleUISelection()
@@ -64,6 +68,8 @@ internal static class DirectVisibleUISelection
         Selection.selectionChanged += OnSelectionChanged;
         SceneVisibilityManager.visibilityChanged -= OnSceneVisibilityChanged;
         SceneVisibilityManager.visibilityChanged += OnSceneVisibilityChanged;
+        EditorApplication.update -= MonitorTransientInteractionOwner;
+        EditorApplication.update += MonitorTransientInteractionOwner;
     }
 
     [MenuItem(MenuPath)]
@@ -94,6 +100,8 @@ internal static class DirectVisibleUISelection
             return;
         }
 
+        ApplyRequestedTransientInteractionCancellation();
+
         if (HandleInlineTextEditingBeforeSceneGui(sceneView, currentEvent))
         {
             return;
@@ -113,12 +121,18 @@ internal static class DirectVisibleUISelection
         switch (currentEvent.type)
         {
             case EventType.MouseDown:
+                if (!IsInsideSceneInteractionArea(sceneView, currentEvent.mousePosition))
+                {
+                    ResetClickState();
+                    break;
+                }
+
                 if (TryBeginInlineTextEdit(sceneView, currentEvent))
                 {
                     break;
                 }
 
-                BeginClick(currentEvent);
+                BeginClick(sceneView, currentEvent);
                 break;
 
             case EventType.MouseDrag:
@@ -192,6 +206,8 @@ internal static class DirectVisibleUISelection
                 break;
 
             case EventType.MouseLeaveWindow:
+                CancelDirectDrag();
+                ResetClickState();
                 ClearHoverPreview();
                 break;
         }
@@ -637,7 +653,7 @@ internal static class DirectVisibleUISelection
             sceneView);
     }
 
-    private static void BeginClick(Event currentEvent)
+    private static void BeginClick(SceneView sceneView, Event currentEvent)
     {
         ResetClickState();
 
@@ -663,6 +679,7 @@ internal static class DirectVisibleUISelection
         isClickPending = true;
         mouseDownPosition = currentEvent.mousePosition;
         pressedObject = pickedObject;
+        pressedSceneView = sceneView;
     }
 
     private static void UpdateDragState(
@@ -670,13 +687,27 @@ internal static class DirectVisibleUISelection
         Event currentEvent,
         int currentDirectDragControlId)
     {
-        if (!isClickPending)
+        if (!isClickPending || pressedSceneView != sceneView)
         {
+            return;
+        }
+
+        if (!IsInsideSceneInteractionArea(sceneView, currentEvent.mousePosition))
+        {
+            CancelDirectDrag();
+            ResetClickState();
             return;
         }
 
         if (isDirectDragging)
         {
+            if (GUIUtility.hotControl != directDragControlId)
+            {
+                CancelDirectDrag();
+                ResetClickState();
+                return;
+            }
+
             UpdateDirectDrag(sceneView, currentEvent.mousePosition);
             currentEvent.Use();
             return;
@@ -706,6 +737,8 @@ internal static class DirectVisibleUISelection
 
         if (pressedObject == null ||
             rectTransform == null ||
+            pressedSceneView != sceneView ||
+            !IsInsideSceneInteractionArea(sceneView, currentEvent.mousePosition) ||
             (pressedObject == Selection.activeGameObject && !useLayoutPreview) ||
             Tools.current == Tool.View ||
             IsAnotherSceneControlActive(currentDirectDragControlId))
@@ -739,6 +772,7 @@ internal static class DirectVisibleUISelection
         }
 
         draggedRectTransform = rectTransform;
+        directDragSceneView = sceneView;
         isLayoutPreviewDrag = useLayoutPreview;
         layoutPreviewMousePosition = currentEvent.mousePosition;
         directDragPlane = dragPlane;
@@ -806,6 +840,21 @@ internal static class DirectVisibleUISelection
             return false;
         }
 
+        bool ownsMouseControl = GUIUtility.hotControl == directDragControlId;
+        if (!ownsMouseControl ||
+            directDragSceneView != sceneView ||
+            !IsInsideSceneInteractionArea(sceneView, currentEvent.mousePosition))
+        {
+            CancelDirectDrag();
+            ResetClickState();
+            if (ownsMouseControl)
+            {
+                currentEvent.Use();
+            }
+
+            return true;
+        }
+
         UpdateDirectDrag(sceneView, currentEvent.mousePosition);
         GameObject draggedObject =
             draggedRectTransform != null ? draggedRectTransform.gameObject : null;
@@ -852,8 +901,79 @@ internal static class DirectVisibleUISelection
         isDirectDragging = false;
         isLayoutPreviewDrag = false;
         draggedRectTransform = null;
+        directDragSceneView = null;
         directDragControlId = 0;
         directDragUndoGroup = -1;
+    }
+
+    private static bool IsInsideSceneInteractionArea(
+        SceneView sceneView,
+        Vector2 mousePosition)
+    {
+        if (sceneView == null)
+        {
+            return false;
+        }
+
+        Rect contentRect = sceneView.rootVisualElement.contentRect;
+        float width = contentRect.width > 0f
+            ? contentRect.width
+            : sceneView.position.width;
+        float height = contentRect.height > 0f
+            ? contentRect.height
+            : sceneView.position.height;
+        if (width <= SceneEdgeInteractionMargin * 2f ||
+            height <= SceneEdgeInteractionMargin * 2f)
+        {
+            return false;
+        }
+
+        Rect interactionArea = new Rect(
+            SceneEdgeInteractionMargin,
+            SceneEdgeInteractionMargin,
+            width - SceneEdgeInteractionMargin * 2f,
+            height - SceneEdgeInteractionMargin * 2f);
+        return interactionArea.Contains(mousePosition);
+    }
+
+    private static void MonitorTransientInteractionOwner()
+    {
+        if (shouldCancelTransientInteraction ||
+            (!isClickPending && !isDirectDragging))
+        {
+            return;
+        }
+
+        // Docked windows receive the drag only after SceneView releases its
+        // transient mouse ownership. Request the release inside the next GUI event.
+        SceneView owner = isDirectDragging ? directDragSceneView : pressedSceneView;
+        if (owner != null && EditorWindow.mouseOverWindow == owner)
+        {
+            return;
+        }
+
+        shouldCancelTransientInteraction = true;
+        if (owner != null)
+        {
+            owner.Repaint();
+        }
+        else
+        {
+            SceneView.RepaintAll();
+        }
+    }
+
+    private static void ApplyRequestedTransientInteractionCancellation()
+    {
+        if (!shouldCancelTransientInteraction)
+        {
+            return;
+        }
+
+        shouldCancelTransientInteraction = false;
+        CancelDirectDrag();
+        ResetClickState();
+        ClearHoverPreview();
     }
 
     private static bool IsDrivenByParentLayout(RectTransform rectTransform)
@@ -1424,5 +1544,6 @@ internal static class DirectVisibleUISelection
         isClickPending = false;
         isDragging = false;
         pressedObject = null;
+        pressedSceneView = null;
     }
 }
