@@ -180,8 +180,6 @@ internal static class DirectVisibleUISelection
             return;
         }
 
-        sceneView.wantsMouseMove = true;
-
         if (inlineEditingText != null)
         {
             DrawInlineTextEditor(sceneView);
