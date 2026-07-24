@@ -15,7 +15,10 @@ internal static class ProjectFolderHistory
     private const string ForwardButtonName = "dragon-project-folder-history-forward";
     private const string ShortcutPrefix = "Dragon/Project Folder History/";
     private const int MaxHistoryCount = 64;
-    private const float ToolbarRightOffset = 646f;
+    // Anchor beside the native search field. Unity UI Toolkit uses logical
+    // pixels here, so this offset stays stable when Windows display scaling
+    // changes the screenshot's physical pixel size.
+    private const float ToolbarRightOffset = 440f;
     private const float ToolbarWidth = 58f;
     private const float ButtonWidth = 28f;
     private const float ButtonHeight = 20f;
