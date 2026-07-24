@@ -9,7 +9,7 @@ using UnityEngine.UIElements;
 [InitializeOnLoad]
 internal static class ProjectFolderHistory
 {
-    private const string SessionStateKey = "Dragon.ProjectFolderHistory.State.v1";
+    private const string SessionStateKey = "Dragon.ProjectFolderHistory.State.v2";
     private const string ToolbarName = "dragon-project-folder-history-toolbar";
     private const string BackButtonName = "dragon-project-folder-history-back";
     private const string ForwardButtonName = "dragon-project-folder-history-forward";
@@ -25,11 +25,14 @@ internal static class ProjectFolderHistory
     private const float MinimumToolbarWindowWidth = 860f;
     private const double UpdateIntervalSeconds = 0.1d;
     private const double NavigationTimeoutSeconds = 1d;
+    private const double SearchExitStabilizationSeconds = 0.35d;
 
     private const BindingFlags InstanceMemberFlags =
         BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
     private static readonly Type ProjectBrowserType =
         typeof(EditorWindow).Assembly.GetType("UnityEditor.ProjectBrowser");
+    private static readonly Type SearchFilterType =
+        typeof(EditorWindow).Assembly.GetType("UnityEditor.SearchFilter");
     private static readonly MethodInfo GetActiveFolderPathMethod = ProjectBrowserType == null
         ? null
         : ProjectBrowserType.GetMethod(
@@ -45,6 +48,20 @@ internal static class ProjectFolderHistory
             InstanceMemberFlags,
             null,
             new[] { typeof(int), typeof(bool) },
+            null);
+    private static readonly FieldInfo SearchFilterField = ProjectBrowserType == null
+        ? null
+        : ProjectBrowserType.GetField("m_SearchFilter", InstanceMemberFlags);
+    private static readonly FieldInfo SearchFieldTextField = ProjectBrowserType == null
+        ? null
+        : ProjectBrowserType.GetField("m_SearchFieldText", InstanceMemberFlags);
+    private static readonly MethodInfo IsSearchingMethod = SearchFilterType == null
+        ? null
+        : SearchFilterType.GetMethod(
+            "IsSearching",
+            InstanceMemberFlags,
+            null,
+            Type.EmptyTypes,
             null);
     private static readonly Dictionary<int, HistoryState> HistoryByBrowserId =
         new Dictionary<int, HistoryState>();
@@ -143,8 +160,20 @@ internal static class ProjectFolderHistory
 
     private static void ObserveActiveFolder(EditorWindow browser, HistoryState state)
     {
+        if (IsProjectBrowserSearching(browser))
+        {
+            state.searchWasActive = true;
+            state.pendingSearchExitPath = null;
+            return;
+        }
+
         string activePath = GetActiveFolderPath(browser);
         if (!IsValidFolder(activePath))
+        {
+            return;
+        }
+
+        if (ShouldWaitForSearchExitPath(state, activePath))
         {
             return;
         }
@@ -155,6 +184,7 @@ internal static class ProjectFolderHistory
             state.index = 0;
             state.lastObservedPath = activePath;
             state.pendingTargetPath = null;
+            state.pendingPreviousIndex = -1;
             SaveSessionState();
             return;
         }
@@ -452,6 +482,78 @@ internal static class ProjectFolderHistory
         }
     }
 
+    private static bool IsProjectBrowserSearching(EditorWindow browser)
+    {
+        if (browser == null)
+        {
+            return false;
+        }
+
+        try
+        {
+            if (SearchFilterField != null && IsSearchingMethod != null)
+            {
+                object searchFilter = SearchFilterField.GetValue(browser);
+                if (searchFilter != null
+                    && (bool)IsSearchingMethod.Invoke(searchFilter, null))
+                {
+                    return true;
+                }
+            }
+
+            if (SearchFieldTextField != null)
+            {
+                string searchText = SearchFieldTextField.GetValue(browser) as string;
+                return !string.IsNullOrEmpty(searchText);
+            }
+        }
+        catch (Exception)
+        {
+            // Search detection is an optional compatibility layer. If Unity
+            // changes these internals, preserve ordinary folder history.
+        }
+
+        return false;
+    }
+
+    private static bool ShouldWaitForSearchExitPath(
+        HistoryState state,
+        string activePath)
+    {
+        double now = EditorApplication.timeSinceStartup;
+        if (state.searchWasActive)
+        {
+            state.searchWasActive = false;
+            state.pendingSearchExitPath = null;
+
+            if (PathsEqual(activePath, "Assets")
+                && !PathsEqual(activePath, state.lastObservedPath))
+            {
+                state.pendingSearchExitPath = activePath;
+                state.pendingSearchExitDeadline =
+                    now + SearchExitStabilizationSeconds;
+                return true;
+            }
+        }
+        else if (!string.IsNullOrEmpty(state.pendingSearchExitPath))
+        {
+            if (!PathsEqual(activePath, state.pendingSearchExitPath))
+            {
+                state.pendingSearchExitPath = null;
+            }
+            else if (now < state.pendingSearchExitDeadline)
+            {
+                return true;
+            }
+            else
+            {
+                state.pendingSearchExitPath = null;
+            }
+        }
+
+        return false;
+    }
+
     private static bool IsProjectBrowser(EditorWindow window)
     {
         return window != null
@@ -604,5 +706,8 @@ internal static class ProjectFolderHistory
         [NonSerialized] public string pendingTargetPath;
         [NonSerialized] public double pendingDeadline;
         [NonSerialized] public int pendingPreviousIndex = -1;
+        [NonSerialized] public bool searchWasActive;
+        [NonSerialized] public string pendingSearchExitPath;
+        [NonSerialized] public double pendingSearchExitDeadline;
     }
 }

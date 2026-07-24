@@ -12,6 +12,8 @@
 - Keep history isolated per Project window.
 - Record only valid folder paths and consecutive path changes. Navigating through history must not create duplicate history entries.
 - Opening a new folder after going back must discard the old forward branch, matching file-browser behavior.
+- Treat Project search/filter state as transient. Do not record folder paths reported while a search is active.
+- When a folder is opened from search results, record the final destination directly after the pre-search folder; suppress Unity's temporary `Assets` root during the search-exit transition.
 - Skip deleted or otherwise invalid folders when resolving the next back/forward destination.
 - Reflection is version-specific. If Unity internals cannot be resolved, fail safely, leave the native Project window usable, and emit at most one actionable warning per assembly reload.
 
