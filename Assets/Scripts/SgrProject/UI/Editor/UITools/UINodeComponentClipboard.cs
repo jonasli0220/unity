@@ -9,8 +9,10 @@ using UnityEngine;
 /// </summary>
 internal static class UINodeComponentClipboard
 {
-    private const string CopyMenuPath = "CONTEXT/Transform/Copy/节点全部组件（含数值）";
-    private const string PasteMenuPath = "CONTEXT/Transform/Paste/节点全部组件（含数值）";
+    private const string CopyMenuPath = "CONTEXT/Transform/Copy/节点全部组件";
+    private const string PasteMenuPath = "CONTEXT/Transform/Paste/节点全部组件";
+    private const string PasteWithoutRectTransformMenuPath =
+        "CONTEXT/Transform/Paste/节点全部组件（不含 Rect Transform）";
 
     private sealed class ComponentSnapshot
     {
@@ -64,6 +66,17 @@ internal static class UINodeComponentClipboard
     [MenuItem(PasteMenuPath, false, 1000)]
     private static void PasteAllComponents(MenuCommand command)
     {
+        PasteAllComponents(command, true);
+    }
+
+    [MenuItem(PasteWithoutRectTransformMenuPath, false, 1001)]
+    private static void PasteAllComponentsWithoutRectTransform(MenuCommand command)
+    {
+        PasteAllComponents(command, false);
+    }
+
+    private static void PasteAllComponents(MenuCommand command, bool includeTransform)
+    {
         var destinationTransform = command.context as Transform;
         if (destinationTransform == null || Snapshots.Count == 0)
         {
@@ -71,20 +84,30 @@ internal static class UINodeComponentClipboard
         }
 
         GameObject destination = destinationTransform.gameObject;
+        string operationName = includeTransform
+            ? "粘贴节点全部组件"
+            : "粘贴节点全部组件（不含 Rect Transform）";
         Undo.IncrementCurrentGroup();
         int undoGroup = Undo.GetCurrentGroup();
-        Undo.SetCurrentGroupName("粘贴节点全部组件（含数值）");
+        Undo.SetCurrentGroupName(operationName);
 
         try
         {
             var targets = new List<Component>(Snapshots.Count);
+            var snapshotsToPaste = new List<ComponentSnapshot>(Snapshots.Count);
             var occurrenceByType = new Dictionary<Type, int>();
             int addedCount = 0;
 
             foreach (ComponentSnapshot snapshot in Snapshots)
             {
+                bool isTransform = typeof(Transform).IsAssignableFrom(snapshot.Type);
+                if (!includeTransform && isTransform)
+                {
+                    continue;
+                }
+
                 Component targetComponent;
-                if (typeof(Transform).IsAssignableFrom(snapshot.Type))
+                if (isTransform)
                 {
                     if (!snapshot.Type.IsInstanceOfType(destinationTransform))
                     {
@@ -114,17 +137,18 @@ internal static class UINodeComponentClipboard
                     }
                 }
 
+                snapshotsToPaste.Add(snapshot);
                 targets.Add(targetComponent);
             }
 
-            for (int i = 0; i < Snapshots.Count; i++)
+            for (int i = 0; i < snapshotsToPaste.Count; i++)
             {
                 Component targetComponent = targets[i];
-                Undo.RecordObject(targetComponent, "粘贴节点全部组件（含数值）");
+                Undo.RecordObject(targetComponent, operationName);
 
-                if (!Snapshots[i].Preset.ApplyTo(targetComponent))
+                if (!snapshotsToPaste[i].Preset.ApplyTo(targetComponent))
                 {
-                    throw new InvalidOperationException($"无法粘贴组件 {Snapshots[i].Type.Name} 的数值。");
+                    throw new InvalidOperationException($"无法粘贴组件 {snapshotsToPaste[i].Type.Name} 的数值。");
                 }
 
                 PrefabUtility.RecordPrefabInstancePropertyModifications(targetComponent);
@@ -132,14 +156,15 @@ internal static class UINodeComponentClipboard
             }
 
             Undo.CollapseUndoOperations(undoGroup);
-            Notify($"已将“{sourceName}”的 {Snapshots.Count} 个组件粘贴到“{destination.name}”"
+            Notify($"已将“{sourceName}”的 {snapshotsToPaste.Count} 个组件粘贴到“{destination.name}”"
+                   + (!includeTransform ? "（未修改 Rect Transform）" : string.Empty)
                    + (addedCount > 0 ? $"，补齐 {addedCount} 个组件" : string.Empty));
         }
         catch (Exception exception)
         {
             Undo.RevertAllDownToGroup(undoGroup);
             Debug.LogError($"[节点组件剪贴板] 粘贴失败：{exception.Message}", destination);
-            EditorUtility.DisplayDialog("粘贴节点全部组件失败", exception.Message, "确定");
+            EditorUtility.DisplayDialog($"{operationName}失败", exception.Message, "确定");
         }
     }
 
@@ -147,6 +172,20 @@ internal static class UINodeComponentClipboard
     private static bool ValidatePasteAllComponents()
     {
         return Snapshots.Count > 0;
+    }
+
+    [MenuItem(PasteWithoutRectTransformMenuPath, true, 1001)]
+    private static bool ValidatePasteAllComponentsWithoutRectTransform()
+    {
+        foreach (ComponentSnapshot snapshot in Snapshots)
+        {
+            if (!typeof(Transform).IsAssignableFrom(snapshot.Type))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static int GetAndIncreaseOccurrence(Dictionary<Type, int> occurrenceByType, Type type)
