@@ -181,6 +181,8 @@ This is not intended to be pixel-perfect runtime parity. The practical target is
 
 - Implementation entry point: `Assets/Content/UI/Editor/UIAnimationPathRepairWindow.cs`.
 - The Animation-window shortcut is `复制 / 修复路径`; it scans the active AnimationClip against the current Animation root.
+- Keep the repair window bound to the Animation window that opened it. Poll that window's active Clip at a lightweight interval (about 0.2 seconds); when the Clip or Animation root changes, clear stale action feedback, reset the list scroll, and rescan automatically.
+- Display the currently tracked AnimationClip at the top of the tool so the user can immediately verify that live following worked. Support a sensible preferred-window fallback when the tool is opened from the main menu.
 - Default to copying Missing bindings to a new path while keeping the original bindings. Keep migration/deletion as an explicit secondary mode.
 - Prefill each new-path field with the old binding path so the user normally edits only the renamed hierarchy segment. Also allow the selected Hierarchy node to provide its relative path automatically.
 - Validate that the target path exists below the current Animation root and has every component type required by the source bindings before enabling the action.

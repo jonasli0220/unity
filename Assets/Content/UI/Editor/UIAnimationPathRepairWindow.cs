@@ -11,6 +11,7 @@ using UnityEngine.UIElements;
 public class UIAnimationPathRepairWindow : EditorWindow
 {
     private const string MenuPath = "Tools/UI/Animation Path Repair/Open Window";
+    private const double ContextPollIntervalSeconds = 0.2d;
     private static readonly string[] TransferModeLabels =
     {
         "复制到新路径（保留旧曲线）",
@@ -19,8 +20,12 @@ public class UIAnimationPathRepairWindow : EditorWindow
 
     private readonly List<AnimationClip> clips = new List<AnimationClip>();
     private readonly List<PathRepairRow> rows = new List<PathRepairRow>();
+    [SerializeField] private EditorWindow sourceAnimationWindow;
     private Vector2 scrollPosition;
     private GameObject targetRoot;
+    private AnimationClip observedAnimationClip;
+    private GameObject observedAnimationRoot;
+    private double nextContextPollTime;
     private BindingTransferMode transferMode = BindingTransferMode.Copy;
     private string scanMessage = "还没有扫描。";
     private string actionMessage = string.Empty;
@@ -31,14 +36,23 @@ public class UIAnimationPathRepairWindow : EditorWindow
     {
         var window = GetWindow<UIAnimationPathRepairWindow>("Anim Path Repair");
         window.minSize = new Vector2(520, 420);
+        window.sourceAnimationWindow =
+            UIAnimationPathRepairAnimationWindowAccess.GetPreferredAnimationWindow();
         window.AutoFillContext();
         window.Show();
     }
 
     public static void OpenAndScanCurrentAnimation()
     {
+        OpenAndScanCurrentAnimation(
+            UIAnimationPathRepairAnimationWindowAccess.GetPreferredAnimationWindow());
+    }
+
+    public static void OpenAndScanCurrentAnimation(EditorWindow animationWindow)
+    {
         var window = GetWindow<UIAnimationPathRepairWindow>("Anim Path Repair");
         window.minSize = new Vector2(520, 420);
+        window.sourceAnimationWindow = animationWindow;
         window.AutoFillContext();
         window.Scan();
         window.Show();
@@ -47,10 +61,18 @@ public class UIAnimationPathRepairWindow : EditorWindow
 
     private void OnEnable()
     {
+        if (sourceAnimationWindow == null)
+        {
+            sourceAnimationWindow =
+                UIAnimationPathRepairAnimationWindowAccess.GetPreferredAnimationWindow();
+        }
+
         if (targetRoot == null && clips.Count == 0)
         {
             AutoFillContext();
         }
+
+        nextContextPollTime = EditorApplication.timeSinceStartup + ContextPollIntervalSeconds;
     }
 
     private void OnSelectionChange()
@@ -58,9 +80,31 @@ public class UIAnimationPathRepairWindow : EditorWindow
         Repaint();
     }
 
+    private void Update()
+    {
+        if (EditorApplication.timeSinceStartup < nextContextPollTime)
+        {
+            return;
+        }
+
+        nextContextPollTime =
+            EditorApplication.timeSinceStartup + ContextPollIntervalSeconds;
+        RefreshAnimationWindowContextIfChanged();
+    }
+
     private void OnGUI()
     {
         EditorGUILayout.LabelField("Animation 丢失路径复制 / 修复", EditorStyles.boldLabel);
+        using (new EditorGUILayout.HorizontalScope(EditorStyles.helpBox))
+        {
+            EditorGUILayout.LabelField("当前 AnimationClip", GUILayout.Width(125));
+            EditorGUILayout.LabelField(
+                observedAnimationClip != null ? observedAnimationClip.name : "未检测到",
+                EditorStyles.boldLabel);
+            GUILayout.FlexibleSpace();
+            EditorGUILayout.LabelField("自动跟随", EditorStyles.miniLabel, GUILayout.Width(55));
+        }
+
         DrawActionArea();
         EditorGUILayout.Space(8);
         DrawResultArea();
@@ -238,15 +282,17 @@ public class UIAnimationPathRepairWindow : EditorWindow
 
     private void AutoFillContext()
     {
-        var animationWindowContext = UIAnimationPathRepairAnimationWindowAccess.GetCurrentContext();
-        targetRoot = animationWindowContext.Root != null ? animationWindowContext.Root : GuessTargetRoot();
+        var animationWindowContext =
+            UIAnimationPathRepairAnimationWindowAccess.GetCurrentContext(sourceAnimationWindow);
+        if (animationWindowContext.Clip != null || animationWindowContext.Root != null)
+        {
+            ApplyAnimationWindowContext(animationWindowContext, false);
+            return;
+        }
+
+        targetRoot = GuessTargetRoot();
         clips.Clear();
         actionMessage = string.Empty;
-
-        if (animationWindowContext.Clip != null)
-        {
-            AddClip(animationWindowContext.Clip);
-        }
 
         if (clips.Count == 0)
         {
@@ -258,10 +304,77 @@ public class UIAnimationPathRepairWindow : EditorWindow
             AddClipsFromGameObject(targetRoot);
         }
 
+        observedAnimationClip = clips.FirstOrDefault(clip => clip != null);
+        observedAnimationRoot = targetRoot;
         rows.Clear();
         scanMessage = targetRoot == null
             ? "没有自动找到根节点。请打开 Prefab 或选中一个 GameObject。"
             : "已自动获取上下文，可以扫描。";
+    }
+
+    private void RefreshAnimationWindowContextIfChanged()
+    {
+        var context =
+            UIAnimationPathRepairAnimationWindowAccess.GetCurrentContext(sourceAnimationWindow);
+        if (context.Clip == null && context.Root == null)
+        {
+            return;
+        }
+
+        var resolvedRoot = context.Root != null ? context.Root : GuessTargetRoot();
+        if (context.Clip == observedAnimationClip && resolvedRoot == observedAnimationRoot)
+        {
+            return;
+        }
+
+        context.Root = resolvedRoot;
+        ApplyAnimationWindowContext(context, true);
+    }
+
+    private void ApplyAnimationWindowContext(AnimationWindowContext context, bool scanImmediately)
+    {
+        if (context.Window != null)
+        {
+            sourceAnimationWindow = context.Window;
+        }
+
+        observedAnimationClip = context.Clip;
+        observedAnimationRoot = context.Root != null ? context.Root : GuessTargetRoot();
+        targetRoot = observedAnimationRoot;
+        clips.Clear();
+        AddClip(observedAnimationClip);
+        rows.Clear();
+        actionMessage = string.Empty;
+        scrollPosition = Vector2.zero;
+
+        if (!scanImmediately)
+        {
+            scanMessage = observedAnimationClip == null
+                ? "没有检测到当前 AnimationClip。"
+                : "已跟随当前 AnimationClip，可以扫描。";
+            return;
+        }
+
+        if (observedAnimationClip == null)
+        {
+            scanMessage = "当前 Animation 窗口没有可用的 AnimationClip。";
+            Repaint();
+            return;
+        }
+
+        if (targetRoot == null)
+        {
+            scanMessage = "已切换 AnimationClip，但没有找到动画根节点。";
+            Repaint();
+            return;
+        }
+
+        Scan();
+        scanMessage = string.Format(
+            "已自动切换并刷新：{0}\n{1}",
+            observedAnimationClip.name,
+            scanMessage);
+        Repaint();
     }
 
     private static GameObject GuessTargetRoot()
@@ -1211,6 +1324,7 @@ public static class UIAnimationPathRepairAnimationWindowButton
     private const float ButtonWidth = 128f;
     private const float ButtonHeight = 20f;
 
+    private static readonly HashSet<int> AttachedWindowIds = new HashSet<int>();
     private static double nextAttachTime;
 
     static UIAnimationPathRepairAnimationWindowButton()
@@ -1241,9 +1355,21 @@ public static class UIAnimationPathRepairAnimationWindowButton
 
         var root = window.rootVisualElement;
         var button = root.Q<UnityEngine.UIElements.Button>(ButtonName);
+        var windowId = window.GetInstanceID();
+        if (!AttachedWindowIds.Contains(windowId))
+        {
+            if (button != null)
+            {
+                button.RemoveFromHierarchy();
+                button = null;
+            }
+
+            AttachedWindowIds.Add(windowId);
+        }
+
         if (button == null)
         {
-            button = CreateButton();
+            button = CreateButton(window);
         }
 
         if (button.parent != root)
@@ -1266,9 +1392,10 @@ public static class UIAnimationPathRepairAnimationWindowButton
         button.style.flexShrink = 0f;
     }
 
-    private static UnityEngine.UIElements.Button CreateButton()
+    private static UnityEngine.UIElements.Button CreateButton(EditorWindow animationWindow)
     {
-        var button = new UnityEngine.UIElements.Button(UIAnimationPathRepairWindow.OpenAndScanCurrentAnimation)
+        var button = new UnityEngine.UIElements.Button(
+            () => UIAnimationPathRepairWindow.OpenAndScanCurrentAnimation(animationWindow))
         {
             name = ButtonName,
             text = ButtonText,
@@ -1319,22 +1446,39 @@ public static class UIAnimationPathRepairAnimationWindowAccess
         }
     }
 
+    public static EditorWindow GetPreferredAnimationWindow()
+    {
+        var type = AnimationWindowType;
+        var focusedWindow = EditorWindow.focusedWindow;
+        if (type != null && focusedWindow != null && type.IsInstanceOfType(focusedWindow))
+        {
+            return focusedWindow;
+        }
+
+        return GetOpenAnimationWindows().FirstOrDefault();
+    }
+
     public static AnimationWindowContext GetCurrentContext()
     {
+        return GetCurrentContext(null);
+    }
+
+    public static AnimationWindowContext GetCurrentContext(EditorWindow preferredWindow)
+    {
+        var preferredContext = GetContext(preferredWindow);
+        if (preferredContext.Clip != null || preferredContext.Root != null)
+        {
+            return preferredContext;
+        }
+
         foreach (var window in GetOpenAnimationWindows())
         {
-            var state = GetAnimationWindowState(window);
-            if (state == null)
+            if (window == preferredWindow)
             {
                 continue;
             }
 
-            var context = new AnimationWindowContext
-            {
-                Clip = GetActiveClip(state),
-                Root = GetActiveRoot(state)
-            };
-
+            var context = GetContext(window);
             if (context.Clip != null || context.Root != null)
             {
                 return context;
@@ -1342,6 +1486,22 @@ public static class UIAnimationPathRepairAnimationWindowAccess
         }
 
         return new AnimationWindowContext();
+    }
+
+    private static AnimationWindowContext GetContext(EditorWindow window)
+    {
+        var state = GetAnimationWindowState(window);
+        if (state == null)
+        {
+            return new AnimationWindowContext();
+        }
+
+        return new AnimationWindowContext
+        {
+            Window = window,
+            Clip = GetActiveClip(state),
+            Root = GetActiveRoot(state)
+        };
     }
 
     public static void ForceRefreshOpenWindows()
@@ -1506,6 +1666,7 @@ public static class UIAnimationPathRepairAnimationWindowAccess
 
 public struct AnimationWindowContext
 {
+    public EditorWindow Window;
     public AnimationClip Clip;
     public GameObject Root;
 }
