@@ -184,7 +184,9 @@ This is not intended to be pixel-perfect runtime parity. The practical target is
 - Default to copying Missing bindings to a new path while keeping the original bindings. Keep migration/deletion as an explicit secondary mode.
 - Prefill each new-path field with the old binding path so the user normally edits only the renamed hierarchy segment. Also allow the selected Hierarchy node to provide its relative path automatically.
 - Validate that the target path exists below the current Animation root and has every component type required by the source bindings before enabling the action.
+- When a target is valid, show an explicit `目标路径有效` confirmation and a same-row `复制这条路径` action. Do not keep showing same-name-candidate guidance after manual input has already resolved the path.
 - Copy both float curves and object-reference curves. Preserve keyframes, tangent/weight data, wrap modes, and referenced objects by snapshotting all source bindings before changing any target bindings.
+- After writing, read every target binding back from the AnimationClip and compare its keys, tangents, weights, wrap modes, and object references with the source snapshot. Report success only after this verification passes; otherwise revert the Undo group and show an actionable error.
 - Warn before overwriting an existing target binding, apply the whole operation as one Undo group, refresh open Animation windows, and leave the original Missing bindings visible after copy so cleanup remains an explicit user decision.
 
 ## Sprite Drag-To-UI Convention

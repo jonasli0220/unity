@@ -23,6 +23,8 @@ public class UIAnimationPathRepairWindow : EditorWindow
     private GameObject targetRoot;
     private BindingTransferMode transferMode = BindingTransferMode.Copy;
     private string scanMessage = "还没有扫描。";
+    private string actionMessage = string.Empty;
+    private MessageType actionMessageType = MessageType.None;
 
     [MenuItem(MenuPath, false, 2320)]
     public static void Open()
@@ -87,17 +89,21 @@ public class UIAnimationPathRepairWindow : EditorWindow
 
             GUI.enabled = rows.Any(row => row.CanApply);
             var applyButtonText = transferMode == BindingTransferMode.Copy
-                ? "复制到已填写的新路径"
-                : "迁移到已填写的新路径";
+                ? "批量复制全部有效路径"
+                : "批量迁移全部有效路径";
             if (GUILayout.Button(applyButtonText, GUILayout.Height(30)))
             {
-                ApplyRepairs();
+                ApplyRepairs(rows.Where(row => row.CanApply).ToArray());
             }
 
             GUI.enabled = true;
         }
 
         EditorGUILayout.HelpBox(scanMessage, MessageType.None);
+        if (!string.IsNullOrEmpty(actionMessage))
+        {
+            EditorGUILayout.HelpBox(actionMessage, actionMessageType);
+        }
     }
 
     private void DrawResultArea()
@@ -121,7 +127,7 @@ public class UIAnimationPathRepairWindow : EditorWindow
             {
                 using (new EditorGUILayout.HorizontalScope())
                 {
-                    EditorGUILayout.LabelField(row.OldPathLabel, EditorStyles.boldLabel);
+                    EditorGUILayout.LabelField("原 Missing 路径：" + row.OldPathLabel, EditorStyles.boldLabel);
                     GUILayout.FlexibleSpace();
                     EditorGUILayout.LabelField(row.StatusText, GUILayout.Width(190));
                 }
@@ -148,12 +154,35 @@ public class UIAnimationPathRepairWindow : EditorWindow
                 {
                     EditorGUILayout.HelpBox(row.TargetWarning, MessageType.Warning);
                 }
+                else
+                {
+                    EditorGUILayout.HelpBox(
+                        string.Format("✓ 目标路径有效：{0} → {1}", row.OldPathLabel, row.TargetPathLabel),
+                        MessageType.Info);
+
+                    var singleActionText = transferMode == BindingTransferMode.Copy
+                        ? "复制这条路径"
+                        : "迁移这条路径";
+                    if (GUILayout.Button(singleActionText, GUILayout.Height(28)))
+                    {
+                        ApplyRepairs(new[] { row });
+                    }
+                }
+
+                if (!string.IsNullOrEmpty(row.LastApplyMessage))
+                {
+                    EditorGUILayout.HelpBox(row.LastApplyMessage, MessageType.Info);
+                }
 
                 if (row.Candidates.Count == 0)
                 {
-                    EditorGUILayout.HelpBox(
-                        "没有找到同名节点。请在 Hierarchy 里选中重命名后的节点，再点击“使用当前选中节点”；也可以直接填写相对根节点的新路径。",
-                        MessageType.None);
+                    if (!row.CanApply)
+                    {
+                        EditorGUILayout.HelpBox(
+                            "请直接修改上面的“新路径”，或在 Hierarchy 选中改名后的节点并点击“使用当前选中节点”。",
+                            MessageType.None);
+                    }
+
                     continue;
                 }
 
@@ -212,6 +241,7 @@ public class UIAnimationPathRepairWindow : EditorWindow
         var animationWindowContext = UIAnimationPathRepairAnimationWindowAccess.GetCurrentContext();
         targetRoot = animationWindowContext.Root != null ? animationWindowContext.Root : GuessTargetRoot();
         clips.Clear();
+        actionMessage = string.Empty;
 
         if (animationWindowContext.Clip != null)
         {
@@ -348,6 +378,7 @@ public class UIAnimationPathRepairWindow : EditorWindow
     private void Scan()
     {
         rows.Clear();
+        actionMessage = string.Empty;
 
         if (targetRoot == null)
         {
@@ -417,15 +448,19 @@ public class UIAnimationPathRepairWindow : EditorWindow
         row.AddBinding(binding);
     }
 
-    private void ApplyRepairs()
+    private void ApplyRepairs(IEnumerable<PathRepairRow> rowsToApply)
     {
-        var mappings = rows
+        var selectedRows = rowsToApply
             .Where(row => row.CanApply)
+            .GroupBy(row => row.OldPath)
+            .Select(group => group.First())
+            .ToArray();
+        var mappings = selectedRows
             .ToDictionary(row => row.OldPath, row => row.TargetPath);
 
         if (mappings.Count == 0)
         {
-            EditorUtility.DisplayDialog("Animation Path Repair", "没有填写有效的新路径。", "OK");
+            SetActionMessage("没有可执行的路径。请先确认“新路径”显示为有效。", MessageType.Warning);
             return;
         }
 
@@ -434,6 +469,12 @@ public class UIAnimationPathRepairWindow : EditorWindow
             .Select(clip => BuildTransferPlan(clip, mappings))
             .Where(plan => plan.BindingCount > 0)
             .ToArray();
+        if (plans.Length == 0)
+        {
+            SetActionMessage("没有从当前 AnimationClip 读取到可复制的曲线。请重新扫描后再试。", MessageType.Error);
+            return;
+        }
+
         var bindingCount = plans.Sum(plan => plan.BindingCount);
         var conflictCount = plans.Sum(plan => plan.TargetConflictCount);
         var actionName = transferMode == BindingTransferMode.Copy ? "复制" : "迁移";
@@ -454,11 +495,13 @@ public class UIAnimationPathRepairWindow : EditorWindow
                 actionName);
         }
 
-        if (!EditorUtility.DisplayDialog(
-                "Animation Path Repair",
-                confirmation,
-                actionName,
-                "取消"))
+        var needsConfirmation = transferMode == BindingTransferMode.Move || conflictCount > 0;
+        if (needsConfirmation
+            && !EditorUtility.DisplayDialog(
+                    "Animation Path Repair",
+                    confirmation,
+                    actionName,
+                    "取消"))
         {
             return;
         }
@@ -470,32 +513,62 @@ public class UIAnimationPathRepairWindow : EditorWindow
         var undoGroup = Undo.GetCurrentGroup();
         Undo.SetCurrentGroupName(undoLabel);
 
-        var changedClipCount = 0;
-        var changedBindingCount = 0;
-        foreach (var plan in plans)
+        try
         {
-            Undo.RecordObject(plan.Clip, undoLabel);
-            ApplyTransferPlan(plan, transferMode);
-            changedClipCount++;
-            changedBindingCount += plan.BindingCount;
-            EditorUtility.SetDirty(plan.Clip);
+            foreach (var plan in plans)
+            {
+                Undo.RecordObject(plan.Clip, undoLabel);
+                ApplyTransferPlan(plan, transferMode);
+                EditorUtility.SetDirty(plan.Clip);
+            }
+
+            AssetDatabase.SaveAssets();
+            var verificationError = VerifyTransferPlans(plans, transferMode);
+            if (!string.IsNullOrEmpty(verificationError))
+            {
+                throw new InvalidOperationException(verificationError);
+            }
+
+            Undo.CollapseUndoOperations(undoGroup);
+        }
+        catch (Exception ex)
+        {
+            Undo.RevertAllDownToGroup(undoGroup);
+            AssetDatabase.SaveAssets();
+            UIAnimationPathRepairAnimationWindowAccess.ForceRefreshOpenWindows();
+            SetActionMessage("复制没有写入 AnimationClip，已自动撤销本次操作。\n" + ex.Message, MessageType.Error);
+            Debug.LogException(ex);
+            return;
         }
 
-        Undo.CollapseUndoOperations(undoGroup);
-        AssetDatabase.SaveAssets();
+        foreach (var row in selectedRows)
+        {
+            var copiedBindingCount = plans.Sum(plan =>
+                plan.FloatCurves.Count(transfer =>
+                    string.Equals(transfer.SourceBinding.path ?? string.Empty, row.OldPath, StringComparison.Ordinal))
+                + plan.ObjectCurves.Count(transfer =>
+                    string.Equals(transfer.SourceBinding.path ?? string.Empty, row.OldPath, StringComparison.Ordinal)));
+            row.MarkApplied(actionName, copiedBindingCount);
+        }
+
         UIAnimationPathRepairAnimationWindowAccess.ForceRefreshOpenWindows();
-        Scan();
-        EditorUtility.DisplayDialog(
-            "Animation Path Repair",
+        SetActionMessage(
             string.Format(
-                "{0}完成：{1} 个 AnimationClip，{2} 条曲线绑定。{3}",
+                "✓ {0}成功，并已从 AnimationClip 回读确认：{1} 个动画，{2} 条曲线。{3}",
                 actionName,
-                changedClipCount,
-                changedBindingCount,
+                plans.Length,
+                bindingCount,
                 transferMode == BindingTransferMode.Copy
-                    ? "\n原 Missing 路径仍然保留；确认新路径生效后，可按需要自行清理。"
+                    ? "\n原 Missing 曲线仍保留；Animation 窗口中会同时出现新路径曲线。"
                     : string.Empty),
-            "OK");
+            MessageType.Info);
+    }
+
+    private void SetActionMessage(string message, MessageType messageType)
+    {
+        actionMessage = message;
+        actionMessageType = messageType;
+        Repaint();
     }
 
     private static ClipTransferPlan BuildTransferPlan(
@@ -588,6 +661,131 @@ public class UIAnimationPathRepairWindow : EditorWindow
         return string.Equals(left.path, right.path, StringComparison.Ordinal)
             && left.type == right.type
             && string.Equals(left.propertyName, right.propertyName, StringComparison.Ordinal);
+    }
+
+    private static string VerifyTransferPlans(
+        IEnumerable<ClipTransferPlan> plans,
+        BindingTransferMode mode)
+    {
+        foreach (var plan in plans)
+        {
+            foreach (var transfer in plan.FloatCurves)
+            {
+                var targetCurve = AnimationUtility.GetEditorCurve(plan.Clip, transfer.TargetBinding);
+                if (!AreCurvesEquivalent(transfer.Curve, targetCurve))
+                {
+                    return string.Format(
+                        "{0} 的目标曲线没有完整写入：{1} / {2}",
+                        plan.Clip.name,
+                        transfer.TargetBinding.path,
+                        transfer.TargetBinding.propertyName);
+                }
+
+                if (mode == BindingTransferMode.Copy)
+                {
+                    var sourceCurve = AnimationUtility.GetEditorCurve(plan.Clip, transfer.SourceBinding);
+                    if (!AreCurvesEquivalent(transfer.Curve, sourceCurve))
+                    {
+                        return string.Format(
+                            "{0} 的原曲线没有被完整保留：{1} / {2}",
+                            plan.Clip.name,
+                            transfer.SourceBinding.path,
+                            transfer.SourceBinding.propertyName);
+                    }
+                }
+            }
+
+            foreach (var transfer in plan.ObjectCurves)
+            {
+                var targetKeyframes =
+                    AnimationUtility.GetObjectReferenceCurve(plan.Clip, transfer.TargetBinding);
+                if (!AreObjectKeyframesEquivalent(transfer.Keyframes, targetKeyframes))
+                {
+                    return string.Format(
+                        "{0} 的目标对象引用曲线没有完整写入：{1} / {2}",
+                        plan.Clip.name,
+                        transfer.TargetBinding.path,
+                        transfer.TargetBinding.propertyName);
+                }
+
+                if (mode == BindingTransferMode.Copy)
+                {
+                    var sourceKeyframes =
+                        AnimationUtility.GetObjectReferenceCurve(plan.Clip, transfer.SourceBinding);
+                    if (!AreObjectKeyframesEquivalent(transfer.Keyframes, sourceKeyframes))
+                    {
+                        return string.Format(
+                            "{0} 的原对象引用曲线没有被完整保留：{1} / {2}",
+                            plan.Clip.name,
+                            transfer.SourceBinding.path,
+                            transfer.SourceBinding.propertyName);
+                    }
+                }
+            }
+        }
+
+        return string.Empty;
+    }
+
+    private static bool AreCurvesEquivalent(AnimationCurve expected, AnimationCurve actual)
+    {
+        if (expected == null || actual == null)
+        {
+            return expected == actual;
+        }
+
+        if (expected.preWrapMode != actual.preWrapMode
+            || expected.postWrapMode != actual.postWrapMode
+            || expected.length != actual.length)
+        {
+            return false;
+        }
+
+        for (int i = 0; i < expected.length; i++)
+        {
+            var expectedKey = expected.keys[i];
+            var actualKey = actual.keys[i];
+            if (!Mathf.Approximately(expectedKey.time, actualKey.time)
+                || !Mathf.Approximately(expectedKey.value, actualKey.value)
+                || !Mathf.Approximately(expectedKey.inTangent, actualKey.inTangent)
+                || !Mathf.Approximately(expectedKey.outTangent, actualKey.outTangent)
+                || !Mathf.Approximately(expectedKey.inWeight, actualKey.inWeight)
+                || !Mathf.Approximately(expectedKey.outWeight, actualKey.outWeight)
+                || expectedKey.weightedMode != actualKey.weightedMode
+                || AnimationUtility.GetKeyBroken(expected, i) != AnimationUtility.GetKeyBroken(actual, i)
+                || AnimationUtility.GetKeyLeftTangentMode(expected, i)
+                    != AnimationUtility.GetKeyLeftTangentMode(actual, i)
+                || AnimationUtility.GetKeyRightTangentMode(expected, i)
+                    != AnimationUtility.GetKeyRightTangentMode(actual, i))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static bool AreObjectKeyframesEquivalent(
+        ObjectReferenceKeyframe[] expected,
+        ObjectReferenceKeyframe[] actual)
+    {
+        expected = expected ?? Array.Empty<ObjectReferenceKeyframe>();
+        actual = actual ?? Array.Empty<ObjectReferenceKeyframe>();
+        if (expected.Length != actual.Length)
+        {
+            return false;
+        }
+
+        for (int i = 0; i < expected.Length; i++)
+        {
+            if (!Mathf.Approximately(expected[i].time, actual[i].time)
+                || expected[i].value != actual[i].value)
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private static string GetScenePath(Transform transform)
@@ -736,6 +934,7 @@ public class UIAnimationPathRepairWindow : EditorWindow
         public string OldPath { get; private set; }
         public string TargetPath { get; private set; }
         public string TargetWarning { get; private set; }
+        public string LastApplyMessage { get; private set; }
         public List<PathCandidate> Candidates { get; private set; }
         public int SelectedCandidateIndex { get; set; }
         public bool IsAlreadyValid { get; private set; }
@@ -793,6 +992,11 @@ public class UIAnimationPathRepairWindow : EditorWindow
             get { return string.IsNullOrEmpty(OldPath) ? "(root)" : OldPath; }
         }
 
+        public string TargetPathLabel
+        {
+            get { return string.IsNullOrEmpty(TargetPath) ? "(root)" : TargetPath; }
+        }
+
         public string StatusText
         {
             get
@@ -802,9 +1006,14 @@ public class UIAnimationPathRepairWindow : EditorWindow
                     return "已有效";
                 }
 
+                if (!string.IsNullOrEmpty(LastApplyMessage))
+                {
+                    return "✓ 已执行并验证";
+                }
+
                 if (CanApply)
                 {
-                    return "可以复制 / 迁移";
+                    return "✓ 目标有效";
                 }
 
                 if (NeedsChoice)
@@ -831,6 +1040,7 @@ public class UIAnimationPathRepairWindow : EditorWindow
             TargetPath = OldPath;
             hasTargetPath = true;
             TargetWarning = "请修改新路径中已改名的节点，或使用当前选中节点。";
+            LastApplyMessage = string.Empty;
 
             var oldTarget = FindByPath(root, OldPath);
             IsAlreadyValid = oldTarget != null && HasRequiredComponents(oldTarget, requiredTypes);
@@ -870,6 +1080,7 @@ public class UIAnimationPathRepairWindow : EditorWindow
         {
             TargetPath = NormalizeBindingPath(path);
             hasTargetPath = !string.IsNullOrWhiteSpace(path);
+            LastApplyMessage = string.Empty;
             ValidateTargetPath(root);
         }
 
@@ -896,7 +1107,17 @@ public class UIAnimationPathRepairWindow : EditorWindow
 
             TargetPath = GetRelativePath(root, target);
             hasTargetPath = true;
+            LastApplyMessage = string.Empty;
             ValidateTargetPath(root);
+        }
+
+        public void MarkApplied(string actionName, int bindingCount)
+        {
+            LastApplyMessage = string.Format(
+                "✓ 已{0}并回读确认：{1} 条曲线，目标路径 {2}",
+                actionName,
+                bindingCount,
+                TargetPathLabel);
         }
 
         private void ValidateTargetPath(Transform root)
@@ -1131,7 +1352,12 @@ public static class UIAnimationPathRepairAnimationWindowAccess
             return;
         }
 
-        var forceRefresh = type.GetMethod("ForceRefresh", Flags);
+        var forceRefresh = type.GetMethod(
+            "ForceRefresh",
+            Flags,
+            null,
+            Type.EmptyTypes,
+            null);
         foreach (var window in GetOpenAnimationWindows())
         {
             try
@@ -1140,11 +1366,34 @@ public static class UIAnimationPathRepairAnimationWindowAccess
                 {
                     forceRefresh.Invoke(window, null);
                 }
+
+                var state = GetAnimationWindowState(window);
+                InvokeNoArgMethod(state, "ForceRefresh");
+                window.Repaint();
             }
             catch (Exception ex)
             {
                 Debug.LogWarning("Animation Path Repair 刷新 Animation 窗口失败：" + ex.Message);
             }
+        }
+    }
+
+    private static void InvokeNoArgMethod(object target, string methodName)
+    {
+        if (target == null)
+        {
+            return;
+        }
+
+        var method = target.GetType().GetMethod(
+            methodName,
+            Flags,
+            null,
+            Type.EmptyTypes,
+            null);
+        if (method != null)
+        {
+            method.Invoke(target, null);
         }
     }
 
