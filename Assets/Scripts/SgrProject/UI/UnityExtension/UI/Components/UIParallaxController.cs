@@ -85,8 +85,8 @@ namespace SgrUnity
         [Tooltip("鼠标到达屏幕左右边缘时的最大 Y 轴倾斜角度。")]
         [SerializeField, Range(0f, 10f)] private float maxYawDegrees = 3f;
 
-        [Tooltip("倾斜到屏幕边缘时的最大缩放补偿。1 不缩放，1.02 表示最多放大 2%。")]
-        [SerializeField, Min(1f)] private float edgeScale = 1.02f;
+        [Tooltip("倾斜到屏幕边缘时的最大缩放补偿。默认 1，不缩放；1.02 表示最多放大 2%。")]
+        [SerializeField, Min(1f)] private float edgeScale = 1f;
 
         [Header("Layer Parallax / 分层视差")]
         [Tooltip("深度为 1 的层，在屏幕边缘时产生的最大位移，单位为 Canvas 像素。")]
