@@ -177,6 +177,16 @@ This is not intended to be pixel-perfect runtime parity. The practical target is
 - Keep new mappings source-preserving: even approximate Figma visuals should retain Unity source path, GUID/local ID when available, component references, and RectTransform payload.
 - After code changes, run static checks where possible. Unity compile usually needs the user to reload the editor through Davinci.
 
+## Animation Path Repair Convention
+
+- Implementation entry point: `Assets/Content/UI/Editor/UIAnimationPathRepairWindow.cs`.
+- The Animation-window shortcut is `复制 / 修复路径`; it scans the active AnimationClip against the current Animation root.
+- Default to copying Missing bindings to a new path while keeping the original bindings. Keep migration/deletion as an explicit secondary mode.
+- Prefill each new-path field with the old binding path so the user normally edits only the renamed hierarchy segment. Also allow the selected Hierarchy node to provide its relative path automatically.
+- Validate that the target path exists below the current Animation root and has every component type required by the source bindings before enabling the action.
+- Copy both float curves and object-reference curves. Preserve keyframes, tangent/weight data, wrap modes, and referenced objects by snapshotting all source bindings before changing any target bindings.
+- Warn before overwriting an existing target binding, apply the whole operation as one Undo group, refresh open Animation windows, and leave the original Missing bindings visible after copy so cleanup remains an explicit user decision.
+
 ## Sprite Drag-To-UI Convention
 
 - Implementation entry point: `Assets/Content/UI/Editor/UISpriteDragToUICreator.cs`. Keep Project-window Sprite dragging, operating-system image dragging, drag preview, prefab-local `resource` import, and selected-image replacement in this script.
