@@ -1,0 +1,34 @@
+{
+  "menuName": "快速 merge",
+  "ticketEndpoint": "http://127.0.0.1:18765/api/my-open-workitems",
+  "ticketServiceCommand": "server\\StartMeegoBaseTicketService.cmd",
+  "userMapFile": "user-map.local.json",
+  "cacheFile": "tickets.cache.json",
+  "forceTicketRefresh": true,
+  "allowCacheFallback": false,
+  "tortoiseProcPath": "C:\\Program Files\\TortoiseSVN\\bin\\TortoiseProc.exe",
+  "defaultEmailDomain": "tencent.com",
+  "includeTypes": [
+    "story",
+    "bug"
+  ],
+  "targetNode": "待提交 CN release",
+  "targetNodes": [
+    "待提交 CN release",
+    "待提交CN release",
+    "提交 CN release",
+    "提交CN release"
+  ],
+  "trunkUiRoot": "G:\\Dragon\\trunk\\dragon\\Assets\\Content\\UI",
+  "releaseUiRoot": "",
+  "naReleaseUiRoot": "",
+  "trunkSvnUrl": "https://svn.woa.com/sgra_dragon/dragon_assets/trunk/trunk_cn/Content/UI",
+  "releaseSvnUrl": "https://svn.woa.com/sgra_dragon/dragon_assets/release/release_cn/Content/UI",
+  "naReleaseSvnUrl": "https://svn.woa.com/sgra_dragon/dragon_assets/release/release_na/Content/UI",
+  "trunkRepoPath": "trunk/trunk_cn/Content/UI",
+  "releaseRepoPath": "release/release_cn/Content/UI",
+  "naReleaseRepoPath": "release/release_na/Content/UI",
+  "timeoutSeconds": 45,
+  "maxTickets": 80,
+  "logRoot": "C:\\tmp\\QuickReleaseMerge"
+}

@@ -1,0 +1,7 @@
+{
+  "prefix": "http://127.0.0.1:18765/",
+  "providerCommand": "& (Join-Path $env:QUICK_RELEASE_MERGE_SERVER_DIR \"meego-base-provider.ps1\") -ProjectKey \"66a24222eba34f3273aecf5f\"",
+  "providerTimeoutSeconds": 60,
+  "mockTicketsFile": "mock-tickets.sample.json",
+  "defaultTicketType": "story"
+}
