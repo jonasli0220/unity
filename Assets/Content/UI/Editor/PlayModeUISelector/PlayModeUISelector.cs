@@ -14,6 +14,7 @@ internal static class PlayModeUISelector
     private const string MenuPath = "UITools/运行时 Alt+左键选中UI";
     private const string EnabledEditorPrefKey = "SgrProject.UI.PlayModeUISelector.Enabled";
     private const string OpenPrefabMenuPath = "GameObject/UI/打开引用的 UI Prefab";
+    private const string ReloadPrefabMenuPath = "GameObject/UI/重新加载引用的 UI Prefab";
     private const string UIPrefabRoot = "Assets/Content/UI/Prefab";
     private const string IgnoredClickFeedbackRootName = "common_click_feedback";
     private const string CloneNameSuffix = "(Clone)";
@@ -40,6 +41,9 @@ internal static class PlayModeUISelector
                 null)
             : null;
     private static readonly GUIContent OpenPrefabButtonContent = new GUIContent();
+    private static readonly GUIContent ReloadPrefabButtonContent = new GUIContent(
+        "重新加载",
+        "强制导入刚保存的 Prefab，并重新创建当前运行时实例。");
 
     private static PlayModeUISelectorInputBlocker inputBlocker;
     private static bool isAltPointerDown;
@@ -126,11 +130,23 @@ internal static class PlayModeUISelector
             "打开当前 Play Mode UI 对象引用的原始 Prefab。";
 
         GUILayout.Space(2f);
-        using (new EditorGUI.DisabledScope(EditorApplication.isCompiling))
+        using (new EditorGUI.DisabledScope(
+                   EditorApplication.isCompiling || EditorApplication.isUpdating))
         {
-            if (GUILayout.Button(OpenPrefabButtonContent, GUILayout.Height(22f)))
+            using (new EditorGUILayout.HorizontalScope())
             {
-                OpenSourcePrefab(target);
+                if (GUILayout.Button(OpenPrefabButtonContent, GUILayout.Height(22f)))
+                {
+                    OpenSourcePrefab(target);
+                }
+
+                if (GUILayout.Button(
+                        ReloadPrefabButtonContent,
+                        GUILayout.Width(88f),
+                        GUILayout.Height(22f)))
+                {
+                    ReloadSourcePrefab(target);
+                }
             }
         }
     }
@@ -159,6 +175,33 @@ internal static class PlayModeUISelector
         return EditorApplication.isPlaying && IsRuntimeUIObject(target);
     }
 
+    [MenuItem(ReloadPrefabMenuPath, false, 50)]
+    private static void ReloadSelectedRuntimeUIPrefab(MenuCommand command)
+    {
+        GameObject target = command.context as GameObject;
+        if (target == null)
+        {
+            target = Selection.activeGameObject;
+        }
+
+        ReloadSourcePrefab(target);
+    }
+
+    [MenuItem(ReloadPrefabMenuPath, true)]
+    private static bool ValidateReloadSelectedRuntimeUIPrefab(MenuCommand command)
+    {
+        GameObject target = command.context as GameObject;
+        if (target == null)
+        {
+            target = Selection.activeGameObject;
+        }
+
+        return EditorApplication.isPlaying &&
+               !EditorApplication.isCompiling &&
+               !EditorApplication.isUpdating &&
+               IsRuntimeUIObject(target);
+    }
+
     private static bool IsRuntimeUIObject(GameObject target)
     {
         return target != null &&
@@ -170,7 +213,21 @@ internal static class PlayModeUISelector
 
     private static void OpenSourcePrefab(GameObject target)
     {
-        if (!IsRuntimeUIObject(target))
+        ResolveSourcePrefab(target, OpenPrefab);
+    }
+
+    private static void ReloadSourcePrefab(GameObject target)
+    {
+        ResolveSourcePrefab(
+            target,
+            prefabPath => ReloadRuntimePrefab(target, prefabPath));
+    }
+
+    private static void ResolveSourcePrefab(
+        GameObject target,
+        Action<string> onResolved)
+    {
+        if (!IsRuntimeUIObject(target) || onResolved == null)
         {
             return;
         }
@@ -178,7 +235,7 @@ internal static class PlayModeUISelector
         string nativePrefabPath = GetNativePrefabPath(target);
         if (!string.IsNullOrEmpty(nativePrefabPath))
         {
-            OpenPrefab(nativePrefabPath);
+            onResolved(nativePrefabPath);
             return;
         }
 
@@ -188,13 +245,13 @@ internal static class PlayModeUISelector
             List<string> matchingPaths = FindExactPrefabPaths(attemptedNames[i]);
             if (matchingPaths.Count == 1)
             {
-                OpenPrefab(matchingPaths[0]);
+                onResolved(matchingPaths[0]);
                 return;
             }
 
             if (matchingPaths.Count > 1)
             {
-                ShowPrefabChoiceMenu(matchingPaths);
+                ShowPrefabChoiceMenu(matchingPaths, onResolved);
                 return;
             }
         }
@@ -334,7 +391,9 @@ internal static class PlayModeUISelector
         return matches;
     }
 
-    private static void ShowPrefabChoiceMenu(List<string> prefabPaths)
+    private static void ShowPrefabChoiceMenu(
+        List<string> prefabPaths,
+        Action<string> onSelected)
     {
         GenericMenu menu = new GenericMenu();
         for (int i = 0; i < prefabPaths.Count; i++)
@@ -349,7 +408,7 @@ internal static class PlayModeUISelector
             menu.AddItem(
                 new GUIContent(label),
                 false,
-                () => OpenPrefab(prefabPath));
+                () => onSelected(prefabPath));
         }
 
         menu.ShowAsContext();
@@ -376,6 +435,163 @@ internal static class PlayModeUISelector
                 "Unity 未能打开：\n" + prefabPath,
                 "知道了");
         }
+    }
+
+    private static void ReloadRuntimePrefab(
+        GameObject selectedObject,
+        string prefabPath)
+    {
+        if (!EditorApplication.isPlaying ||
+            EditorApplication.isCompiling ||
+            EditorApplication.isUpdating ||
+            !IsRuntimeUIObject(selectedObject))
+        {
+            return;
+        }
+
+        GameObject runtimeRoot = FindRuntimePrefabRoot(selectedObject, prefabPath);
+        if (runtimeRoot == null)
+        {
+            EditorUtility.DisplayDialog(
+                "无法重新加载 UI Prefab",
+                "找到了 Prefab，但无法安全确认当前运行时实例的根节点。\n\n" +
+                "请在 Hierarchy 里选择更靠近“(Clone)”的 UI 根节点后重试。",
+                "知道了");
+            return;
+        }
+
+        Transform parent = runtimeRoot.transform.parent;
+        if (parent == null)
+        {
+            EditorUtility.DisplayDialog(
+                "无法重新加载 UI Prefab",
+                "目标实例没有父节点。为避免误删运行场景根对象，本次没有重新加载。",
+                "知道了");
+            return;
+        }
+
+        int siblingIndex = runtimeRoot.transform.GetSiblingIndex();
+        string runtimeName = runtimeRoot.name;
+        bool runtimeActiveSelf = runtimeRoot.activeSelf;
+        GameObject replacement = null;
+        bool oldInstanceDestroyed = false;
+
+        try
+        {
+            AssetDatabase.Refresh(ImportAssetOptions.ForceUpdate);
+            AssetDatabase.ImportAsset(prefabPath, ImportAssetOptions.ForceUpdate);
+
+            if (!EditorApplication.isPlaying || runtimeRoot == null || parent == null)
+            {
+                return;
+            }
+
+            GameObject prefab = AssetDatabase.LoadAssetAtPath<GameObject>(prefabPath);
+            if (prefab == null)
+            {
+                EditorUtility.DisplayDialog(
+                    "无法重新加载 UI Prefab",
+                    "资源可能已经移动或删除：\n" + prefabPath,
+                    "知道了");
+                return;
+            }
+
+            replacement = PrefabUtility.InstantiatePrefab(prefab, parent) as GameObject;
+            if (replacement == null)
+            {
+                EditorUtility.DisplayDialog(
+                    "无法重新加载 UI Prefab",
+                    "Unity 未能创建新的运行时实例：\n" + prefabPath,
+                    "知道了");
+                return;
+            }
+
+            replacement.name = runtimeName;
+            replacement.transform.SetSiblingIndex(siblingIndex);
+            replacement.SetActive(runtimeActiveSelf);
+
+            Selection.activeGameObject = replacement;
+            UnityEngine.Object.DestroyImmediate(runtimeRoot);
+            oldInstanceDestroyed = true;
+            Canvas.ForceUpdateCanvases();
+            EditorApplication.RepaintHierarchyWindow();
+            SceneView.RepaintAll();
+
+            Debug.Log(
+                "[PlayModeUISelector] 已重新加载运行时 UI Prefab：" +
+                prefabPath,
+                replacement);
+        }
+        catch (Exception exception)
+        {
+            if (!oldInstanceDestroyed && replacement != null)
+            {
+                UnityEngine.Object.DestroyImmediate(replacement);
+            }
+
+            Debug.LogException(exception);
+            EditorUtility.DisplayDialog(
+                "重新加载 UI Prefab 失败",
+                (oldInstanceDestroyed
+                    ? "新实例已经创建，但刷新编辑器界面时发生异常。"
+                    : "旧实例已保留。") +
+                "请查看 Console 中的详细错误。\n\n" + prefabPath,
+                "知道了");
+        }
+    }
+
+    private static GameObject FindRuntimePrefabRoot(
+        GameObject selectedObject,
+        string prefabPath)
+    {
+        if (selectedObject == null || !IsPrefabAssetPath(prefabPath))
+        {
+            return null;
+        }
+
+        string prefabName = Path.GetFileNameWithoutExtension(prefabPath);
+        for (Transform current = selectedObject.transform;
+             current != null;
+             current = current.parent)
+        {
+            if (current.name.EndsWith(CloneNameSuffix, StringComparison.Ordinal) &&
+                string.Equals(
+                    NormalizeCloneName(current.name),
+                    prefabName,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                return current.gameObject;
+            }
+        }
+
+        for (Transform current = selectedObject.transform;
+             current != null;
+             current = current.parent)
+        {
+            GameObject instanceRoot =
+                PrefabUtility.GetNearestPrefabInstanceRoot(current.gameObject);
+            if (instanceRoot == null)
+            {
+                continue;
+            }
+
+            GameObject source =
+                PrefabUtility.GetCorrespondingObjectFromSource(instanceRoot);
+            if (string.Equals(
+                    AssetDatabase.GetAssetPath(source),
+                    prefabPath,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                return instanceRoot;
+            }
+        }
+
+        return string.Equals(
+            NormalizeCloneName(selectedObject.name),
+            prefabName,
+            StringComparison.OrdinalIgnoreCase)
+            ? selectedObject
+            : null;
     }
 
     private static void OnPlayModeStateChanged(PlayModeStateChange state)
