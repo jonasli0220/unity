@@ -28,9 +28,11 @@
 - While Play Mode is active, show adjacent Inspector actions for opening and reloading the selected runtime UI prefab, and keep matching Hierarchy context-menu fallbacks.
 - Resolve the source prefab without adding runtime components: prefer Unity's native prefab correspondence, then search exact prefab filenames from the nearest `(Clone)` ancestor upward.
 - Open or reload a unique match immediately. If exact duplicate filenames exist, let the user choose from the matching asset paths instead of guessing.
-- Before reloading, refresh and force-import the resolved prefab asset so the latest saved version is used.
+- Before reloading, force-import only the resolved prefab asset so the latest saved version is used; do not run a project-wide `AssetDatabase.Refresh` from the Inspector action.
+- Queue the reload until after the current Inspector GUI event. Never destroy or structurally replace the inspected object synchronously inside `Editor.finishedDefaultHeaderGUI` / `HeaderOnGUI`.
 - Reload only the nearest matching runtime prefab root. Recreate it under the same parent and preserve its sibling index, runtime name, active state, and Inspector selection; do not copy stale runtime child or `RectTransform` values back onto the new instance.
-- Refuse to reload when a safe matching runtime root or parent cannot be identified, and leave the existing instance untouched if creating the replacement fails.
+- Move Inspector selection to the completed replacement before scheduling the old instance through Play Mode `Object.Destroy`; never use `DestroyImmediate` for this reload path.
+- Refuse to reload when a safe matching runtime root or parent cannot be identified, and leave the existing instance untouched if importing or creating the replacement fails.
 
 ## Validation
 

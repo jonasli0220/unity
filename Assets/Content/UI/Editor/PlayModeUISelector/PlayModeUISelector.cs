@@ -52,6 +52,9 @@ internal static class PlayModeUISelector
     private static bool isLayoutControlledDrag;
     private static int activePointerTargetDisplay;
     private static int dragUndoGroup = -1;
+    private static int queuedReloadTargetInstanceId;
+    private static bool hasQueuedPrefabReload;
+    private static string queuedReloadPrefabPath = string.Empty;
     private static Vector2 pointerDownScreenPosition;
     private static RectTransform pendingDragRectTransform;
     private static RectTransform draggedRectTransform;
@@ -220,7 +223,56 @@ internal static class PlayModeUISelector
     {
         ResolveSourcePrefab(
             target,
-            prefabPath => ReloadRuntimePrefab(target, prefabPath));
+            prefabPath => QueueRuntimePrefabReload(target, prefabPath));
+    }
+
+    private static void QueueRuntimePrefabReload(
+        GameObject selectedObject,
+        string prefabPath)
+    {
+        if (!IsRuntimeUIObject(selectedObject) || !IsPrefabAssetPath(prefabPath))
+        {
+            return;
+        }
+
+        queuedReloadTargetInstanceId = selectedObject.GetInstanceID();
+        queuedReloadPrefabPath = prefabPath;
+        hasQueuedPrefabReload = true;
+
+        EditorApplication.delayCall -= ExecuteQueuedRuntimePrefabReload;
+        EditorApplication.delayCall += ExecuteQueuedRuntimePrefabReload;
+    }
+
+    private static void ExecuteQueuedRuntimePrefabReload()
+    {
+        EditorApplication.delayCall -= ExecuteQueuedRuntimePrefabReload;
+        if (!hasQueuedPrefabReload)
+        {
+            return;
+        }
+
+        int targetInstanceId = queuedReloadTargetInstanceId;
+        string prefabPath = queuedReloadPrefabPath;
+        ClearQueuedPrefabReload();
+
+        if (!EditorApplication.isPlaying ||
+            EditorApplication.isCompiling ||
+            EditorApplication.isUpdating)
+        {
+            return;
+        }
+
+        GameObject selectedObject =
+            EditorUtility.InstanceIDToObject(targetInstanceId) as GameObject;
+        ReloadRuntimePrefab(selectedObject, prefabPath);
+    }
+
+    private static void ClearQueuedPrefabReload()
+    {
+        EditorApplication.delayCall -= ExecuteQueuedRuntimePrefabReload;
+        queuedReloadTargetInstanceId = 0;
+        queuedReloadPrefabPath = string.Empty;
+        hasQueuedPrefabReload = false;
     }
 
     private static void ResolveSourcePrefab(
@@ -474,12 +526,13 @@ internal static class PlayModeUISelector
         string runtimeName = runtimeRoot.name;
         bool runtimeActiveSelf = runtimeRoot.activeSelf;
         GameObject replacement = null;
-        bool oldInstanceDestroyed = false;
 
         try
         {
-            AssetDatabase.Refresh(ImportAssetOptions.ForceUpdate);
-            AssetDatabase.ImportAsset(prefabPath, ImportAssetOptions.ForceUpdate);
+            AssetDatabase.ImportAsset(
+                prefabPath,
+                ImportAssetOptions.ForceUpdate |
+                ImportAssetOptions.ForceSynchronousImport);
 
             if (!EditorApplication.isPlaying || runtimeRoot == null || parent == null)
             {
@@ -509,35 +562,37 @@ internal static class PlayModeUISelector
             replacement.name = runtimeName;
             replacement.transform.SetSiblingIndex(siblingIndex);
             replacement.SetActive(runtimeActiveSelf);
-
-            Selection.activeGameObject = replacement;
-            UnityEngine.Object.DestroyImmediate(runtimeRoot);
-            oldInstanceDestroyed = true;
-            Canvas.ForceUpdateCanvases();
-            EditorApplication.RepaintHierarchyWindow();
-            SceneView.RepaintAll();
-
-            Debug.Log(
-                "[PlayModeUISelector] 已重新加载运行时 UI Prefab：" +
-                prefabPath,
-                replacement);
         }
         catch (Exception exception)
         {
-            if (!oldInstanceDestroyed && replacement != null)
+            if (replacement != null)
             {
-                UnityEngine.Object.DestroyImmediate(replacement);
+                UnityEngine.Object.Destroy(replacement);
             }
 
             Debug.LogException(exception);
             EditorUtility.DisplayDialog(
                 "重新加载 UI Prefab 失败",
-                (oldInstanceDestroyed
-                    ? "新实例已经创建，但刷新编辑器界面时发生异常。"
-                    : "旧实例已保留。") +
-                "请查看 Console 中的详细错误。\n\n" + prefabPath,
+                "旧实例已保留。请查看 Console 中的详细错误。\n\n" +
+                prefabPath,
                 "知道了");
+            return;
         }
+
+        // The Inspector was drawing the old target when the button was clicked.
+        // Switch selection first and let Play Mode destroy it at frame end; using
+        // DestroyImmediate here leaves Unity 2021.3's native Inspector with a
+        // dangling target and can crash in ModuleMetadata.
+        Selection.activeGameObject = replacement;
+        UnityEngine.Object.Destroy(runtimeRoot);
+        Canvas.ForceUpdateCanvases();
+        EditorApplication.RepaintHierarchyWindow();
+        SceneView.RepaintAll();
+
+        Debug.Log(
+            "[PlayModeUISelector] 已安全重新加载运行时 UI Prefab：" +
+            prefabPath,
+            replacement);
     }
 
     private static GameObject FindRuntimePrefabRoot(
@@ -605,6 +660,7 @@ internal static class PlayModeUISelector
         if (state == PlayModeStateChange.ExitingPlayMode ||
             state == PlayModeStateChange.EnteredEditMode)
         {
+            ClearQueuedPrefabReload();
             DestroyInputBlocker();
         }
     }
