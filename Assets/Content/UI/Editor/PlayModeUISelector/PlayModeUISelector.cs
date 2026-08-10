@@ -40,15 +40,6 @@ internal static class PlayModeUISelector
                 new[] { typeof(int), typeof(bool) },
                 null)
             : null;
-    private static readonly MethodInfo DrawPrefabSaverButtonMethod =
-        typeof(PlayModeUISelector).Assembly
-            .GetType("PlayModePrefabSaver")
-            ?.GetMethod(
-                "DrawInlineHeaderButton",
-                BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic,
-                null,
-                new[] { typeof(GameObject) },
-                null);
     private static readonly GUIContent OpenPrefabButtonContent = new GUIContent();
     private static readonly GUIContent ReloadPrefabButtonContent = new GUIContent(
         "重新加载",
@@ -62,7 +53,6 @@ internal static class PlayModeUISelector
     private static int activePointerTargetDisplay;
     private static int dragUndoGroup = -1;
     private static int queuedReloadTargetInstanceId;
-    private static bool prefabSaverInvocationFailed;
     private static bool hasQueuedPrefabReload;
     private static string queuedReloadPrefabPath = string.Empty;
     private static Vector2 pointerDownScreenPosition;
@@ -153,8 +143,6 @@ internal static class PlayModeUISelector
                     OpenSourcePrefab(target);
                 }
 
-                TryDrawPrefabSaverButton(target);
-
                 if (GUILayout.Button(
                         ReloadPrefabButtonContent,
                         GUILayout.Width(88f),
@@ -163,28 +151,6 @@ internal static class PlayModeUISelector
                     ReloadSourcePrefab(target);
                 }
             }
-        }
-    }
-
-    private static void TryDrawPrefabSaverButton(GameObject target)
-    {
-        if (DrawPrefabSaverButtonMethod == null || prefabSaverInvocationFailed)
-        {
-            return;
-        }
-
-        try
-        {
-            DrawPrefabSaverButtonMethod.Invoke(null, new object[] { target });
-        }
-        catch (Exception exception)
-        {
-            prefabSaverInvocationFailed = true;
-            Exception cause = exception is TargetInvocationException
-                && exception.InnerException != null
-                ? exception.InnerException
-                : exception;
-            Debug.LogException(cause);
         }
     }
 

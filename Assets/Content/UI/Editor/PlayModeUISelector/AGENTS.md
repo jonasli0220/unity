@@ -21,12 +21,11 @@
 - When a visible selected UI `RectTransform` is pressed with `Alt + Left Click`, dragging should move that selected node in Play Mode using the same plane-based world-position delta as prefab direct dragging.
 - If the press does not start on the selected node, keep `Alt + Left Click` as "select under cursor"; dragging after that press may move the newly selected node.
 - Do not write positions for direct children driven by an active parent `LayoutGroup`, unless an enabled `ILayoutIgnorer.ignoreLayout` component opts the child out of layout.
-- Do not rewrite scene objects, prefabs, serialized data, or unrelated runtime input from the selector itself. Only the optional Play Mode Prefab Saver may write recorded properties after the user explicitly clicks its save action.
+- Do not rewrite scene objects, prefabs, serialized data, or unrelated runtime input.
 - Respect visible `Mask` and `RectMask2D` bounds when choosing a target.
 - Reveal the selected object in Hierarchy by expanding only its ancestor chain.
 - Keep a checked `UITools` menu toggle and default the feature to enabled for first-time use.
-- While Play Mode is active, show adjacent Inspector actions for opening and reloading the selected runtime UI prefab, and keep matching Hierarchy context-menu fallbacks. When the optional Play Mode Prefab Saver is installed, draw its compact save action between open and reload.
-- Discover the optional saver entry point reflectively in the same editor assembly. Missing or failed saver integration must not break the selector, Prefab opening, or runtime reload behavior.
+- While Play Mode is active, show adjacent Inspector actions for opening and reloading the selected runtime UI prefab, and keep matching Hierarchy context-menu fallbacks.
 - Resolve the source prefab without adding runtime components: prefer Unity's native prefab correspondence, then search exact prefab filenames from the nearest `(Clone)` ancestor upward.
 - Open or reload a unique match immediately. If exact duplicate filenames exist, let the user choose from the matching asset paths instead of guessing.
 - Before reloading, force-import only the resolved prefab asset so the latest saved version is used; do not run a project-wide `AssetDatabase.Refresh` from the Inspector action.
