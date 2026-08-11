@@ -47,6 +47,7 @@ internal static class PrefabStageHierarchySwitcher
     private static HierarchyContentMode currentMode;
     private static double nextHierarchyWindowPollTime;
     private static bool runtimeSceneRefreshQueued;
+    private static bool prefabStageOpenRestoreQueued;
     private static bool reflectionWarningShown;
 
     static PrefabStageHierarchySwitcher()
@@ -377,12 +378,40 @@ internal static class PrefabStageHierarchySwitcher
 
     private static void OnPrefabStageOpened(PrefabStage prefabStage)
     {
-        ResetFocusTracking();
+        RestorePrefabHierarchyAfterStageOpen();
+
+        if (!prefabStageOpenRestoreQueued)
+        {
+            prefabStageOpenRestoreQueued = true;
+            EditorApplication.delayCall += RestorePrefabHierarchyAfterStageOpen;
+        }
     }
 
     private static void OnPrefabStageClosing(PrefabStage prefabStage)
     {
+        prefabStageOpenRestoreQueued = false;
+        EditorApplication.delayCall -= RestorePrefabHierarchyAfterStageOpen;
         ResetToUnityDefault();
+    }
+
+    private static void RestorePrefabHierarchyAfterStageOpen()
+    {
+        prefabStageOpenRestoreQueued = false;
+
+        if (!IsEnabled() ||
+            !EditorApplication.isPlaying ||
+            PrefabStageUtility.GetCurrentPrefabStage() == null)
+        {
+            return;
+        }
+
+        runtimeSceneRefreshQueued = false;
+        ShowPrefabStageHierarchy();
+
+        // Treat the window that opened the Prefab as the new focus baseline.
+        // The user must explicitly focus Game again before runtime scenes return.
+        lastFocusedWindow = EditorWindow.focusedWindow;
+        nextHierarchyWindowPollTime = 0d;
     }
 
     private static void OnRuntimeSceneLoaded(Scene scene, LoadSceneMode mode)
@@ -428,6 +457,7 @@ internal static class PrefabStageHierarchySwitcher
     private static void ResetToUnityDefault()
     {
         runtimeSceneRefreshQueued = false;
+        prefabStageOpenRestoreQueued = false;
         RestoreOverriddenHierarchyWindows();
         ResetFocusTracking();
     }

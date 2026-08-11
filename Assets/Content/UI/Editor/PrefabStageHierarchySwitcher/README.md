@@ -8,6 +8,7 @@
 
 - 点击 `Game` 页签：Hierarchy 展示当前运行中的全部已加载 Scene，包括可发现的 `DontDestroyOnLoad` Scene。
 - 点击 `Scene` 页签：Hierarchy 恢复展示当前打开的 Prefab 节点。
+- 从运行时 Inspector 点击“打开 Prefab”后：Hierarchy 会立即切到刚打开的 Prefab，不依赖 Scene 视窗是否取得键盘焦点。
 - 点击 Inspector、Project、Hierarchy、Console 等其他窗口：保持上一次 Game/Scene 的选择，不反复跳动。
 
 切换只改变 Hierarchy 的显示来源，不会退出 Prefab Stage，也不会修改运行时节点、Prefab、场景、Selection 或游戏输入。
