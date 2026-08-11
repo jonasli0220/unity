@@ -102,6 +102,7 @@ namespace Dragon.UI.EditorTools
             Undo.IncrementCurrentGroup();
             int undoGroup = Undo.GetCurrentGroup();
             Undo.SetCurrentGroupName(UndoName);
+            Undo.RegisterFullObjectHierarchyUndo(commonParent.gameObject, UndoName);
 
             GameObject groupObject;
             try
@@ -125,7 +126,7 @@ namespace Dragon.UI.EditorTools
                 return;
             }
 
-            Undo.RegisterFullObjectHierarchyUndo(commonParent.gameObject, UndoName);
+            Undo.FlushUndoRecordObjects();
             Undo.CollapseUndoOperations(undoGroup);
 
             if (groupObject.scene.IsValid())
@@ -183,16 +184,17 @@ namespace Dragon.UI.EditorTools
                 RectTransformSnapshot snapshot = snapshots[i];
                 RectTransform child = snapshot.Transform;
 
-                Undo.SetTransformParent(child, groupRect, UndoName);
                 Undo.RecordObject(child, UndoName);
 
                 child.anchorMin = new Vector2(0.5f, 0.5f);
                 child.anchorMax = new Vector2(0.5f, 0.5f);
                 child.pivot = snapshot.Pivot;
                 child.sizeDelta = snapshot.Size;
-                child.localPosition = snapshot.LocalPosition - groupRect.localPosition;
+                child.localPosition = snapshot.LocalPosition;
                 child.localRotation = snapshot.LocalRotation;
                 child.localScale = snapshot.LocalScale;
+
+                Undo.SetTransformParent(child, groupRect, UndoName);
                 child.SetSiblingIndex(i);
             }
 
