@@ -18,6 +18,7 @@
 - UI grouping must preserve the current visible layout, selected-node order, layer, and one-step Undo.
 - UI children become fixed-anchor children of the new group so their current appearance does not shift.
 - Ordinary Transform objects should also be supported without adding UI components.
+- Select the created group without calling `EditorGUIUtility.PingObject`; the yellow Ping overlay blocks immediate Hierarchy renaming.
 - Never modify Project-window prefab assets directly; operate only on editable scene or Prefab Stage objects.
 - During Play Mode, allow structural grouping only inside an open Prefab Stage.
 

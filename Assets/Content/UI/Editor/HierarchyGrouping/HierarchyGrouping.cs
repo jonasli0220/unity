@@ -134,7 +134,6 @@ namespace Dragon.UI.EditorTools
             }
 
             Selection.activeGameObject = groupObject;
-            EditorGUIUtility.PingObject(groupObject);
             EditorApplication.RepaintHierarchyWindow();
             SceneView.RepaintAll();
         }
