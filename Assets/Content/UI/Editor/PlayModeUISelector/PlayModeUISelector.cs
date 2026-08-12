@@ -7,6 +7,7 @@ using UnityEditor;
 using UnityEngine;
 using UnityEngine.EventSystems;
 using UnityEngine.UI;
+using UIElements = UnityEngine.UIElements;
 
 [InitializeOnLoad]
 internal static class PlayModeUISelector
@@ -19,9 +20,19 @@ internal static class PlayModeUISelector
     private const string IgnoredClickFeedbackRootName = "common_click_feedback";
     private const string CloneNameSuffix = "(Clone)";
     private const float DragThreshold = 6f;
+    private const float GameViewToolbarFallbackHeight = 22f;
+    private const double PausedGameViewScanInterval = 0.5d;
 
+    private static readonly Type GameViewType =
+        typeof(EditorWindow).Assembly.GetType("UnityEditor.GameView");
     private static readonly Type SceneHierarchyWindowType =
         typeof(EditorWindow).Assembly.GetType("UnityEditor.SceneHierarchyWindow");
+    private static readonly PropertyInfo GameViewTargetDisplayProperty =
+        GameViewType != null
+            ? GameViewType.GetProperty(
+                "targetDisplay",
+                BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
+            : null;
     private static readonly MethodInfo HierarchySetExpandedMethod =
         SceneHierarchyWindowType != null
             ? SceneHierarchyWindowType.GetMethod(
@@ -46,16 +57,22 @@ internal static class PlayModeUISelector
         "强制导入刚保存的 Prefab，并重新创建当前运行时实例。");
 
     private static PlayModeUISelectorInputBlocker inputBlocker;
+    private static readonly Dictionary<EditorWindow, PausedGameViewHook>
+        PausedGameViewHooks =
+            new Dictionary<EditorWindow, PausedGameViewHook>();
     private static bool isAltPointerDown;
     private static bool isDraggingSelection;
     private static bool selectTopmostOnPointerUp;
     private static bool isLayoutControlledDrag;
+    private static bool isPausedEditorPointerActive;
     private static int activePointerTargetDisplay;
     private static int dragUndoGroup = -1;
     private static int queuedReloadTargetInstanceId;
     private static bool hasQueuedPrefabReload;
     private static string queuedReloadPrefabPath = string.Empty;
+    private static double nextPausedGameViewScanTime;
     private static Vector2 pointerDownScreenPosition;
+    private static EditorWindow pausedEditorPointerGameView;
     private static RectTransform pendingDragRectTransform;
     private static RectTransform draggedRectTransform;
     private static Canvas draggedCanvas;
@@ -69,15 +86,15 @@ internal static class PlayModeUISelector
             EditorPrefs.SetBool(EnabledEditorPrefKey, true);
         }
 
-        EditorApplication.update -= EnsureInputBlocker;
-        EditorApplication.update += EnsureInputBlocker;
+        EditorApplication.update -= OnEditorUpdate;
+        EditorApplication.update += OnEditorUpdate;
         EditorApplication.playModeStateChanged -= OnPlayModeStateChanged;
         EditorApplication.playModeStateChanged += OnPlayModeStateChanged;
-        AssemblyReloadEvents.beforeAssemblyReload -= DestroyInputBlocker;
-        AssemblyReloadEvents.beforeAssemblyReload += DestroyInputBlocker;
+        AssemblyReloadEvents.beforeAssemblyReload -= CleanupBeforeAssemblyReload;
+        AssemblyReloadEvents.beforeAssemblyReload += CleanupBeforeAssemblyReload;
         Editor.finishedDefaultHeaderGUI -= DrawGameObjectHeader;
         Editor.finishedDefaultHeaderGUI += DrawGameObjectHeader;
-        EditorApplication.delayCall += EnsureInputBlocker;
+        EditorApplication.delayCall += OnEditorUpdate;
     }
 
     [MenuItem(MenuPath)]
@@ -89,10 +106,12 @@ internal static class PlayModeUISelector
 
         if (enabled)
         {
-            EnsureInputBlocker();
+            OnEditorUpdate();
         }
         else
         {
+            ClearPausedEditorPointerState();
+            UnhookAllPausedGameViews();
             DestroyInputBlocker();
         }
     }
@@ -107,6 +126,421 @@ internal static class PlayModeUISelector
     private static bool IsEnabled()
     {
         return EditorPrefs.GetBool(EnabledEditorPrefKey, true);
+    }
+
+    private static void OnEditorUpdate()
+    {
+        EnsureInputBlocker();
+
+        double now = EditorApplication.timeSinceStartup;
+        if (now < nextPausedGameViewScanTime)
+        {
+            return;
+        }
+
+        nextPausedGameViewScanTime = now + PausedGameViewScanInterval;
+        EnsurePausedGameViewHooks();
+    }
+
+    private static void CleanupBeforeAssemblyReload()
+    {
+        ClearPausedEditorPointerState();
+        UnhookAllPausedGameViews();
+        DestroyInputBlocker();
+    }
+
+    private static void EnsurePausedGameViewHooks()
+    {
+        if (GameViewType == null || !IsEnabled() || !EditorApplication.isPlaying)
+        {
+            ClearPausedEditorPointerState();
+            UnhookAllPausedGameViews();
+            return;
+        }
+
+        UnityEngine.Object[] foundViews = Resources.FindObjectsOfTypeAll(GameViewType);
+        HashSet<EditorWindow> liveViews = new HashSet<EditorWindow>();
+        for (int i = 0; i < foundViews.Length; i++)
+        {
+            EditorWindow gameView = foundViews[i] as EditorWindow;
+            if (gameView == null || gameView.rootVisualElement == null)
+            {
+                continue;
+            }
+
+            liveViews.Add(gameView);
+            if (PausedGameViewHooks.ContainsKey(gameView))
+            {
+                continue;
+            }
+
+            PausedGameViewHook hook = CreatePausedGameViewHook(gameView);
+            UIElements.VisualElement root = gameView.rootVisualElement;
+            root.RegisterCallback(
+                hook.MouseDown,
+                UIElements.TrickleDown.TrickleDown);
+            root.RegisterCallback(
+                hook.MouseMove,
+                UIElements.TrickleDown.TrickleDown);
+            root.RegisterCallback(
+                hook.MouseUp,
+                UIElements.TrickleDown.TrickleDown);
+            root.RegisterCallback(
+                hook.MouseLeave,
+                UIElements.TrickleDown.TrickleDown);
+            PausedGameViewHooks.Add(gameView, hook);
+        }
+
+        List<EditorWindow> staleViews = new List<EditorWindow>();
+        foreach (KeyValuePair<EditorWindow, PausedGameViewHook> pair in PausedGameViewHooks)
+        {
+            if (pair.Key == null || !liveViews.Contains(pair.Key))
+            {
+                staleViews.Add(pair.Key);
+            }
+        }
+
+        for (int i = 0; i < staleViews.Count; i++)
+        {
+            UnhookPausedGameView(staleViews[i]);
+        }
+    }
+
+    private static PausedGameViewHook CreatePausedGameViewHook(EditorWindow gameView)
+    {
+        return new PausedGameViewHook
+        {
+            MouseDown = evt => OnPausedGameViewMouseDown(gameView, evt),
+            MouseMove = evt => OnPausedGameViewMouseMove(gameView, evt),
+            MouseUp = evt => OnPausedGameViewMouseUp(gameView, evt),
+            MouseLeave = evt => OnPausedGameViewMouseLeave(gameView, evt)
+        };
+    }
+
+    private static void UnhookAllPausedGameViews()
+    {
+        List<EditorWindow> windows = new List<EditorWindow>(PausedGameViewHooks.Keys);
+        for (int i = 0; i < windows.Count; i++)
+        {
+            UnhookPausedGameView(windows[i]);
+        }
+
+        PausedGameViewHooks.Clear();
+    }
+
+    private static void UnhookPausedGameView(EditorWindow gameView)
+    {
+        if (gameView == null)
+        {
+            PausedGameViewHooks.Remove(gameView);
+            return;
+        }
+
+        if (!PausedGameViewHooks.TryGetValue(gameView, out PausedGameViewHook hook))
+        {
+            return;
+        }
+
+        UIElements.VisualElement root = gameView.rootVisualElement;
+        if (root != null)
+        {
+            root.UnregisterCallback(
+                hook.MouseDown,
+                UIElements.TrickleDown.TrickleDown);
+            root.UnregisterCallback(
+                hook.MouseMove,
+                UIElements.TrickleDown.TrickleDown);
+            root.UnregisterCallback(
+                hook.MouseUp,
+                UIElements.TrickleDown.TrickleDown);
+            root.UnregisterCallback(
+                hook.MouseLeave,
+                UIElements.TrickleDown.TrickleDown);
+        }
+
+        PausedGameViewHooks.Remove(gameView);
+    }
+
+    private static void OnPausedGameViewMouseDown(
+        EditorWindow gameView,
+        UIElements.MouseDownEvent evt)
+    {
+        if (!ShouldHandlePausedGameViewMouse(gameView) ||
+            evt == null ||
+            evt.button != 0 ||
+            !evt.altKey)
+        {
+            return;
+        }
+
+        int targetDisplay = GetGameViewTargetDisplay(gameView);
+        if (!TryGetPausedGameViewScreenPosition(
+                gameView,
+                evt.localMousePosition,
+                targetDisplay,
+                true,
+                out Vector2 screenPosition))
+        {
+            return;
+        }
+
+        isPausedEditorPointerActive = true;
+        pausedEditorPointerGameView = gameView;
+        HandleAltPointerDown(screenPosition, targetDisplay);
+        ConsumePausedGameViewEvent(evt);
+    }
+
+    private static void OnPausedGameViewMouseMove(
+        EditorWindow gameView,
+        UIElements.MouseMoveEvent evt)
+    {
+        if (!isPausedEditorPointerActive ||
+            pausedEditorPointerGameView != gameView ||
+            evt == null)
+        {
+            return;
+        }
+
+        if (!ShouldHandlePausedGameViewMouse(gameView) || !evt.altKey)
+        {
+            ClearPausedEditorPointerState();
+            ConsumePausedGameViewEvent(evt);
+            return;
+        }
+
+        int targetDisplay = GetGameViewTargetDisplay(gameView);
+        if (TryGetPausedGameViewScreenPosition(
+                gameView,
+                evt.localMousePosition,
+                targetDisplay,
+                false,
+                out Vector2 screenPosition))
+        {
+            HandleAltDrag(screenPosition);
+        }
+
+        ConsumePausedGameViewEvent(evt);
+    }
+
+    private static void OnPausedGameViewMouseUp(
+        EditorWindow gameView,
+        UIElements.MouseUpEvent evt)
+    {
+        if (!isPausedEditorPointerActive ||
+            pausedEditorPointerGameView != gameView ||
+            evt == null ||
+            evt.button != 0)
+        {
+            return;
+        }
+
+        int targetDisplay = GetGameViewTargetDisplay(gameView);
+        if (TryGetPausedGameViewScreenPosition(
+                gameView,
+                evt.localMousePosition,
+                targetDisplay,
+                false,
+                out Vector2 screenPosition))
+        {
+            HandleAltPointerUp(screenPosition);
+        }
+        else
+        {
+            HandleAltPointerCancel();
+        }
+
+        isPausedEditorPointerActive = false;
+        pausedEditorPointerGameView = null;
+        ConsumePausedGameViewEvent(evt);
+    }
+
+    private static void OnPausedGameViewMouseLeave(
+        EditorWindow gameView,
+        UIElements.MouseLeaveEvent evt)
+    {
+        if (!isPausedEditorPointerActive ||
+            pausedEditorPointerGameView != gameView)
+        {
+            return;
+        }
+
+        ClearPausedEditorPointerState();
+        if (evt != null)
+        {
+            ConsumePausedGameViewEvent(evt);
+        }
+    }
+
+    private static bool ShouldHandlePausedGameViewMouse(EditorWindow gameView)
+    {
+        return IsEnabled() &&
+               EditorApplication.isPlaying &&
+               EditorApplication.isPaused &&
+               gameView != null;
+    }
+
+    private static void ConsumePausedGameViewEvent(UIElements.EventBase evt)
+    {
+        evt.StopImmediatePropagation();
+        evt.PreventDefault();
+    }
+
+    private static void ClearPausedEditorPointerState()
+    {
+        if (isPausedEditorPointerActive)
+        {
+            HandleAltPointerCancel();
+        }
+
+        isPausedEditorPointerActive = false;
+        pausedEditorPointerGameView = null;
+    }
+
+    private static int GetGameViewTargetDisplay(EditorWindow gameView)
+    {
+        if (GameViewTargetDisplayProperty == null || gameView == null)
+        {
+            return 0;
+        }
+
+        try
+        {
+            return (int)GameViewTargetDisplayProperty.GetValue(gameView, null);
+        }
+        catch
+        {
+            return 0;
+        }
+    }
+
+    private static bool TryGetPausedGameViewScreenPosition(
+        EditorWindow gameView,
+        Vector2 localMousePosition,
+        int targetDisplay,
+        bool requireInsideGameRect,
+        out Vector2 screenPosition)
+    {
+        screenPosition = default(Vector2);
+        if (gameView == null ||
+            gameView.rootVisualElement == null ||
+            !TryCalculateGameViewRenderRect(
+                gameView,
+                targetDisplay,
+                out Rect renderRect,
+                out Vector2 targetSize))
+        {
+            return false;
+        }
+
+        if (requireInsideGameRect && !renderRect.Contains(localMousePosition))
+        {
+            return false;
+        }
+
+        if (renderRect.width <= 0.01f || renderRect.height <= 0.01f)
+        {
+            return false;
+        }
+
+        float normalizedX =
+            (localMousePosition.x - renderRect.x) / renderRect.width;
+        float normalizedY =
+            (localMousePosition.y - renderRect.y) / renderRect.height;
+        screenPosition = new Vector2(
+            normalizedX * targetSize.x,
+            (1f - normalizedY) * targetSize.y);
+        return true;
+    }
+
+    private static bool TryCalculateGameViewRenderRect(
+        EditorWindow gameView,
+        int targetDisplay,
+        out Rect renderRect,
+        out Vector2 targetSize)
+    {
+        renderRect = default(Rect);
+        targetSize = GetTargetDisplaySize(targetDisplay);
+        if (targetSize.x <= 0.01f || targetSize.y <= 0.01f)
+        {
+            return false;
+        }
+
+        UIElements.VisualElement root = gameView.rootVisualElement;
+        Rect rootRect = root.contentRect;
+        float rootWidth = rootRect.width > 0.01f ? rootRect.width : gameView.position.width;
+        float rootHeight = rootRect.height > 0.01f ? rootRect.height : gameView.position.height;
+        if (rootWidth <= 0.01f || rootHeight <= 0.01f)
+        {
+            return false;
+        }
+
+        float toolbarHeight = EstimateGameViewToolbarHeight(root, rootWidth);
+        Rect availableRect = new Rect(
+            0f,
+            toolbarHeight,
+            rootWidth,
+            Mathf.Max(0f, rootHeight - toolbarHeight));
+        if (availableRect.width <= 0.01f || availableRect.height <= 0.01f)
+        {
+            return false;
+        }
+
+        float scale = Mathf.Min(
+            availableRect.width / targetSize.x,
+            availableRect.height / targetSize.y);
+        if (scale <= 0.01f)
+        {
+            return false;
+        }
+
+        Vector2 renderSize = targetSize * scale;
+        renderRect = new Rect(
+            availableRect.x + (availableRect.width - renderSize.x) * 0.5f,
+            availableRect.y + (availableRect.height - renderSize.y) * 0.5f,
+            renderSize.x,
+            renderSize.y);
+        return true;
+    }
+
+    private static float EstimateGameViewToolbarHeight(
+        UIElements.VisualElement root,
+        float rootWidth)
+    {
+        float toolbarHeight = 0f;
+        for (int i = 0; i < root.childCount; i++)
+        {
+            UIElements.VisualElement child = root.ElementAt(i);
+            Rect layout = child.layout;
+            if (layout.y <= 5f &&
+                layout.height >= 15f &&
+                layout.height <= 48f &&
+                layout.width >= rootWidth * 0.5f)
+            {
+                toolbarHeight = Mathf.Max(toolbarHeight, layout.yMax);
+            }
+        }
+
+        return toolbarHeight > 0.01f
+            ? toolbarHeight
+            : GameViewToolbarFallbackHeight;
+    }
+
+    private static Vector2 GetTargetDisplaySize(int targetDisplay)
+    {
+        float width = Screen.width;
+        float height = Screen.height;
+
+        if (targetDisplay >= 0 && targetDisplay < Display.displays.Length)
+        {
+            Display display = Display.displays[targetDisplay];
+            if (display.renderingWidth > 0 && display.renderingHeight > 0)
+            {
+                width = display.renderingWidth;
+                height = display.renderingHeight;
+            }
+        }
+
+        return new Vector2(width, height);
     }
 
     private static void DrawGameObjectHeader(Editor editor)
@@ -653,7 +1087,7 @@ internal static class PlayModeUISelector
     {
         if (state == PlayModeStateChange.EnteredPlayMode)
         {
-            EnsureInputBlocker();
+            OnEditorUpdate();
             return;
         }
 
@@ -661,6 +1095,8 @@ internal static class PlayModeUISelector
             state == PlayModeStateChange.EnteredEditMode)
         {
             ClearQueuedPrefabReload();
+            ClearPausedEditorPointerState();
+            UnhookAllPausedGameViews();
             DestroyInputBlocker();
         }
     }
@@ -823,6 +1259,11 @@ internal static class PlayModeUISelector
             SelectUIAt(screenPosition, activePointerTargetDisplay);
         }
 
+        ClearAltPointerState();
+    }
+
+    internal static void HandleAltPointerCancel()
+    {
         ClearAltPointerState();
     }
 
@@ -1447,6 +1888,14 @@ internal static class PlayModeUISelector
             return hierarchyOrder > other.hierarchyOrder;
         }
     }
+}
+
+internal sealed class PausedGameViewHook
+{
+    public UIElements.EventCallback<UIElements.MouseDownEvent> MouseDown;
+    public UIElements.EventCallback<UIElements.MouseMoveEvent> MouseMove;
+    public UIElements.EventCallback<UIElements.MouseUpEvent> MouseUp;
+    public UIElements.EventCallback<UIElements.MouseLeaveEvent> MouseLeave;
 }
 
 internal sealed class PlayModeUISelectorInputBlocker :

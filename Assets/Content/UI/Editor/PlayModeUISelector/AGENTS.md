@@ -13,11 +13,13 @@
 ## Behavior Contract
 
 - Respond only to `Alt + Left Click` inside the Game view while the Editor is in Play Mode.
+- Keep the same `Alt + Left Click` selection and `Alt + Left Drag` movement available while the Editor is paused in Play Mode.
 - Select the topmost visible UI `Graphic` under the pointer even when `Raycast Target` is disabled.
 - Ignore the runtime click-feedback subtree named `common_click_feedback` / `common_click_feedback(Clone)` so transient click effects are never selected or dragged.
 - Create a hidden, non-serialized UGUI interception layer only while Play Mode is active and the tool is enabled.
 - Let that layer participate in raycasts only while `Alt` is held, so ordinary runtime input remains untouched and the first `Alt + Left Click` press can be caught before runtime Buttons receive it.
 - Route the matching pointer press to selection and keep it from reaching the runtime button underneath.
+- Use the runtime UGUI interception layer while Play Mode is running normally, and use a GameView editor-event fallback only while `EditorApplication.isPaused`, because the runtime `EventSystem` may not dispatch pointer events during pause.
 - When a visible selected UI `RectTransform` is pressed with `Alt + Left Click`, dragging should move that selected node in Play Mode using the same plane-based world-position delta as prefab direct dragging.
 - If the press does not start on the selected node, keep `Alt + Left Click` as "select under cursor"; dragging after that press may move the newly selected node.
 - Do not write positions for direct children driven by an active parent `LayoutGroup`, unless an enabled `ILayoutIgnorer.ignoreLayout` component opts the child out of layout.
