@@ -11,6 +11,8 @@
 - Create another `UnityEditor.ProjectBrowser`; do not replace it with a custom asset browser.
 - Resolve the starting folder from the currently interacted Project window, with the selected asset's containing folder and `Assets` as safe fallbacks.
 - Navigate the new Project window before locking it so the resource folder is immediately usable.
+- When two or more native Project windows are open, label every Project tab with that window's active folder leaf name and keep the label synchronized as the window navigates.
+- Preserve the standard `Project` title when only one native Project window remains.
 - Preserve the native lock button, search, drag/drop, rename, Project history controls, and folder layout behavior.
 - Reflection is version-specific. If Unity internals cannot be resolved, fail safely without changing or closing existing Project windows and show an actionable message only after the user invokes the command.
 
@@ -24,5 +26,6 @@
 
 - Validate editor compilation against the project's Unity version.
 - Confirm that two native Project windows can remain open with different folders.
+- Confirm that each Project tab shows its own active folder name and refreshes after folder navigation.
 - Confirm that selecting or opening a Prefab does not navigate the locked resource window.
 - Confirm that Project-window asset drag/drop and replacement behavior remains native.

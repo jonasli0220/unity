@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Reflection;
 using UnityEditor;
@@ -7,6 +8,7 @@ using Object = UnityEngine.Object;
 
 namespace Dragon.UI.EditorTools
 {
+    [InitializeOnLoad]
     internal static class DualProjectBrowser
     {
         private const string MenuPath =
@@ -14,6 +16,7 @@ namespace Dragon.UI.EditorTools
         private const string AssetMenuPath =
             "Assets/\u5728\u9501\u5b9a\u8d44\u6e90\u7a97\u53e3\u4e2d\u6253\u5f00";
         private const int ConfigureAttemptCount = 8;
+        private const double TitleRefreshIntervalSeconds = 0.2d;
 
         private const BindingFlags InstanceMemberFlags =
             BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
@@ -72,6 +75,18 @@ namespace Dragon.UI.EditorTools
                 : ProjectBrowserType.GetField(
                     "s_LastInteractedProjectBrowser",
                     StaticMemberFlags);
+
+        private static readonly Dictionary<int, string>
+            AppliedFolderTitles = new Dictionary<int, string>();
+
+        private static double nextTitleRefreshTime;
+
+        static DualProjectBrowser()
+        {
+            EditorApplication.update -= RefreshProjectBrowserTitlesWhenDue;
+            EditorApplication.update += RefreshProjectBrowserTitlesWhenDue;
+            EditorApplication.delayCall += RefreshProjectBrowserTitles;
+        }
 
         [MenuItem(MenuPath, false, 2050)]
         private static void OpenLockedResourceBrowser()
@@ -192,7 +207,7 @@ namespace Dragon.UI.EditorTools
                     "ProjectBrowser lock state could not be changed.");
             }
 
-            ApplyResourceWindowTitle(browser, folderPath);
+            ApplyFolderWindowTitle(browser, folderPath);
             browser.Repaint();
         }
 
@@ -419,16 +434,156 @@ namespace Dragon.UI.EditorTools
                 height);
         }
 
-        private static void ApplyResourceWindowTitle(
+        private static void RefreshProjectBrowserTitlesWhenDue()
+        {
+            if (EditorApplication.timeSinceStartup < nextTitleRefreshTime)
+            {
+                return;
+            }
+
+            nextTitleRefreshTime =
+                EditorApplication.timeSinceStartup
+                + TitleRefreshIntervalSeconds;
+            RefreshProjectBrowserTitles();
+        }
+
+        private static void RefreshProjectBrowserTitles()
+        {
+            if (ProjectBrowserType == null
+                || GetActiveFolderPathMethod == null)
+            {
+                return;
+            }
+
+            Object[] browserObjects =
+                Resources.FindObjectsOfTypeAll(ProjectBrowserType);
+            List<EditorWindow> browsers = new List<EditorWindow>();
+            HashSet<int> liveBrowserIds = new HashSet<int>();
+            for (int index = 0; index < browserObjects.Length; index++)
+            {
+                EditorWindow browser = browserObjects[index] as EditorWindow;
+                if (browser == null)
+                {
+                    continue;
+                }
+
+                browsers.Add(browser);
+                liveBrowserIds.Add(browser.GetInstanceID());
+            }
+
+            RemoveClosedBrowserTitles(liveBrowserIds);
+            if (browsers.Count < 2)
+            {
+                RestoreSingleProjectBrowserTitle(browsers);
+                return;
+            }
+
+            for (int index = 0; index < browsers.Count; index++)
+            {
+                EditorWindow browser = browsers[index];
+                string folderPath = GetActiveFolderPath(browser);
+                if (!AssetDatabase.IsValidFolder(folderPath))
+                {
+                    continue;
+                }
+
+                ApplyFolderWindowTitle(browser, folderPath);
+            }
+        }
+
+        private static void RemoveClosedBrowserTitles(
+            HashSet<int> liveBrowserIds)
+        {
+            List<int> closedBrowserIds = new List<int>();
+            foreach (int browserId in AppliedFolderTitles.Keys)
+            {
+                if (!liveBrowserIds.Contains(browserId))
+                {
+                    closedBrowserIds.Add(browserId);
+                }
+            }
+
+            for (int index = 0; index < closedBrowserIds.Count; index++)
+            {
+                AppliedFolderTitles.Remove(closedBrowserIds[index]);
+            }
+        }
+
+        private static void RestoreSingleProjectBrowserTitle(
+            List<EditorWindow> browsers)
+        {
+            if (browsers.Count == 0)
+            {
+                return;
+            }
+
+            EditorWindow browser = browsers[0];
+            int browserId = browser.GetInstanceID();
+            string appliedTitle;
+            if (!AppliedFolderTitles.TryGetValue(
+                    browserId,
+                    out appliedTitle))
+            {
+                return;
+            }
+
+            if (browser.titleContent != null
+                && browser.titleContent.text == appliedTitle)
+            {
+                GUIContent projectIcon =
+                    EditorGUIUtility.IconContent("Project");
+                browser.titleContent = new GUIContent(
+                    "Project",
+                    projectIcon == null ? null : projectIcon.image,
+                    "Project");
+                browser.Repaint();
+            }
+
+            AppliedFolderTitles.Remove(browserId);
+        }
+
+        private static void ApplyFolderWindowTitle(
             EditorWindow browser,
             string folderPath)
         {
+            string folderName = GetFolderDisplayName(folderPath);
+            if (browser == null || string.IsNullOrEmpty(folderName))
+            {
+                return;
+            }
+
+            string tooltip = "\u5f53\u524d\u6587\u4ef6\u5939\uff1a" + folderPath;
+            GUIContent currentTitle = browser.titleContent;
+            if (currentTitle != null
+                && currentTitle.text == folderName
+                && currentTitle.tooltip == tooltip)
+            {
+                AppliedFolderTitles[browser.GetInstanceID()] = folderName;
+                return;
+            }
+
             GUIContent projectIcon =
                 EditorGUIUtility.IconContent("Project");
             browser.titleContent = new GUIContent(
-                "Project \u00b7 \u8d44\u6e90",
+                folderName,
                 projectIcon == null ? null : projectIcon.image,
-                "\u5df2\u9501\u5b9a\uff1a" + folderPath);
+                tooltip);
+            AppliedFolderTitles[browser.GetInstanceID()] = folderName;
+            browser.Repaint();
+        }
+
+        private static string GetFolderDisplayName(string folderPath)
+        {
+            string normalizedPath = NormalizeAssetPath(folderPath);
+            if (string.IsNullOrEmpty(normalizedPath))
+            {
+                return null;
+            }
+
+            int separatorIndex = normalizedPath.LastIndexOf('/');
+            return separatorIndex < 0
+                ? normalizedPath
+                : normalizedPath.Substring(separatorIndex + 1);
         }
 
         private static void ShowConfigurationFailure(
