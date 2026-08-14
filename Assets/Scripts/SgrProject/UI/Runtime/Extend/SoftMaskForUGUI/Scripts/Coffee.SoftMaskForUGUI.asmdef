@@ -1,0 +1,8 @@
+{
+    "name": "Coffee.SoftMaskForUGUI",
+    "references": [
+        "Unity.TextMeshPro"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": []
+}
