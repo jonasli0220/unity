@@ -69,8 +69,10 @@ G:\Dragon\trunk\dragon\Assets\Content\UI
 ## 风险提示
 
 - `可 merge`：dry-run 前检查通过，可以点击 merge。
-- `Warning`：可以 merge，但有风险提示，例如包含 UI 根目录变更。
-- `Blocked`：工具会阻止 merge，例如目标 release 工作副本已有本地状态，或没有找到对应 trunk UI 提交。
+- `Warning`：可以 merge，但有风险提示，例如包含 UI 根目录变更，或目标目录仅有待提交的 `svn:mergeinfo` 属性。
+- `Blocked`：工具会阻止 merge，例如目标 release 工作副本已有文件内容修改、其他属性修改、冲突，或没有找到对应 trunk UI 提交。
+
+SVN merge 可能在目录上留下 `svn:mergeinfo` 属性修改。它只记录已合入的 revision，不代表 prefab 文件内容被本地修改；工具会显示黄色提示并允许继续，之后在 TortoiseSVN 提交窗口中与本次 merge 一并提交即可。
 
 ## 冲突覆盖
 

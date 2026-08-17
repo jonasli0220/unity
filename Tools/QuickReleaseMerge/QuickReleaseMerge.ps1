@@ -945,6 +945,86 @@ function Get-TicketSvnEntries {
     return @($entryMap[[string]$Ticket.id])
 }
 
+function Get-RawSvnStatusLine {
+    param([string]$StatusLine)
+
+    $prefix = "[mergeinfo-only] "
+    if ($StatusLine.StartsWith($prefix, [System.StringComparison]::Ordinal)) {
+        return $StatusLine.Substring($prefix.Length)
+    }
+    return $StatusLine
+}
+
+function Get-SvnStatusReportedPath {
+    param([string]$StatusLine)
+
+    $rawStatusLine = Get-RawSvnStatusLine $StatusLine
+    if ($rawStatusLine.Length -le 8) {
+        return ""
+    }
+    return $rawStatusLine.Substring(8).Trim().Replace("/", "\").TrimStart(".\")
+}
+
+function Test-SvnStatusIsMergeInfoOnly {
+    param([string]$StatusLine, [string]$TargetRoot)
+
+    if ($StatusLine.Length -le 8) {
+        return $false
+    }
+
+    $statusColumns = $StatusLine.Substring(0, 7)
+    if ($statusColumns[0] -ne " " -or $statusColumns[1] -ne "M") {
+        return $false
+    }
+    for ($i = 2; $i -lt $statusColumns.Length; $i += 1) {
+        if ($statusColumns[$i] -ne " ") {
+            return $false
+        }
+    }
+
+    $reportedPath = Get-SvnStatusReportedPath $StatusLine
+    if ([string]::IsNullOrWhiteSpace($reportedPath)) {
+        return $false
+    }
+
+    $diffResult = Invoke-Svn -Arguments @("diff", "--depth", "empty", "--", $reportedPath) -WorkingDirectory $TargetRoot
+    if ($diffResult.exitCode -ne 0 -or [string]::IsNullOrWhiteSpace($diffResult.stdout)) {
+        return $false
+    }
+    if ([regex]::IsMatch($diffResult.stdout, '(?m)^@@\s')) {
+        return $false
+    }
+
+    $propertyMatches = [regex]::Matches($diffResult.stdout, '(?m)^(?<action>Added|Modified|Deleted):\s+(?<name>[^\r\n]+?)\s*$')
+    if ($propertyMatches.Count -eq 0) {
+        return $false
+    }
+    foreach ($propertyMatch in $propertyMatches) {
+        if ([string]$propertyMatch.Groups["name"].Value -ne "svn:mergeinfo") {
+            return $false
+        }
+        if ([string]$propertyMatch.Groups["action"].Value -eq "Deleted") {
+            return $false
+        }
+    }
+    return $true
+}
+
+function ConvertTo-ReleaseStatusLines {
+    param([string]$StatusText, [string]$TargetRoot)
+
+    $lines = @()
+    foreach ($statusLine in @($StatusText -split "`r?`n" | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })) {
+        if (Test-SvnStatusIsMergeInfoOnly -StatusLine $statusLine -TargetRoot $TargetRoot) {
+            $lines += "[mergeinfo-only] $statusLine"
+        }
+        else {
+            $lines += $statusLine
+        }
+    }
+    return @($lines)
+}
+
 function Get-ReleaseLocalStatuses {
     param([string[]]$RelativePaths, $Target)
 
@@ -978,7 +1058,7 @@ function Get-ReleaseLocalStatuses {
         return @()
     }
 
-    return @($result.stdout -split "`r?`n" | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    return @(ConvertTo-ReleaseStatusLines -StatusText $result.stdout -TargetRoot ([string]$Target.uiRoot))
 }
 
 function Initialize-ReleaseStatusCache {
@@ -1008,11 +1088,8 @@ function Initialize-ReleaseStatusCache {
         }
     }
     elseif (-not [string]::IsNullOrWhiteSpace($result.stdout)) {
-        foreach ($statusLine in @($result.stdout -split "`r?`n" | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })) {
-            $reportedPath = ""
-            if ($statusLine.Length -gt 8) {
-                $reportedPath = $statusLine.Substring(8).Trim().Replace("/", "\").TrimStart(".\")
-            }
+        foreach ($statusLine in @(ConvertTo-ReleaseStatusLines -StatusText $result.stdout -TargetRoot $targetRoot)) {
+            $reportedPath = Get-SvnStatusReportedPath $statusLine
 
             foreach ($localPath in $localPaths) {
                 $normalizedLocalPath = $localPath.Replace("/", "\").TrimStart(".\").TrimEnd("\")
@@ -1054,7 +1131,13 @@ function Get-TargetMergeAssessment {
         $targetPaths += @($UiChanges | ForEach-Object { Get-MergeParentRelativePath $_.relativePath })
         $targetPaths = @($targetPaths | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) } | Sort-Object -Unique)
         foreach ($statusLine in @(Get-ReleaseLocalStatuses -RelativePaths $targetPaths -Target $Target)) {
-            Add-Risk $risks "Block" "$($Target.name) 目标已有本地状态：$statusLine"
+            if ($statusLine.StartsWith("[mergeinfo-only] ", [System.StringComparison]::Ordinal)) {
+                $reportedPath = Get-SvnStatusReportedPath $statusLine
+                Add-Risk $risks "Warn" "$($Target.name) 仅有 svn:mergeinfo 属性待提交，不影响文件内容：$reportedPath"
+            }
+            else {
+                Add-Risk $risks "Block" "$($Target.name) 目标已有本地状态：$statusLine"
+            }
         }
     }
 
