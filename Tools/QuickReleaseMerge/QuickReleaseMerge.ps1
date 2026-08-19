@@ -552,6 +552,63 @@ function Invoke-Svn {
     return Invoke-ExternalCommand -FilePath $svnExe -Arguments $Arguments -WorkingDirectory $WorkingDirectory
 }
 
+function Invoke-SvnParallel {
+    param([object[]]$Requests)
+
+    $running = @()
+    foreach ($request in @($Requests)) {
+        $startInfo = New-Object System.Diagnostics.ProcessStartInfo
+        $startInfo.FileName = "svn.exe"
+        $startInfo.Arguments = (@($request.arguments) -join " ")
+        $startInfo.WorkingDirectory = [string]$request.workingDirectory
+        $startInfo.UseShellExecute = $false
+        $startInfo.CreateNoWindow = $true
+        $startInfo.RedirectStandardOutput = $true
+        $startInfo.RedirectStandardError = $true
+        try {
+            $startInfo.StandardOutputEncoding = [System.Text.Encoding]::UTF8
+            $startInfo.StandardErrorEncoding = [System.Text.Encoding]::UTF8
+        }
+        catch {
+        }
+
+        $process = New-Object System.Diagnostics.Process
+        $process.StartInfo = $startInfo
+        if (-not $process.Start()) {
+            throw "无法启动 SVN 查询：$($request.key)"
+        }
+
+        $running += [pscustomobject]@{
+            key = [string]$request.key
+            process = $process
+            stdoutTask = $process.StandardOutput.ReadToEndAsync()
+            stderrTask = $process.StandardError.ReadToEndAsync()
+        }
+    }
+
+    $results = @()
+    foreach ($item in $running) {
+        $item.process.WaitForExit()
+        $stdout = [string]$item.stdoutTask.Result
+        $stderr = [string]$item.stderrTask.Result
+        $combined = $stdout
+        if (-not [string]::IsNullOrWhiteSpace($stderr)) {
+            if (-not [string]::IsNullOrWhiteSpace($combined)) {
+                $combined += "`n"
+            }
+            $combined += $stderr
+        }
+        $results += [pscustomobject]@{
+            key = [string]$item.key
+            exitCode = [int]$item.process.ExitCode
+            stdout = $combined.TrimEnd()
+        }
+        $item.process.Dispose()
+    }
+
+    return @($results)
+}
+
 function Normalize-RepoPath {
     param([string]$Path)
 
@@ -562,12 +619,72 @@ function Normalize-RepoPath {
     return $Path.Replace("\", "/").Trim("/")
 }
 
-function Get-RelativeUiPath {
-    param([string]$ChangedPath, $Config)
+function Get-DragonRootFromUiRoot {
+    param([string]$UiRoot)
 
-    $root = Normalize-RepoPath ([string](Get-PropertyValue $Config @("trunkRepoPath")))
+    if ([string]::IsNullOrWhiteSpace($UiRoot)) {
+        return ""
+    }
+
+    try {
+        $fullPath = [System.IO.Path]::GetFullPath($UiRoot).TrimEnd("\", "/")
+        $contentRoot = Split-Path -Parent $fullPath
+        $assetsRoot = Split-Path -Parent $contentRoot
+        $dragonRoot = Split-Path -Parent $assetsRoot
+        if ((Split-Path -Leaf $fullPath) -ieq "UI" -and
+            (Split-Path -Leaf $contentRoot) -ieq "Content" -and
+            (Split-Path -Leaf $assetsRoot) -ieq "Assets") {
+            return $dragonRoot
+        }
+    }
+    catch {
+    }
+
+    return ""
+}
+
+function Get-SourceAreas {
+    param($Config)
+
+    $trunkUiRoot = [string](Get-PropertyValue $Config @("trunkUiRoot"))
+    $trunkRemoteAssetsRoot = [string](Get-PropertyValue $Config @("trunkRemoteAssetsRoot"))
+    if ([string]::IsNullOrWhiteSpace($trunkRemoteAssetsRoot)) {
+        $dragonRoot = Get-DragonRootFromUiRoot $trunkUiRoot
+        if (-not [string]::IsNullOrWhiteSpace($dragonRoot)) {
+            $trunkRemoteAssetsRoot = Join-Path $dragonRoot "RemoteAssets"
+        }
+    }
+
+    return @(
+        [pscustomobject]@{
+            key = "ui"
+            name = "UI"
+            root = $trunkUiRoot
+            svnUrl = [string](Get-PropertyValue $Config @("trunkSvnUrl"))
+            repoPath = [string](Get-PropertyValue $Config @("trunkRepoPath"))
+        },
+        [pscustomobject]@{
+            key = "remoteAssets"
+            name = "远程资源"
+            root = $trunkRemoteAssetsRoot
+            svnUrl = [string](Get-PropertyValue $Config @("trunkRemoteAssetsSvnUrl"))
+            repoPath = [string](Get-PropertyValue $Config @("trunkRemoteAssetsRepoPath"))
+        }
+    )
+}
+
+function Get-SourceAreaByKey {
+    param($Config, [string]$AreaKey)
+
+    return @(Get-SourceAreas $Config | Where-Object { $_.key -eq $AreaKey } | Select-Object -First 1)
+}
+
+function Get-RelativeAreaPath {
+    param([string]$ChangedPath, $Area)
+
+    $root = Normalize-RepoPath ([string]$Area.repoPath)
     if ([string]::IsNullOrWhiteSpace($root)) {
-        $root = "trunk/trunk_cn/Content/UI"
+        return $null
     }
 
     $path = Normalize-RepoPath $ChangedPath
@@ -581,6 +698,29 @@ function Get-RelativeUiPath {
     }
 
     return $null
+}
+
+function Get-SourceAreaForRepoPath {
+    param([string]$ChangedPath, $Config)
+
+    foreach ($area in @(Get-SourceAreas $Config)) {
+        $relativePath = Get-RelativeAreaPath -ChangedPath $ChangedPath -Area $area
+        if ($null -ne $relativePath) {
+            return [pscustomobject]@{
+                area = $area
+                relativePath = [string]$relativePath
+            }
+        }
+    }
+
+    return $null
+}
+
+function Get-RelativeUiPath {
+    param([string]$ChangedPath, $Config)
+
+    $uiArea = Get-SourceAreaByKey -Config $Config -AreaKey "ui"
+    return Get-RelativeAreaPath -ChangedPath $ChangedPath -Area $uiArea
 }
 
 function ConvertTo-LocalRelativePath {
@@ -639,6 +779,21 @@ function Get-RevisionListFromGroup {
     }
 
     return $revisions
+}
+
+function Get-MergeOperations {
+    param($Assessment)
+
+    $operations = @()
+    foreach ($group in @($Assessment.mergeGroups)) {
+        foreach ($revision in @(Get-RevisionListFromGroup $group)) {
+            $operations += [pscustomobject]@{
+                revision = [int]$revision
+                group = $group
+            }
+        }
+    }
+    return @($operations | Sort-Object revision, @{ Expression = { if ($_.group.areaKey -eq "ui") { 0 } else { 1 } } }, @{ Expression = { [string]$_.group.targetPath } })
 }
 
 function Join-SvnUrlPath {
@@ -767,9 +922,9 @@ function Get-TopMergeParents {
 }
 
 function Get-SourceUrlForGroup {
-    param($Config, [string]$ParentRelativePath)
+    param($SourceArea, [string]$ParentRelativePath)
 
-    $trunkUrl = [string](Get-PropertyValue $Config @("trunkSvnUrl"))
+    $trunkUrl = [string]$SourceArea.svnUrl
     $trunkUrl = $trunkUrl.TrimEnd("/")
     if ([string]::IsNullOrWhiteSpace($ParentRelativePath) -or $ParentRelativePath -eq ".") {
         return $trunkUrl
@@ -794,6 +949,19 @@ function Get-ReleaseTargets {
     $targets = @()
 
     $cnRoot = [string](Get-PropertyValue $Config @("releaseUiRoot", "cnReleaseUiRoot"))
+    $cnRemoteAssetsRoot = [string](Get-PropertyValue $Config @("releaseRemoteAssetsRoot", "cnReleaseRemoteAssetsRoot"))
+    if ([string]::IsNullOrWhiteSpace($cnRemoteAssetsRoot)) {
+        $cnDragonRoot = Get-DragonRootFromUiRoot $cnRoot
+        if (-not [string]::IsNullOrWhiteSpace($cnDragonRoot)) {
+            $candidate = Join-Path $cnDragonRoot "RemoteAssets"
+            if (Test-Path -LiteralPath $candidate -PathType Container) {
+                $cnRemoteAssetsRoot = $candidate
+            }
+        }
+        if ([string]::IsNullOrWhiteSpace($cnRemoteAssetsRoot) -and (Test-Path -LiteralPath "G:\Dragon\release\dragon\RemoteAssets" -PathType Container)) {
+            $cnRemoteAssetsRoot = "G:\Dragon\release\dragon\RemoteAssets"
+        }
+    }
     $targets += [pscustomobject]@{
         key = "cn"
         name = "CN release"
@@ -802,9 +970,17 @@ function Get-ReleaseTargets {
         defaultPath = "G:\Dragon\release\dragon\Assets\Content\UI"
         uiRoot = $cnRoot
         svnUrl = [string](Get-PropertyValue $Config @("releaseSvnUrl", "cnReleaseSvnUrl"))
+        remoteAssetsRoot = $cnRemoteAssetsRoot
+        remoteAssetsConfigKey = "releaseRemoteAssetsRoot"
+        remoteAssetsDefaultPath = "G:\Dragon\release\dragon\RemoteAssets"
+        remoteAssetsSvnUrl = [string](Get-PropertyValue $Config @("releaseRemoteAssetsSvnUrl", "cnReleaseRemoteAssetsSvnUrl"))
     }
 
     $naRoot = [string](Get-PropertyValue $Config @("naReleaseUiRoot", "naReleaseRoot"))
+    $naRemoteAssetsRoot = [string](Get-PropertyValue $Config @("naReleaseRemoteAssetsRoot", "naRemoteAssetsRoot"))
+    if ([string]::IsNullOrWhiteSpace($naRemoteAssetsRoot) -and (Test-Path -LiteralPath "G:\Dragon\NA RemoteAssets" -PathType Container)) {
+        $naRemoteAssetsRoot = "G:\Dragon\NA RemoteAssets"
+    }
     $targets += [pscustomobject]@{
         key = "na"
         name = "NA release"
@@ -813,9 +989,37 @@ function Get-ReleaseTargets {
         defaultPath = "G:\Dragon\NA release UI"
         uiRoot = $naRoot
         svnUrl = [string](Get-PropertyValue $Config @("naReleaseSvnUrl"))
+        remoteAssetsRoot = $naRemoteAssetsRoot
+        remoteAssetsConfigKey = "naReleaseRemoteAssetsRoot"
+        remoteAssetsDefaultPath = "G:\Dragon\NA RemoteAssets"
+        remoteAssetsSvnUrl = [string](Get-PropertyValue $Config @("naReleaseRemoteAssetsSvnUrl"))
     }
 
     return @($targets)
+}
+
+function Get-TargetAreaDescriptor {
+    param($Target, [string]$AreaKey)
+
+    if ($AreaKey -eq "remoteAssets") {
+        return [pscustomobject]@{
+            key = "remoteAssets"
+            name = "远程资源"
+            root = [string]$Target.remoteAssetsRoot
+            configKey = [string]$Target.remoteAssetsConfigKey
+            defaultPath = [string]$Target.remoteAssetsDefaultPath
+            svnUrl = [string]$Target.remoteAssetsSvnUrl
+        }
+    }
+
+    return [pscustomobject]@{
+        key = "ui"
+        name = "UI"
+        root = [string]$Target.uiRoot
+        configKey = [string]$Target.configKey
+        defaultPath = [string]$Target.defaultPath
+        svnUrl = [string]$Target.svnUrl
+    }
 }
 
 function Get-TargetAssessmentByKey {
@@ -885,12 +1089,48 @@ function ConvertFrom-SvnLogText {
     return @($entries | Sort-Object revision)
 }
 
+function Merge-SvnLogEntries {
+    param([object[]]$Entries)
+
+    $byRevision = @{}
+    foreach ($entry in @($Entries | Sort-Object revision)) {
+        $revision = [int]$entry.revision
+        if (-not $byRevision.ContainsKey($revision)) {
+            $byRevision[$revision] = [pscustomobject]@{
+                revision = $revision
+                author = [string]$entry.author
+                date = [string]$entry.date
+                message = [string]$entry.message
+                paths = @($entry.paths)
+                searchText = [string]$entry.searchText
+            }
+            continue
+        }
+
+        $current = $byRevision[$revision]
+        $pathMap = @{}
+        foreach ($path in @($current.paths) + @($entry.paths)) {
+            $key = "$([string]$path.action)|$([string]$path.path)"
+            $pathMap[$key] = $path
+        }
+        $current.paths = @($pathMap.Values | Sort-Object path, action)
+        if ([string]::IsNullOrWhiteSpace([string]$current.date)) {
+            $current.date = [string]$entry.date
+        }
+        if ([string]::IsNullOrWhiteSpace([string]$current.searchText)) {
+            $current.searchText = [string]$entry.searchText
+        }
+    }
+
+    return @($byRevision.Values | Sort-Object revision)
+}
+
 function Get-TicketsSvnEntryMap {
     param([object[]]$Tickets, $Config)
 
-    $trunkUrl = [string](Get-PropertyValue $Config @("trunkSvnUrl"))
-    if ([string]::IsNullOrWhiteSpace($trunkUrl)) {
-        throw "Config missing trunkSvnUrl."
+    $sourceAreas = @(Get-SourceAreas $Config | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_.svnUrl) })
+    if ($sourceAreas.Count -eq 0) {
+        throw "Config missing trunk source SVN URLs."
     }
 
     $ticketIds = @($Tickets | ForEach-Object { [string]$_.id } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Sort-Object -Unique)
@@ -912,28 +1152,38 @@ function Get-TicketsSvnEntryMap {
 
     for ($offset = 0; $offset -lt $ticketIds.Count; $offset += $batchSize) {
         $batchIds = @($ticketIds | Select-Object -Skip $offset -First $batchSize)
-        $arguments = @("log", "--xml", "-v")
-        foreach ($ticketId in $batchIds) {
-            $arguments += @("--search", $ticketId)
-        }
-        $arguments += $trunkUrl
-
-        $result = Invoke-Svn -Arguments $arguments -WorkingDirectory ([string]$Config.trunkUiRoot)
-        if ($result.exitCode -ne 0) {
-            throw $result.stdout
-        }
-
-        foreach ($entry in @(ConvertFrom-SvnLogText $result.stdout)) {
+        $requests = @()
+        foreach ($sourceArea in $sourceAreas) {
+            $arguments = @("log", "--xml", "-v")
             foreach ($ticketId in $batchIds) {
-                if ([string]$entry.searchText -like "*$ticketId*") {
-                    $entryMap[$ticketId] = @($entryMap[$ticketId]) + $entry
+                $arguments += @("--search", $ticketId)
+            }
+            $arguments += [string]$sourceArea.svnUrl
+            $requests += [pscustomobject]@{
+                key = [string]$sourceArea.key
+                arguments = @($arguments)
+                workingDirectory = [string]$Config.trunkUiRoot
+            }
+        }
+
+        foreach ($result in @(Invoke-SvnParallel -Requests $requests)) {
+            if ($result.exitCode -ne 0) {
+                $areaName = @($sourceAreas | Where-Object { $_.key -eq $result.key } | ForEach-Object { $_.name } | Select-Object -First 1)
+                throw "读取 trunk $areaName SVN 日志失败：$($result.stdout)"
+            }
+
+            foreach ($entry in @(ConvertFrom-SvnLogText $result.stdout)) {
+                foreach ($ticketId in $batchIds) {
+                    if ([string]$entry.searchText -like "*$ticketId*") {
+                        $entryMap[$ticketId] = @($entryMap[$ticketId]) + $entry
+                    }
                 }
             }
         }
     }
 
     foreach ($ticketId in $ticketIds) {
-        $entryMap[$ticketId] = @($entryMap[$ticketId] | Sort-Object revision -Unique)
+        $entryMap[$ticketId] = @(Merge-SvnLogEntries @($entryMap[$ticketId]))
     }
     return $entryMap
 }
@@ -962,7 +1212,11 @@ function Get-SvnStatusReportedPath {
     if ($rawStatusLine.Length -le 8) {
         return ""
     }
-    return $rawStatusLine.Substring(8).Trim().Replace("/", "\").TrimStart(".\")
+    $reportedPath = $rawStatusLine.Substring(8).Trim().Replace("/", "\")
+    if ($reportedPath -eq ".") {
+        return "."
+    }
+    return $reportedPath.TrimStart(".\")
 }
 
 function Test-SvnStatusIsMergeInfoOnly {
@@ -1026,14 +1280,15 @@ function ConvertTo-ReleaseStatusLines {
 }
 
 function Get-ReleaseLocalStatuses {
-    param([string[]]$RelativePaths, $Target)
+    param([string[]]$RelativePaths, $TargetArea)
 
     $localPaths = @($RelativePaths | ForEach-Object { ConvertTo-LocalRelativePath $_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Sort-Object -Unique)
     if ($localPaths.Count -eq 0) {
         return @()
     }
 
-    $cacheKey = ([string]$Target.uiRoot).TrimEnd("\", "/").ToLowerInvariant()
+    $targetRoot = [string]$TargetArea.root
+    $cacheKey = $targetRoot.TrimEnd("\", "/").ToLowerInvariant()
     if ($script:ReleaseStatusCache.ContainsKey($cacheKey)) {
         $cachedStatuses = $script:ReleaseStatusCache[$cacheKey]
         $hasAllPaths = $true
@@ -1049,7 +1304,7 @@ function Get-ReleaseLocalStatuses {
     }
 
     $arguments = @("status", "--quiet", "--") + $localPaths
-    $result = Invoke-Svn -Arguments $arguments -WorkingDirectory ([string]$Target.uiRoot)
+    $result = Invoke-Svn -Arguments $arguments -WorkingDirectory $targetRoot
     if ($result.exitCode -ne 0) {
         return @("svn status failed: $($result.stdout)")
     }
@@ -1058,13 +1313,13 @@ function Get-ReleaseLocalStatuses {
         return @()
     }
 
-    return @(ConvertTo-ReleaseStatusLines -StatusText $result.stdout -TargetRoot ([string]$Target.uiRoot))
+    return @(ConvertTo-ReleaseStatusLines -StatusText $result.stdout -TargetRoot $targetRoot)
 }
 
 function Initialize-ReleaseStatusCache {
-    param([string[]]$RelativePaths, $Target)
+    param([string[]]$RelativePaths, $TargetArea)
 
-    $targetRoot = [string]$Target.uiRoot
+    $targetRoot = [string]$TargetArea.root
     if ([string]::IsNullOrWhiteSpace($targetRoot) -or -not (Test-Path -LiteralPath $targetRoot -PathType Container)) {
         return
     }
@@ -1111,49 +1366,72 @@ function Initialize-ReleaseStatusCache {
 }
 
 function Get-TargetMergeAssessment {
-    param($Target, $Config, $UiChanges, $BaseRisks)
+    param($Target, $Config, $Changes, $BaseRisks)
 
     $risks = New-Object System.Collections.Generic.List[object]
     foreach ($risk in @($BaseRisks)) {
         Add-Risk $risks ([string]$risk.level) ([string]$risk.message)
     }
 
-    $targetRoot = [string]$Target.uiRoot
-    if ([string]::IsNullOrWhiteSpace($targetRoot)) {
-        Add-Risk $risks "Warn" "$($Target.name) UI 目录未配置，点击 merge 时会提示选择。"
-    }
-    elseif (-not (Test-Path -LiteralPath $targetRoot -PathType Container)) {
-        Add-Risk $risks "Warn" "$($Target.name) UI 目录不可用，点击 merge 时会提示重新选择：$targetRoot"
-    }
-    else {
-        $targetPaths = @()
-        $targetPaths += @($UiChanges | ForEach-Object { $_.relativePath })
-        $targetPaths += @($UiChanges | ForEach-Object { Get-MergeParentRelativePath $_.relativePath })
-        $targetPaths = @($targetPaths | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) } | Sort-Object -Unique)
-        foreach ($statusLine in @(Get-ReleaseLocalStatuses -RelativePaths $targetPaths -Target $Target)) {
-            if ($statusLine.StartsWith("[mergeinfo-only] ", [System.StringComparison]::Ordinal)) {
-                $reportedPath = Get-SvnStatusReportedPath $statusLine
-                Add-Risk $risks "Warn" "$($Target.name) 仅有 svn:mergeinfo 属性待提交，不影响文件内容：$reportedPath"
-            }
-            else {
-                Add-Risk $risks "Block" "$($Target.name) 目标已有本地状态：$statusLine"
-            }
-        }
-    }
-
-    $parents = @(Get-TopMergeParents @($UiChanges | ForEach-Object { Get-MergeParentRelativePath $_.relativePath }))
     $mergeGroups = @()
-    foreach ($parent in $parents) {
-        $revisions = @($UiChanges | Where-Object { Test-RelativePathUnderParent -RelativePath ([string]$_.relativePath) -ParentRelativePath $parent } | ForEach-Object { [int]$_.revision } | Sort-Object -Unique)
-        if ($revisions.Count -eq 0) { continue }
-
-        $mergeGroups += [pscustomobject]@{
-            parentRelativePath = $parent
-            revisions = @($revisions)
-            revisionSpec = ($revisions -join ",")
-            sourceUrl = Get-SourceUrlForGroup $Config $parent
-            targetPath = Get-LocalTargetForGroup $parent
+    $areaKeys = @($Changes | ForEach-Object { [string]$_.areaKey } | Sort-Object @{ Expression = { if ($_ -eq "ui") { 0 } else { 1 } } }, @{ Expression = { $_ } } -Unique)
+    foreach ($areaKey in $areaKeys) {
+        $areaChanges = @($Changes | Where-Object { $_.areaKey -eq $areaKey })
+        if ($areaChanges.Count -eq 0) {
+            continue
         }
+
+        $sourceArea = Get-SourceAreaByKey -Config $Config -AreaKey $areaKey
+        $targetArea = Get-TargetAreaDescriptor -Target $Target -AreaKey $areaKey
+        $targetRoot = [string]$targetArea.root
+        if ([string]::IsNullOrWhiteSpace($targetRoot)) {
+            Add-Risk $risks "Warn" "$($Target.name) $($targetArea.name) 目录未配置，点击 merge 时会提示选择。"
+        }
+        elseif (-not (Test-Path -LiteralPath $targetRoot -PathType Container)) {
+            Add-Risk $risks "Warn" "$($Target.name) $($targetArea.name) 目录不可用，点击 merge 时会提示重新选择：$targetRoot"
+        }
+        else {
+            $targetPaths = @()
+            $targetPaths += @($areaChanges | ForEach-Object { $_.relativePath })
+            $targetPaths += @($areaChanges | ForEach-Object { Get-MergeParentRelativePath $_.relativePath })
+            $targetPaths = @($targetPaths | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) } | Sort-Object -Unique)
+            foreach ($statusLine in @(Get-ReleaseLocalStatuses -RelativePaths $targetPaths -TargetArea $targetArea)) {
+                if ($statusLine.StartsWith("[mergeinfo-only] ", [System.StringComparison]::Ordinal)) {
+                    $reportedPath = Get-SvnStatusReportedPath $statusLine
+                    Add-Risk $risks "Warn" "$($Target.name) $($targetArea.name) 仅有 SVN 合并记录待提交，不影响文件内容：$reportedPath"
+                }
+                else {
+                    Add-Risk $risks "Block" "$($Target.name) $($targetArea.name) 目标已有本地状态：$statusLine"
+                }
+            }
+        }
+
+        if ($null -eq $sourceArea -or [string]::IsNullOrWhiteSpace([string]$sourceArea.svnUrl)) {
+            Add-Risk $risks "Block" "未配置 trunk $($targetArea.name) SVN URL。"
+            continue
+        }
+
+        $parents = @(Get-TopMergeParents @($areaChanges | ForEach-Object { Get-MergeParentRelativePath $_.relativePath }))
+        foreach ($parent in $parents) {
+            $revisions = @($areaChanges | Where-Object { Test-RelativePathUnderParent -RelativePath ([string]$_.relativePath) -ParentRelativePath $parent } | ForEach-Object { [int]$_.revision } | Sort-Object -Unique)
+            if ($revisions.Count -eq 0) { continue }
+
+            $mergeGroups += [pscustomobject]@{
+                areaKey = [string]$areaKey
+                areaName = [string]$targetArea.name
+                parentRelativePath = $parent
+                revisions = @($revisions)
+                revisionSpec = ($revisions -join ",")
+                sourceUrl = Get-SourceUrlForGroup $sourceArea $parent
+                targetRoot = $targetRoot
+                targetPath = Get-LocalTargetForGroup $parent
+                targetSvnUrl = [string]$targetArea.svnUrl
+            }
+        }
+    }
+
+    if ($Changes.Count -gt 0 -and $mergeGroups.Count -eq 0 -and @($risks | Where-Object { $_.level -eq "Block" }).Count -eq 0) {
+        Add-Risk $risks "Block" "没有生成可执行的 merge 路径。"
     }
 
     $hasBlock = @($risks | Where-Object { $_.level -eq "Block" }).Count -gt 0
@@ -1180,6 +1458,7 @@ function Get-TargetMergeAssessment {
         merged = $false
         commitRequested = $false
         commitRevision = 0
+        commitRevisionText = ""
         flowDone = $false
     }
 }
@@ -1189,7 +1468,7 @@ function Get-TicketAnalysis {
 
     $risks = New-Object System.Collections.Generic.List[object]
     $entries = @()
-    $uiChanges = @()
+    $changes = @()
     $outsidePaths = @()
 
     if ($PSBoundParameters.ContainsKey("SvnEntries")) {
@@ -1200,7 +1479,7 @@ function Get-TicketAnalysis {
             $entries = @(Get-TicketSvnEntries $Ticket $Config)
         }
         catch {
-            Add-Risk $risks "Block" "读取 trunk UI SVN 日志失败：$($_.Exception.Message)"
+            Add-Risk $risks "Block" "读取 trunk UI/远程资源 SVN 日志失败：$($_.Exception.Message)"
         }
     }
 
@@ -1208,43 +1487,50 @@ function Get-TicketAnalysis {
         foreach ($path in @($entry.paths)) {
             if ([string]::IsNullOrWhiteSpace($path.path)) { continue }
 
-            $relativePath = Get-RelativeUiPath $path.path $Config
-            if ($null -eq $relativePath) {
+            $areaMatch = Get-SourceAreaForRepoPath -ChangedPath $path.path -Config $Config
+            if ($null -eq $areaMatch) {
                 $outsidePaths += $path.path
                 continue
             }
 
-            $uiChanges += [pscustomobject]@{
+            $changes += [pscustomobject]@{
                 revision = [int]$entry.revision
                 action = [string]$path.action
                 repoPath = [string]$path.path
-                relativePath = [string]$relativePath
+                areaKey = [string]$areaMatch.area.key
+                areaName = [string]$areaMatch.area.name
+                relativePath = [string]$areaMatch.relativePath
             }
         }
     }
 
+    $changes = @($changes | Sort-Object revision, areaKey, repoPath, action -Unique)
+
     if ($entries.Count -eq 0 -and $risks.Count -eq 0) {
-        Add-Risk $risks "Block" "没有找到包含单号 #$($Ticket.id) 的 trunk UI 提交。"
+        Add-Risk $risks "Block" "没有找到包含单号 #$($Ticket.id) 的 trunk UI/远程资源提交。"
     }
 
-    if ($uiChanges.Count -eq 0 -and $entries.Count -gt 0) {
-        Add-Risk $risks "Block" "找到单号提交，但没有 trunk UI 路径变更。"
+    if ($changes.Count -eq 0 -and $entries.Count -gt 0) {
+        Add-Risk $risks "Block" "找到单号提交，但没有 trunk UI 或远程资源路径变更。"
     }
 
     $outsidePaths = @($outsidePaths | Sort-Object -Unique)
     if ($outsidePaths.Count -gt 0) {
-        Add-Risk $risks "Warn" "提交含 UI 外路径 $($outsidePaths.Count) 个，仅会合入 UI 路径。"
+        Add-Risk $risks "Warn" "提交含 UI/远程资源之外的路径 $($outsidePaths.Count) 个，这些路径不会合入。"
     }
 
-    $parents = @($uiChanges | ForEach-Object { Get-MergeParentRelativePath $_.relativePath } | Sort-Object -Unique)
-    foreach ($parent in $parents) {
-        if ($parent -eq ".") {
-            Add-Risk $risks "Warn" "包含 UI 根目录变更，可能受 mixed-revision 工作副本影响。"
+    foreach ($areaKey in @($changes | ForEach-Object { $_.areaKey } | Sort-Object -Unique)) {
+        $areaChanges = @($changes | Where-Object { $_.areaKey -eq $areaKey })
+        foreach ($parent in @($areaChanges | ForEach-Object { Get-MergeParentRelativePath $_.relativePath } | Sort-Object -Unique)) {
+            if ($parent -eq ".") {
+                $areaName = @($areaChanges | Select-Object -First 1 | ForEach-Object { $_.areaName })
+                Add-Risk $risks "Warn" "包含 $areaName 根目录变更，可能受 mixed-revision 工作副本影响。"
+            }
         }
     }
 
-    $revisionList = @($uiChanges | ForEach-Object { [int]$_.revision } | Sort-Object -Unique)
-    $latestEntry = @($entries | Sort-Object revision -Descending | Select-Object -First 1)
+    $revisionList = @($changes | ForEach-Object { [int]$_.revision } | Sort-Object -Unique)
+    $latestEntry = @($entries | Where-Object { $revisionList -contains [int]$_.revision } | Sort-Object revision -Descending | Select-Object -First 1)
     $lastRevision = 0
     $lastCommitTime = "无"
     if ($latestEntry.Count -gt 0) {
@@ -1255,9 +1541,20 @@ function Get-TicketAnalysis {
         }
     }
     $riskList = @($risks | ForEach-Object { $_ })
+    $changeAreaKeys = @($changes | ForEach-Object { [string]$_.areaKey } | Sort-Object @{ Expression = { if ($_ -eq "ui") { 0 } else { 1 } } }, @{ Expression = { $_ } } -Unique)
+    $changeScope = "无"
+    if ($changeAreaKeys -contains "ui" -and $changeAreaKeys -contains "remoteAssets") {
+        $changeScope = "UI + 远程资源"
+    }
+    elseif ($changeAreaKeys -contains "ui") {
+        $changeScope = "UI"
+    }
+    elseif ($changeAreaKeys -contains "remoteAssets") {
+        $changeScope = "远程资源"
+    }
     $targetAssessments = @()
     foreach ($target in @(Get-ReleaseTargets $Config)) {
-        $targetAssessments += Get-TargetMergeAssessment -Target $target -Config $Config -UiChanges @($uiChanges) -BaseRisks @($riskList)
+        $targetAssessments += Get-TargetMergeAssessment -Target $target -Config $Config -Changes @($changes) -BaseRisks @($riskList)
     }
     $defaultAssessment = $targetAssessments | Where-Object { $_.target.key -eq "cn" } | Select-Object -First 1
     if ($null -eq $defaultAssessment) {
@@ -1271,7 +1568,12 @@ function Get-TicketAnalysis {
     $analysis | Add-Member -MemberType NoteProperty -Name revisions -Value @($revisionList)
     $analysis | Add-Member -MemberType NoteProperty -Name lastRevision -Value $lastRevision
     $analysis | Add-Member -MemberType NoteProperty -Name lastCommitTime -Value $lastCommitTime
-    $analysis | Add-Member -MemberType NoteProperty -Name uiChanges -Value @($uiChanges)
+    $analysis | Add-Member -MemberType NoteProperty -Name changeScope -Value $changeScope
+    $analysis | Add-Member -MemberType NoteProperty -Name changeAreaKeys -Value @($changeAreaKeys)
+    $analysis | Add-Member -MemberType NoteProperty -Name changes -Value @($changes)
+    $analysis | Add-Member -MemberType NoteProperty -Name uiChanges -Value @($changes | Where-Object { $_.areaKey -eq "ui" })
+    $analysis | Add-Member -MemberType NoteProperty -Name remoteAssetChanges -Value @($changes | Where-Object { $_.areaKey -eq "remoteAssets" })
+    $analysis | Add-Member -MemberType NoteProperty -Name svnEntries -Value @($entries)
     $analysis | Add-Member -MemberType NoteProperty -Name outsidePaths -Value @($outsidePaths)
     $analysis | Add-Member -MemberType NoteProperty -Name mergeGroups -Value @($defaultAssessment.mergeGroups)
     $analysis | Add-Member -MemberType NoteProperty -Name risks -Value @($defaultAssessment.risks)
@@ -1399,10 +1701,11 @@ function Invoke-MergeDryRun {
     param($Assessment, [switch]$AllowConflicts)
 
     $outputs = @()
-    foreach ($group in @($Assessment.mergeGroups)) {
-        foreach ($revision in @(Get-RevisionListFromGroup $group)) {
-            $result = Invoke-Svn -Arguments @("merge", "--dry-run", "-c", [string]$revision, [string]$group.sourceUrl, [string]$group.targetPath) -WorkingDirectory ([string]$Assessment.target.uiRoot)
-            $outputs += "[$($group.targetPath)] r$revision`n$($result.stdout)"
+    foreach ($operation in @(Get-MergeOperations $Assessment)) {
+            $group = $operation.group
+            $revision = [int]$operation.revision
+            $result = Invoke-Svn -Arguments @("merge", "--dry-run", "-c", [string]$revision, [string]$group.sourceUrl, [string]$group.targetPath) -WorkingDirectory ([string]$group.targetRoot)
+            $outputs += "[$($group.areaName)\$($group.targetPath)] r$revision`n$($result.stdout)"
             $hasConflict = Test-DryRunOutputHasConflict $result.stdout
             if ($result.exitCode -ne 0) {
                 if ($AllowConflicts -and $hasConflict) {
@@ -1414,7 +1717,6 @@ function Invoke-MergeDryRun {
             if ($hasConflict -and -not $AllowConflicts) {
                 throw "dry-run 发现冲突：$($result.stdout)"
             }
-        }
     }
 
     return ($outputs -join "`n`n")
@@ -1424,16 +1726,17 @@ function Invoke-ActualMerge {
     param($Assessment, [switch]$AcceptTheirsFull)
 
     $outputs = @()
-    foreach ($group in @($Assessment.mergeGroups)) {
-        foreach ($revision in @(Get-RevisionListFromGroup $group)) {
+    foreach ($operation in @(Get-MergeOperations $Assessment)) {
+            $group = $operation.group
+            $revision = [int]$operation.revision
             $arguments = @("merge")
             if ($AcceptTheirsFull) {
                 $arguments += @("--accept", "theirs-full")
             }
             $arguments += @("-c", [string]$revision, [string]$group.sourceUrl, [string]$group.targetPath)
 
-            $result = Invoke-Svn -Arguments $arguments -WorkingDirectory ([string]$Assessment.target.uiRoot)
-            $outputs += "[$($group.targetPath)] r$revision`n$($result.stdout)"
+            $result = Invoke-Svn -Arguments $arguments -WorkingDirectory ([string]$group.targetRoot)
+            $outputs += "[$($group.areaName)\$($group.targetPath)] r$revision`n$($result.stdout)"
             if ($result.exitCode -ne 0) {
                 if ($AcceptTheirsFull -and (Test-DryRunOutputHasConflict $result.stdout)) {
                     try {
@@ -1443,7 +1746,8 @@ function Invoke-ActualMerge {
                             revisionSpec = [string]$revision
                             revisions = @($revision)
                         }
-                        $resolveOutput = Resolve-SvnConflictsWithTrunk -WorkingDirectory ([string]$Assessment.target.uiRoot) -Group $singleRevisionGroup
+                        $singleRevisionGroup | Add-Member -MemberType NoteProperty -Name areaName -Value ([string]$group.areaName)
+                        $resolveOutput = Resolve-SvnConflictsWithTrunk -WorkingDirectory ([string]$group.targetRoot) -Group $singleRevisionGroup
                         $outputs += "[$($group.targetPath)] r$revision resolve conflicts with trunk`n$resolveOutput"
                         continue
                     }
@@ -1462,14 +1766,14 @@ function Invoke-ActualMerge {
                         revisionSpec = [string]$revision
                         revisions = @($revision)
                     }
-                    $resolveOutput = Resolve-SvnConflictsWithTrunk -WorkingDirectory ([string]$Assessment.target.uiRoot) -Group $singleRevisionGroup
+                    $singleRevisionGroup | Add-Member -MemberType NoteProperty -Name areaName -Value ([string]$group.areaName)
+                    $resolveOutput = Resolve-SvnConflictsWithTrunk -WorkingDirectory ([string]$group.targetRoot) -Group $singleRevisionGroup
                     $outputs += "[$($group.targetPath)] r$revision resolve conflicts with trunk`n$resolveOutput"
                 }
                 else {
                     throw "merge 后发现冲突提示：$($result.stdout)"
                 }
             }
-        }
     }
 
     return ($outputs -join "`n`n")
@@ -1551,38 +1855,75 @@ function Resolve-TortoiseProcPath {
     throw "找不到 TortoiseSVN 提交程序：$configuredPath"
 }
 
-function Invoke-TortoiseSvnCommitDialog {
-    param($Config, $Target)
+function Get-AssessmentTargetAreas {
+    param($Assessment)
 
-    $targetRoot = [System.IO.Path]::GetFullPath([string]$Target.uiRoot)
-    if (-not (Test-Path -LiteralPath $targetRoot -PathType Container)) {
-        throw "$($Target.name) UI 目录不存在：$targetRoot"
+    $areaMap = @{}
+    foreach ($group in @($Assessment.mergeGroups)) {
+        $areaKey = [string]$group.areaKey
+        if ([string]::IsNullOrWhiteSpace($areaKey) -or $areaMap.ContainsKey($areaKey)) {
+            continue
+        }
+        $areaMap[$areaKey] = [pscustomobject]@{
+            key = $areaKey
+            name = [string]$group.areaName
+            root = [string]$group.targetRoot
+            svnUrl = [string]$group.targetSvnUrl
+        }
+    }
+    return @($areaMap.Values | Sort-Object @{ Expression = { if ($_.key -eq "ui") { 0 } else { 1 } } }, key)
+}
+
+function Invoke-TortoiseSvnCommitDialogs {
+    param($Config, $Assessment)
+
+    $targetAreas = @(Get-AssessmentTargetAreas $Assessment)
+    if ($targetAreas.Count -eq 0) {
+        throw "没有找到需要提交的目标工作副本。"
+    }
+
+    $commitTargets = @()
+    foreach ($targetArea in $targetAreas) {
+        $targetRoot = [System.IO.Path]::GetFullPath([string]$targetArea.root)
+        if (-not (Test-Path -LiteralPath $targetRoot -PathType Container)) {
+            throw "$($Assessment.target.name) $($targetArea.name) 目录不存在：$targetRoot"
+        }
+        $commitTargets += [pscustomobject]@{
+            area = $targetArea
+            root = $targetRoot
+        }
     }
 
     $tortoiseProc = Resolve-TortoiseProcPath $Config
-    $arguments = "/command:commit /path:`"$targetRoot`""
-    Start-Process -FilePath $tortoiseProc -ArgumentList $arguments -WorkingDirectory $targetRoot | Out-Null
+    foreach ($commitTarget in $commitTargets) {
+        $targetArea = $commitTarget.area
+        $targetRoot = [string]$commitTarget.root
+        $arguments = "/command:commit /path:`"$targetRoot`""
+        Start-Process -FilePath $tortoiseProc -ArgumentList $arguments -WorkingDirectory $targetRoot | Out-Null
+    }
+
+    return @($targetAreas | ForEach-Object { $_.name })
 }
 
 function Get-TargetCommitEntries {
-    param($Ticket, $Target)
+    param($Ticket, $Target, $TargetArea)
 
-    $logTarget = [string](Get-PropertyValue $Target @("svnUrl"))
+    $logTarget = [string]$TargetArea.svnUrl
     if ([string]::IsNullOrWhiteSpace($logTarget)) {
-        $infoResult = Invoke-Svn -Arguments @("info", [string]$Target.uiRoot) -WorkingDirectory ([string]$Target.uiRoot)
+        $infoResult = Invoke-Svn -Arguments @("info", [string]$TargetArea.root) -WorkingDirectory ([string]$TargetArea.root)
         if ($infoResult.exitCode -ne 0) {
-            throw "读取 $($Target.name) SVN URL 失败：$($infoResult.stdout)"
+            throw "读取 $($Target.name) $($TargetArea.name) SVN URL 失败：$($infoResult.stdout)"
         }
         $urlMatch = [regex]::Match($infoResult.stdout, "(?m)^URL:\s*(?<url>\S+)\s*$")
         if (-not $urlMatch.Success) {
-            throw "无法从 svn info 中解析 $($Target.name) URL。"
+            throw "无法从 svn info 中解析 $($Target.name) $($TargetArea.name) URL。"
         }
         $logTarget = [string]$urlMatch.Groups["url"].Value
     }
 
-    $result = Invoke-Svn -Arguments @("log", "--xml", "-v", "--search", [string]$Ticket.id, $logTarget) -WorkingDirectory ([string]$Target.uiRoot)
+    $result = Invoke-Svn -Arguments @("log", "--xml", "-v", "--search", [string]$Ticket.id, $logTarget) -WorkingDirectory ([string]$TargetArea.root)
     if ($result.exitCode -ne 0) {
-        throw "读取 $($Target.name) SVN 提交日志失败：$($result.stdout)"
+        throw "读取 $($Target.name) $($TargetArea.name) SVN 提交日志失败：$($result.stdout)"
     }
 
     $entries = @()
@@ -1614,17 +1955,20 @@ function Assert-TargetCommitted {
     param($Analysis, $Assessment)
 
     $dirty = @()
-    $statusPaths = @()
-    $statusPaths += @($Analysis.uiChanges | ForEach-Object { $_.relativePath })
-    $statusPaths += @($Assessment.mergeGroups | ForEach-Object { $_.targetPath })
-    foreach ($relativePath in @($statusPaths | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) } | Sort-Object -Unique)) {
-        $localPath = ConvertTo-LocalRelativePath $relativePath
-        $status = Invoke-Svn -Arguments @("status", "--quiet", $localPath) -WorkingDirectory ([string]$Assessment.target.uiRoot)
+    $statusChecks = @{}
+    foreach ($group in @($Assessment.mergeGroups)) {
+        $localPath = ConvertTo-LocalRelativePath ([string]$group.targetPath)
+        $checkKey = "$([string]$group.targetRoot)|$localPath"
+        if ($statusChecks.ContainsKey($checkKey)) {
+            continue
+        }
+        $statusChecks[$checkKey] = $true
+        $status = Invoke-Svn -Arguments @("status", "--quiet", $localPath) -WorkingDirectory ([string]$group.targetRoot)
         if ($status.exitCode -ne 0) {
-            throw "检查 $($Assessment.target.name) 本地状态失败：$($status.stdout)"
+            throw "检查 $($Assessment.target.name) $($group.areaName) 本地状态失败：$($status.stdout)"
         }
         if (-not [string]::IsNullOrWhiteSpace($status.stdout)) {
-            $dirty += "$localPath`n$($status.stdout)"
+            $dirty += "$($group.areaName)\$localPath`n$($status.stdout)"
         }
     }
 
@@ -1632,15 +1976,29 @@ function Assert-TargetCommitted {
         throw "$($Assessment.target.name) 还有未提交状态，暂不标记已提交：`r`n$($dirty -join "`r`n")"
     }
 
-    $entries = @(Get-TargetCommitEntries $Analysis.ticket $Assessment.target)
-    if ($entries.Count -eq 0) {
-        throw "$($Assessment.target.name) SVN 日志里还没找到单号 #$($Analysis.ticket.id)。请确认 TortoiseSVN 已提交且 message 包含单号。"
+    $areaCommits = @()
+    foreach ($targetArea in @(Get-AssessmentTargetAreas $Assessment)) {
+        $entries = @(Get-TargetCommitEntries -Ticket $Analysis.ticket -Target $Assessment.target -TargetArea $targetArea)
+        if ($entries.Count -eq 0) {
+            throw "$($Assessment.target.name) $($targetArea.name) SVN 日志里还没找到单号 #$($Analysis.ticket.id)。请确认对应 TortoiseSVN 窗口已提交且 message 包含单号。"
+        }
+
+        $latest = $entries | Sort-Object revision -Descending | Select-Object -First 1
+        $areaCommits += [pscustomobject]@{
+            areaKey = [string]$targetArea.key
+            areaName = [string]$targetArea.name
+            revision = [int]$latest.revision
+            paths = @($latest.paths)
+        }
     }
 
-    $latest = $entries | Sort-Object revision -Descending | Select-Object -First 1
+    $revisions = @($areaCommits | ForEach-Object { [int]$_.revision } | Sort-Object -Unique)
     return [pscustomobject]@{
-        revision = [int]$latest.revision
-        paths = @($latest.paths)
+        revision = [int](@($revisions | Sort-Object -Descending | Select-Object -First 1)[0])
+        revisions = @($revisions)
+        summary = (@($areaCommits | ForEach-Object { "$($_.areaName) r$($_.revision)" }) -join "；")
+        areaCommits = @($areaCommits)
+        paths = @($areaCommits | ForEach-Object { $_.paths } | ForEach-Object { $_ })
     }
 }
 
@@ -1694,7 +2052,7 @@ function Show-QuickMergeDialog {
     $uiSettings = Read-JsonFile $UiSettingsPath
 
     $form = New-Object System.Windows.Forms.Form
-    $form.Text = "UI 快速 merge 到 CN/NA release"
+    $form.Text = "UI/远程资源快速 merge 到 CN/NA release"
     $form.StartPosition = "CenterScreen"
     $form.Size = New-Object System.Drawing.Size(1280, 700)
     $form.MinimumSize = New-Object System.Drawing.Size(1020, 560)
@@ -1775,7 +2133,8 @@ function Show-QuickMergeDialog {
         @("type", "类型", 55),
         @("node", "节点", 130),
         @("title", "标题", 260),
-        @("revisions", "UI revision", 100),
+        @("scope", "变更范围", 110),
+        @("revisions", "trunk revision", 110),
         @("lastCommitTime", "最后提交时间", 145),
         @("cnRisk", "CN 风险", 220),
         @("naRisk", "NA 风险", 220)
@@ -1787,7 +2146,7 @@ function Show-QuickMergeDialog {
         $col.Width = [int](& $getSavedColumnWidth ([string]$column[0]) ([int]$column[2]))
         $col.SortMode = [System.Windows.Forms.DataGridViewColumnSortMode]::NotSortable
         if ($col.Name -eq "lastCommitTime") {
-            $col.ToolTipText = "列表默认按最后 UI revision 从旧到新排列"
+            $col.ToolTipText = "列表默认按最后匹配的 trunk revision 从旧到新排列"
         }
         [void]$grid.Columns.Add($col)
     }
@@ -1905,7 +2264,7 @@ function Show-QuickMergeDialog {
         }
     }
 
-    $ensureTargetPath = {
+    $ensureTargetPaths = {
         param($analysis, [string]$targetKey)
 
         $assessment = Get-TargetAssessmentByKey $analysis $targetKey
@@ -1915,51 +2274,52 @@ function Show-QuickMergeDialog {
         }
 
         $target = $assessment.target
-        $currentPath = [string]$target.uiRoot
-        if (-not [string]::IsNullOrWhiteSpace($currentPath) -and (Test-Path -LiteralPath $currentPath -PathType Container)) {
-            return $assessment
-        }
-
-        $dialog = New-Object System.Windows.Forms.FolderBrowserDialog
-        $dialog.Description = "选择 $($target.name) UI 工作副本目录"
-        $dialog.ShowNewFolderButton = $false
-
-        $defaultPath = [string]$target.defaultPath
-        if (-not [string]::IsNullOrWhiteSpace($currentPath) -and (Test-Path -LiteralPath $currentPath -PathType Container)) {
-            $dialog.SelectedPath = $currentPath
-        }
-        elseif (-not [string]::IsNullOrWhiteSpace($defaultPath) -and (Test-Path -LiteralPath $defaultPath -PathType Container)) {
-            $dialog.SelectedPath = $defaultPath
-        }
-
-        $result = $dialog.ShowDialog($form)
-        if ($result -ne [System.Windows.Forms.DialogResult]::OK) {
-            return $null
-        }
-
-        $selectedPath = [System.IO.Path]::GetFullPath($dialog.SelectedPath).TrimEnd("\", "/")
-        if (-not (Test-Path -LiteralPath $selectedPath -PathType Container)) {
-            [System.Windows.Forms.MessageBox]::Show("$($target.name) UI 目录不存在：$selectedPath", "路径无效", "OK", "Warning") | Out-Null
-            return $null
-        }
-
-        $configKey = [string]$target.configKey
-        if ([string]::IsNullOrWhiteSpace($configKey)) {
-            if ($targetKey -eq "na") {
-                $configKey = "naReleaseUiRoot"
+        $savedPaths = New-Object System.Collections.Generic.List[string]
+        foreach ($areaKey in @($analysis.changeAreaKeys)) {
+            $target = @(Get-ReleaseTargets $Config | Where-Object { $_.key -eq $targetKey } | Select-Object -First 1)
+            $targetArea = Get-TargetAreaDescriptor -Target $target -AreaKey $areaKey
+            $currentPath = [string]$targetArea.root
+            if (-not [string]::IsNullOrWhiteSpace($currentPath) -and (Test-Path -LiteralPath $currentPath -PathType Container)) {
+                continue
             }
-            else {
-                $configKey = "releaseUiRoot"
-            }
-        }
-        $Config | Add-Member -MemberType NoteProperty -Name $configKey -Value $selectedPath -Force
-        Save-Config $Config
 
-        $updatedAnalysis = Get-TicketAnalysis $analysis.ticket $Config
+            $dialog = New-Object System.Windows.Forms.FolderBrowserDialog
+            $dialog.Description = "选择 $($target.name) $($targetArea.name) 工作副本目录"
+            $dialog.ShowNewFolderButton = $false
+
+            $defaultPath = [string]$targetArea.defaultPath
+            if (-not [string]::IsNullOrWhiteSpace($defaultPath) -and (Test-Path -LiteralPath $defaultPath -PathType Container)) {
+                $dialog.SelectedPath = $defaultPath
+            }
+
+            $result = $dialog.ShowDialog($form)
+            if ($result -ne [System.Windows.Forms.DialogResult]::OK) {
+                return $null
+            }
+
+            $selectedPath = [System.IO.Path]::GetFullPath($dialog.SelectedPath).TrimEnd("\", "/")
+            if (-not (Test-Path -LiteralPath $selectedPath -PathType Container)) {
+                [System.Windows.Forms.MessageBox]::Show("$($target.name) $($targetArea.name) 目录不存在：$selectedPath", "路径无效", "OK", "Warning") | Out-Null
+                return $null
+            }
+
+            $configKey = [string]$targetArea.configKey
+            if ([string]::IsNullOrWhiteSpace($configKey)) {
+                [System.Windows.Forms.MessageBox]::Show("无法保存 $($target.name) $($targetArea.name) 路径配置。", "配置错误", "OK", "Error") | Out-Null
+                return $null
+            }
+            $Config | Add-Member -MemberType NoteProperty -Name $configKey -Value $selectedPath -Force
+            Save-Config $Config
+            $savedPaths.Add("$($targetArea.name)：$selectedPath") | Out-Null
+        }
+
+        $updatedAnalysis = Get-TicketAnalysis -Ticket $analysis.ticket -Config $Config -SvnEntries @($analysis.svnEntries)
         & $copyAnalysisProperties $analysis $updatedAnalysis
         & $reloadGrid
 
-        $status.Text = "$($target.name) UI 路径已保存：$selectedPath"
+        if ($savedPaths.Count -gt 0) {
+            $status.Text = "$($target.name) 路径已保存：$($savedPaths -join '；')"
+        }
         return (Get-TargetAssessmentByKey $analysis $targetKey)
     }
 
@@ -2015,7 +2375,7 @@ function Show-QuickMergeDialog {
             $grid.Rows.Clear()
             foreach ($analysis in $allAnalyses) {
                 $ticket = $analysis.ticket
-                $haystack = "$($ticket.id) $($ticket.type) $($ticket.node) $($ticket.title) $($analysis.riskText) $($analysis.revisions -join ',') $($analysis.lastCommitTime)"
+                $haystack = "$($ticket.id) $($ticket.type) $($ticket.node) $($ticket.title) $($analysis.changeScope) $($analysis.riskText) $($analysis.revisions -join ',') $($analysis.lastCommitTime)"
                 if ($keyword -and $haystack.IndexOf($keyword, [System.StringComparison]::OrdinalIgnoreCase) -lt 0) {
                     continue
                 }
@@ -2039,6 +2399,7 @@ function Show-QuickMergeDialog {
                     [string]$ticket.type,
                     [string]$ticket.node,
                     [string]$ticket.title,
+                    [string]$analysis.changeScope,
                     [string]$revisionText,
                     [string]$analysis.lastCommitTime,
                     [string]$cnRiskText,
@@ -2105,22 +2466,32 @@ function Show-QuickMergeDialog {
         $ticket = $analysis.ticket
         $lines = New-Object System.Collections.Generic.List[string]
         $lines.Add("#$($ticket.id) $($ticket.title)") | Out-Null
-        $lines.Add("状态：$($analysis.state)    revision：$($analysis.revisions -join ', ')    最后提交：$($analysis.lastCommitTime)") | Out-Null
+        $lines.Add("状态：$($analysis.state)    范围：$($analysis.changeScope)    revision：$($analysis.revisions -join ', ')    最后提交：$($analysis.lastCommitTime)") | Out-Null
         foreach ($assessment in @($analysis.targetAssessments)) {
             $lines.Add("$($assessment.target.name)：$($assessment.state)    $($assessment.riskText)") | Out-Null
             if ($assessment.commitRequested -and -not $assessment.flowDone) {
                 $lines.Add("  已打开提交窗口；提交后点击【检查提交】。") | Out-Null
             }
             if ($assessment.commitRevision -gt 0) {
-                $lines.Add("  release 提交：r$($assessment.commitRevision)") | Out-Null
+                $revisionText = [string](Get-PropertyValue $assessment @("commitRevisionText"))
+                if ([string]::IsNullOrWhiteSpace($revisionText)) {
+                    $revisionText = "r$($assessment.commitRevision)"
+                }
+                $lines.Add("  release 提交：$revisionText") | Out-Null
             }
             if ($assessment.flowDone) {
                 $lines.Add("  已提交；请点击【打开单子】手动流转流程。") | Out-Null
             }
             if ($assessment.mergeGroups.Count -gt 0) {
                 foreach ($group in @($assessment.mergeGroups)) {
-                    $targetPath = Join-Path ([string]$assessment.target.uiRoot) ([string]$group.targetPath)
-                    $lines.Add("  r$($group.revisionSpec)  $($group.sourceUrl) -> $targetPath") | Out-Null
+                    $targetRoot = [string]$group.targetRoot
+                    if ([string]::IsNullOrWhiteSpace($targetRoot)) {
+                        $targetPath = "（目标目录未配置）\$($group.targetPath)"
+                    }
+                    else {
+                        $targetPath = Join-Path $targetRoot ([string]$group.targetPath)
+                    }
+                    $lines.Add("  [$($group.areaName)] r$($group.revisionSpec)  $($group.sourceUrl) -> $targetPath") | Out-Null
                 }
             }
         }
@@ -2181,11 +2552,12 @@ function Show-QuickMergeDialog {
         }
 
         try {
-            Invoke-TortoiseSvnCommitDialog $Config $assessment.target
+            $openedAreas = @(Invoke-TortoiseSvnCommitDialogs -Config $Config -Assessment $assessment)
+            $openedText = $openedAreas -join "、"
             $assessment.commitRequested = $true
-            $assessment.riskText = "已打开 $($assessment.target.name) SVN 提交窗口；提交完成后点击【检查提交】。"
+            $assessment.riskText = "已打开 $($assessment.target.name) $openedText SVN 提交窗口；全部提交完成后点击【检查提交】。"
             & $reloadGrid
-            $status.Text = "已打开 $($assessment.target.name) SVN 提交窗口；提交信息已复制：$commitMessage"
+            $status.Text = "已打开 $($assessment.target.name) $openedText SVN 提交窗口；提交信息已复制：$commitMessage"
         }
         catch {
             [System.Windows.Forms.MessageBox]::Show($_.Exception.Message, "打开 SVN 提交窗口失败", "OK", "Error") | Out-Null
@@ -2223,13 +2595,14 @@ function Show-QuickMergeDialog {
 
             $commitInfo = Assert-TargetCommitted $analysis $assessment
             $assessment.commitRevision = [int]$commitInfo.revision
+            $assessment | Add-Member -MemberType NoteProperty -Name commitRevisionText -Value ([string]$commitInfo.summary) -Force
 
             $assessment.flowDone = $true
             $assessment.state = "Submitted"
-            $assessment.riskText = "已提交：$($assessment.target.name) release r$($commitInfo.revision)。请点击【打开单子】手动流转流程。"
+            $assessment.riskText = "已提交：$($assessment.target.name) $($commitInfo.summary)。请点击【打开单子】手动流转流程。"
             & $reloadGrid
-            $status.Text = "已提交：#$($analysis.ticket.id) $($assessment.target.name) release r$($commitInfo.revision)。请点击【打开单子】手动流转流程。"
-            [System.Windows.Forms.MessageBox]::Show("已检测到 release 提交。`r`n`r`n$($assessment.target.name) release：r$($commitInfo.revision)`r`n`r`n请点击【打开单子】手动流转流程。", "已提交", "OK", "Information") | Out-Null
+            $status.Text = "已提交：#$($analysis.ticket.id) $($assessment.target.name) $($commitInfo.summary)。请点击【打开单子】手动流转流程。"
+            [System.Windows.Forms.MessageBox]::Show("已检测到 release 提交。`r`n`r`n$($assessment.target.name)：$($commitInfo.summary)`r`n`r`n请点击【打开单子】手动流转流程。", "已提交", "OK", "Information") | Out-Null
         }
         catch {
             $status.Text = "检查提交失败：#$($analysis.ticket.id)"
@@ -2259,14 +2632,6 @@ function Show-QuickMergeDialog {
             return
         }
 
-        $targetPath = [string]$assessment.target.uiRoot
-        if ([string]::IsNullOrWhiteSpace($targetPath) -or -not (Test-Path -LiteralPath $targetPath -PathType Container)) {
-            $assessment = & $ensureTargetPath $analysis $targetKey
-            if ($null -eq $assessment) {
-                return
-            }
-        }
-
         $targetName = [string]$assessment.target.name
 
         if ($assessment.flowDone) {
@@ -2284,13 +2649,19 @@ function Show-QuickMergeDialog {
             return
         }
 
+        $assessment = & $ensureTargetPaths $analysis $targetKey
+        if ($null -eq $assessment) {
+            return
+        }
+        $targetName = [string]$assessment.target.name
+
         if ($assessment.state -eq "Blocked") {
             [System.Windows.Forms.MessageBox]::Show($assessment.riskText, "已阻止 merge", "OK", "Warning") | Out-Null
             return
         }
 
         if ($assessment.state -eq "Warning") {
-            $confirm = [System.Windows.Forms.MessageBox]::Show("这个单合入 $targetName 有风险提示：`r`n`r`n$($assessment.riskText)`r`n`r`n将只合入 trunk UI 路径，继续吗？", "确认 merge", "YesNo", "Warning")
+            $confirm = [System.Windows.Forms.MessageBox]::Show("这个单合入 $targetName 有风险提示：`r`n`r`n$($assessment.riskText)`r`n`r`n本次只会合入该单命中的 trunk UI/远程资源路径，继续吗？", "确认 merge", "YesNo", "Warning")
             if ($confirm -ne [System.Windows.Forms.DialogResult]::Yes) {
                 return
             }
@@ -2352,7 +2723,8 @@ function Show-QuickMergeDialog {
             if ($acceptTrunkConflicts) {
                 $finishMessage = "已用 trunk 覆盖冲突并 merge 到 $targetName 工作副本，尚未 SVN Commit。"
             }
-            [System.Windows.Forms.MessageBox]::Show("$finishMessage`r`n`r`n$copyText`r`n`r`n点击该行【提交】可打开 TortoiseSVN 提交窗口。", "完成", "OK", "Information") | Out-Null
+            $mergedAreas = @($assessment.mergeGroups | ForEach-Object { $_.areaName } | Sort-Object -Unique)
+            [System.Windows.Forms.MessageBox]::Show("$finishMessage`r`n`r`n范围：$($mergedAreas -join '、')`r`n`r`n$copyText`r`n`r`n点击该行【提交】可打开对应的 TortoiseSVN 提交窗口。", "完成", "OK", "Information") | Out-Null
         }
         catch {
             $status.Text = "失败：#$($analysis.ticket.id)"
@@ -2465,7 +2837,7 @@ function Show-StartupLoadingWindow {
     Add-Type -AssemblyName System.Drawing
 
     $form = New-Object System.Windows.Forms.Form
-    $form.Text = "UI 快速 merge"
+    $form.Text = "UI/远程资源快速 merge"
     $form.StartPosition = "CenterScreen"
     $form.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::FixedDialog
     $form.MaximizeBox = $false
@@ -2519,20 +2891,29 @@ function Load-Analyses {
     }
 
     if ($null -ne $svnEntryMap) {
-        $allTargetPaths = @()
+        $allTargetPathsByArea = @{
+            ui = @()
+            remoteAssets = @()
+        }
         foreach ($ticket in $tickets) {
             foreach ($entry in @($svnEntryMap[[string]$ticket.id])) {
                 foreach ($path in @($entry.paths)) {
-                    $relativePath = Get-RelativeUiPath ([string]$path.path) $Config
-                    if ($null -eq $relativePath) { continue }
-                    $allTargetPaths += [string]$relativePath
-                    $allTargetPaths += [string](Get-MergeParentRelativePath ([string]$relativePath))
+                    $areaMatch = Get-SourceAreaForRepoPath -ChangedPath ([string]$path.path) -Config $Config
+                    if ($null -eq $areaMatch) { continue }
+                    $areaKey = [string]$areaMatch.area.key
+                    $relativePath = [string]$areaMatch.relativePath
+                    $allTargetPathsByArea[$areaKey] = @($allTargetPathsByArea[$areaKey]) + $relativePath
+                    $allTargetPathsByArea[$areaKey] = @($allTargetPathsByArea[$areaKey]) + [string](Get-MergeParentRelativePath $relativePath)
                 }
             }
         }
-        $allTargetPaths = @($allTargetPaths | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Sort-Object -Unique)
         foreach ($target in @(Get-ReleaseTargets $Config)) {
-            Initialize-ReleaseStatusCache -RelativePaths $allTargetPaths -Target $target
+            foreach ($areaKey in @("ui", "remoteAssets")) {
+                $areaPaths = @($allTargetPathsByArea[$areaKey] | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Sort-Object -Unique)
+                if ($areaPaths.Count -eq 0) { continue }
+                $targetArea = Get-TargetAreaDescriptor -Target $target -AreaKey $areaKey
+                Initialize-ReleaseStatusCache -RelativePaths $areaPaths -TargetArea $targetArea
+            }
         }
     }
 
