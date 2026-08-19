@@ -572,6 +572,74 @@ function Invoke-Svn {
     return Invoke-ExternalCommand -FilePath $svnExe -Arguments $Arguments -WorkingDirectory $WorkingDirectory
 }
 
+function Get-SvnStatusPathBatches {
+    param(
+        [string[]]$Paths,
+        [int]$MaxPathCount = 48,
+        [int]$MaxArgumentLength = 6000
+    )
+
+    $normalizedPaths = @($Paths | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) } | Sort-Object -Unique)
+    $batches = @()
+    $currentPaths = New-Object System.Collections.Generic.List[string]
+    $currentLength = 18
+
+    foreach ($path in $normalizedPaths) {
+        $pathText = [string]$path
+        $argumentLength = $pathText.Length + 3
+        $wouldOverflow = ($currentPaths.Count -gt 0 -and (
+            $currentPaths.Count -ge $MaxPathCount -or
+            ($currentLength + $argumentLength) -gt $MaxArgumentLength
+        ))
+        if ($wouldOverflow) {
+            $batches += [pscustomobject]@{ paths = @($currentPaths | ForEach-Object { [string]$_ }) }
+            $currentPaths = New-Object System.Collections.Generic.List[string]
+            $currentLength = 18
+        }
+
+        $currentPaths.Add($pathText) | Out-Null
+        $currentLength += $argumentLength
+    }
+
+    if ($currentPaths.Count -gt 0) {
+        $batches += [pscustomobject]@{ paths = @($currentPaths | ForEach-Object { [string]$_ }) }
+    }
+
+    return @($batches)
+}
+
+function Invoke-SvnStatusBatched {
+    param([string[]]$Paths, [string]$WorkingDirectory)
+
+    $batches = @(Get-SvnStatusPathBatches -Paths $Paths)
+    if ($batches.Count -eq 0) {
+        return [pscustomobject]@{ exitCode = 0; stdout = "" }
+    }
+
+    $outputLines = New-Object System.Collections.Generic.List[string]
+    for ($index = 0; $index -lt $batches.Count; $index += 1) {
+        $arguments = @("status", "--quiet", "--") + @($batches[$index].paths)
+        $result = Invoke-Svn -Arguments $arguments -WorkingDirectory $WorkingDirectory
+        if ($result.exitCode -ne 0) {
+            return [pscustomobject]@{
+                exitCode = $result.exitCode
+                stdout = "svn status 分批查询失败（第 $($index + 1)/$($batches.Count) 批）：$($result.stdout)"
+            }
+        }
+
+        foreach ($line in @([string]$result.stdout -split "`r?`n")) {
+            if (-not [string]::IsNullOrWhiteSpace($line)) {
+                $outputLines.Add($line) | Out-Null
+            }
+        }
+    }
+
+    return [pscustomobject]@{
+        exitCode = 0
+        stdout = (@($outputLines | Sort-Object -Unique) -join "`n")
+    }
+}
+
 function Invoke-SvnParallel {
     param([object[]]$Requests)
 
@@ -1323,8 +1391,7 @@ function Get-ReleaseLocalStatuses {
         }
     }
 
-    $arguments = @("status", "--quiet", "--") + $localPaths
-    $result = Invoke-Svn -Arguments $arguments -WorkingDirectory $targetRoot
+    $result = Invoke-SvnStatusBatched -Paths $localPaths -WorkingDirectory $targetRoot
     if ($result.exitCode -ne 0) {
         return @("svn status failed: $($result.stdout)")
     }
@@ -1354,8 +1421,7 @@ function Initialize-ReleaseStatusCache {
         $pathStatuses[$localPath] = @()
     }
 
-    $arguments = @("status", "--quiet", "--") + $localPaths
-    $result = Invoke-Svn -Arguments $arguments -WorkingDirectory $targetRoot
+    $result = Invoke-SvnStatusBatched -Paths $localPaths -WorkingDirectory $targetRoot
     if ($result.exitCode -ne 0) {
         $errorText = "svn status failed: $($result.stdout)"
         foreach ($localPath in $localPaths) {

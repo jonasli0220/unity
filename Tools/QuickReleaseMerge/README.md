@@ -75,6 +75,8 @@ NA RemoteAssets: G:\Dragon\NA RemoteAssets
 
 启动时，多张单号会合并为一批 SVN 日志查询，UI 与 RemoteAssets 日志会并行读取，同一 CN/NA 目标的路径状态也会按工作副本批量检查。这里只减少 SVN 调用次数，不使用过期缓存，单据状态和新提交仍会在每次打开或点击【重新加载】时刷新。
 
+勾选【包含 QA测试】后，如果单据涉及的 UI/RemoteAssets 路径很多，工具会自动把 `svn status` 拆成多批执行并汇总结果，避免超过 Windows 命令行长度上限。加载窗口关闭前请等待检查完成。
+
 列表会显示每张单最后一条 trunk UI/RemoteAssets 提交的时间，并按最后匹配 revision 从旧到新排列。多个需求/BUG 的提交彼此穿插时，建议从上往下 merge，让较新的 trunk 改动最后应用；没有找到 UI 或远程资源提交的阻止项会排在末尾。
 
 ## 风险提示
