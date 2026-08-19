@@ -153,6 +153,18 @@ function Get-TargetNodeFilters {
         "提交CN release"
     )
 
+    $includeQaTesting = $false
+    if ($null -ne $Config -and $Config.PSObject.Properties.Name -contains "includeQaTesting") {
+        $includeQaTesting = ($Config.includeQaTesting -eq $true)
+    }
+    if ($includeQaTesting) {
+        $qaTargetNodes = @(Get-StringListProperty $Config @("qaTargetNodes", "qaTargetNodeAliases"))
+        if ($qaTargetNodes.Count -eq 0) {
+            $qaTargetNodes = @("QA测试")
+        }
+        $targetNodes += $qaTargetNodes
+    }
+
     return @($targetNodes | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) } | Select-Object -Unique)
 }
 
@@ -203,7 +215,15 @@ function Save-Config {
         $script:ConfigPath = $DefaultLocalConfigPath
     }
 
-    Write-JsonFile $Config $ConfigPath
+    $persistentConfig = [ordered]@{}
+    foreach ($property in $Config.PSObject.Properties) {
+        if ($property.Name -eq "includeQaTesting") {
+            continue
+        }
+        $persistentConfig[$property.Name] = $property.Value
+    }
+
+    Write-JsonFile ([pscustomobject]$persistentConfig) $ConfigPath
 }
 
 function ConvertTo-QueryValue {
@@ -2100,6 +2120,14 @@ function Show-QuickMergeDialog {
     $summary.Text = "节点：$($TicketResult.targetNode)    来源：$($TicketResult.source)    用户：$($TicketResult.identity.windowsUser) / $($TicketResult.identity.email)"
     $form.Controls.Add($summary)
 
+    $includeQaTesting = New-Object System.Windows.Forms.CheckBox
+    $includeQaTesting.AutoSize = $true
+    $includeQaTesting.Location = New-Object System.Drawing.Point(1110, 11)
+    $includeQaTesting.Text = "包含 QA测试"
+    $includeQaTesting.Checked = ($Config.PSObject.Properties.Name -contains "includeQaTesting" -and $Config.includeQaTesting -eq $true)
+    $includeQaTesting.Anchor = "Top,Right"
+    $form.Controls.Add($includeQaTesting)
+
     $search = New-Object System.Windows.Forms.TextBox
     $search.Location = New-Object System.Drawing.Point(12, 44)
     $search.Size = New-Object System.Drawing.Size(1240, 28)
@@ -2763,6 +2791,12 @@ function Show-QuickMergeDialog {
         $form.Close()
     })
 
+    $includeQaTesting.Add_CheckedChanged({
+        $Config | Add-Member -MemberType NoteProperty -Name "includeQaTesting" -Value ([bool]$includeQaTesting.Checked) -Force
+        $form.DialogResult = [System.Windows.Forms.DialogResult]::Retry
+        $form.Close()
+    })
+
     $close.Add_Click({
         $form.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
         $form.Close()
@@ -2781,7 +2815,9 @@ function Show-QuickMergeDialog {
         $detailY = $statusY - $detailHeight - 10
         $gridBottom = $detailY - 12
 
-        $summary.Width = $form.ClientSize.Width - ($margin * 2)
+        $includeQaTesting.Left = $right - $includeQaTesting.Width
+        $includeQaTesting.Top = 11
+        $summary.Width = [math]::Max(200, $includeQaTesting.Left - $summary.Left - 12)
         $search.Width = $form.ClientSize.Width - ($margin * 2)
         $grid.Width = $form.ClientSize.Width - ($margin * 2)
         $grid.Height = [math]::Max(240, $gridBottom - $grid.Top)
@@ -2803,13 +2839,25 @@ function Show-QuickMergeDialog {
     $form.Add_Resize($applyLayout)
     & $reloadGrid
 
+    if ($allAnalyses.Count -eq 0) {
+        $detail.Text = "没有找到当前筛选范围内可检测的单子。可勾选【包含 QA测试】后立即重新拉取。"
+        if (-not [string]::IsNullOrWhiteSpace([string]$TicketResult.errorMessage)) {
+            $detail.Text += "`r`n单据服务错误：$($TicketResult.errorMessage)"
+        }
+    }
+
     if ($SmokeOnly) {
         $rowCount = $grid.Rows.Count
+        $includeQaTestingChecked = [bool]$includeQaTesting.Checked
+        $includeQaTestingText = [string]$includeQaTesting.Text
+        $detailText = [string]$detail.Text
         $form.Dispose()
         return [pscustomobject]@{
             ok = $true
             rowCount = $rowCount
-            detailText = [string]$detail.Text
+            detailText = $detailText
+            includeQaTesting = $includeQaTestingChecked
+            includeQaTestingText = $includeQaTestingText
         }
     }
 
@@ -2817,19 +2865,6 @@ function Show-QuickMergeDialog {
     & $saveUiSettings
 
     return $dialogResult
-}
-
-function Show-NoTicketRetryDialog {
-    param($TicketResult)
-
-    Initialize-WinForms
-
-    $message = "没有找到目标状态单子：$($TicketResult.targetNode)`r`n`r`n来源：$($TicketResult.source)`r`n实时刷新：$($TicketResult.forceTicketRefresh)    缓存兜底：$($TicketResult.allowCacheFallback)`r`n用户：$($TicketResult.identity.windowsUser) / $($TicketResult.identity.email)"
-    if (-not [string]::IsNullOrWhiteSpace([string]$TicketResult.errorMessage)) {
-        $message = "$message`r`n错误：$($TicketResult.errorMessage)"
-    }
-    $message = "$message`r`n`r`n点击 Retry 会重新拉取单据；点击 Cancel 关闭。"
-    return [System.Windows.Forms.MessageBox]::Show($message, "快速 merge", "RetryCancel", "Information")
 }
 
 function Show-StartupLoadingWindow {
@@ -2959,6 +2994,7 @@ function Get-QuickMergeData {
 
 try {
     $config = Merge-Config
+    $config | Add-Member -MemberType NoteProperty -Name "includeQaTesting" -Value $false -Force
     Assert-StartPathAllowed $config
 
     $loadResult = Get-QuickMergeData -Config $config -OnlyTicketId $TestTicketId -ShowFeedback:(-not $ListTickets -and -not $SmokeUi)
@@ -2967,16 +3003,6 @@ try {
     if ($ListTickets) {
         $analyses | ConvertTo-Json -Depth 12
         exit 0
-    }
-
-    while ($analyses.Count -eq 0) {
-        $retryResult = Show-NoTicketRetryDialog $ticketResult
-        if ($retryResult -ne [System.Windows.Forms.DialogResult]::Retry) {
-            exit 0
-        }
-        $loadResult = Get-QuickMergeData -Config $config -OnlyTicketId $TestTicketId -ShowFeedback
-        $ticketResult = $loadResult.ticketResult
-        $analyses = @($loadResult.analyses)
     }
 
     do {

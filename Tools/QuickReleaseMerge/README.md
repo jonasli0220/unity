@@ -56,21 +56,22 @@ NA RemoteAssets: G:\Dragon\NA RemoteAssets
 
 1. 在 trunk UI 目录空白处右键，点击【快速 merge】。
 2. 工具会立即显示加载进度，并实时拉取当前用户名下节点为【待提交 CN release】的需求/BUG，同时查询 trunk UI 与 RemoteAssets 提交。
-3. 选择一行，点击【merge to CN release】或【merge to NA release】。
-4. 列表“变更范围”会显示 `UI`、`远程资源` 或 `UI + 远程资源`。如果对应目标路径尚未配置且无法自动检测，先按弹窗选择工作副本目录。
-5. 工具先对本单全部 UI/远程资源 merge group 逐 revision 执行 `svn merge --dry-run`，全部检查完成后才按 revision 顺序真实 merge 到对应工作副本。
+3. 需要提前处理仍在【QA测试】节点的单子时，勾选窗口右上角的【包含 QA测试】；工具会立即重新拉取，并把 QA 测试中的需求/BUG 一起纳入 SVN 检测。该勾选只在本次打开期间有效，下次启动仍默认不勾选。
+4. 选择一行，点击【merge to CN release】或【merge to NA release】。
+5. 列表“变更范围”会显示 `UI`、`远程资源` 或 `UI + 远程资源`。如果对应目标路径尚未配置且无法自动检测，先按弹窗选择工作副本目录。
+6. 工具先对本单全部 UI/远程资源 merge group 逐 revision 执行 `svn merge --dry-run`，全部检查完成后才按 revision 顺序真实 merge 到对应工作副本。
    如果 dry-run 发现冲突，会弹窗询问是否【用 trunk 覆盖冲突】；只有你确认后，工具才会用 trunk 版本重试并 resolve 本次 merge 的文本/树冲突。
-6. merge 成功后，工具会自动复制提交信息，例如：
+7. merge 成功后，工具会自动复制提交信息，例如：
 
 ```text
 #7006319869 【外观】海外活动宣传页坐骑名称修正
 ```
 
-7. 点击该行的【提交】，工具按实际变更范围打开 TortoiseSVN Commit 窗口：只改一个区域时打开一个窗口，同时改 UI 和远程资源时分别打开两个窗口。
-8. 你在每个 TortoiseSVN 窗口中手动检查、粘贴相同的 message 并提交。
-9. 提交完成后，回到快速 merge 窗口点击【检查提交】。
-10. 工具检测到 release SVN log 已包含该单号后，按钮变为【已提交】。
-11. 点击【打开单子】，在飞书/Meegle 页面里手动流转流程。
+8. 点击该行的【提交】，工具按实际变更范围打开 TortoiseSVN Commit 窗口：只改一个区域时打开一个窗口，同时改 UI 和远程资源时分别打开两个窗口。
+9. 你在每个 TortoiseSVN 窗口中手动检查、粘贴相同的 message 并提交。
+10. 提交完成后，回到快速 merge 窗口点击【检查提交】。
+11. 工具检测到 release SVN log 已包含该单号后，按钮变为【已提交】。
+12. 点击【打开单子】，在飞书/Meegle 页面里手动流转流程。
 
 启动时，多张单号会合并为一批 SVN 日志查询，UI 与 RemoteAssets 日志会并行读取，同一 CN/NA 目标的路径状态也会按工作副本批量检查。这里只减少 SVN 调用次数，不使用过期缓存，单据状态和新提交仍会在每次打开或点击【重新加载】时刷新。
 

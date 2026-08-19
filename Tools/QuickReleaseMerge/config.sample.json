@@ -19,6 +19,9 @@
     "提交 CN release",
     "提交CN release"
   ],
+  "qaTargetNodes": [
+    "QA测试"
+  ],
   "trunkUiRoot": "G:\\Dragon\\trunk\\dragon\\Assets\\Content\\UI",
   "trunkRemoteAssetsRoot": "",
   "releaseUiRoot": "",
