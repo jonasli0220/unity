@@ -643,6 +643,7 @@ public class ProjectImageDuplicateImportResolver : AssetPostprocessor
         originalAssetPath = NormalizeAssetPath(originalAssetPath);
         if (!IsSupportedImageAsset(duplicateAssetPath)
             || !IsSupportedImageAsset(originalAssetPath)
+            || !IsUnityDuplicateOfOriginalFileName(duplicateAssetPath, originalAssetPath)
             || !File.Exists(AssetPathToAbsolutePath(duplicateAssetPath))
             || !File.Exists(AssetPathToAbsolutePath(originalAssetPath)))
         {
