@@ -596,7 +596,8 @@ public class ProjectImageDuplicateImportResolver : AssetPostprocessor
                     NormalizeAssetPath(Path.GetDirectoryName(candidatePath)),
                     originalFolder,
                     StringComparison.OrdinalIgnoreCase)
-                || !IsSupportedImageAsset(candidatePath))
+                || !IsSupportedImageAsset(candidatePath)
+                || !IsUnityDuplicateOfOriginalFileName(candidatePath, originalAssetPath))
             {
                 continue;
             }
@@ -609,6 +610,27 @@ public class ProjectImageDuplicateImportResolver : AssetPostprocessor
         }
 
         return null;
+    }
+
+    private static bool IsUnityDuplicateOfOriginalFileName(
+        string candidateAssetPath,
+        string originalAssetPath)
+    {
+        string candidateName = Path.GetFileNameWithoutExtension(candidateAssetPath);
+        string originalName = Path.GetFileNameWithoutExtension(originalAssetPath);
+        string candidateExtension = Path.GetExtension(candidateAssetPath);
+        string originalExtension = Path.GetExtension(originalAssetPath);
+        if (string.IsNullOrEmpty(candidateName)
+            || string.IsNullOrEmpty(originalName)
+            || !string.Equals(candidateExtension, originalExtension, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        return Regex.IsMatch(
+            candidateName,
+            "^" + Regex.Escape(originalName) + @"(?: [1-9][0-9]*|_[1-9][0-9]*)$",
+            RegexOptions.CultureInvariant);
     }
 
     private static void TryResolveDuplicateImport(
@@ -742,12 +764,6 @@ public class ProjectImageDuplicateImportResolver : AssetPostprocessor
         if (underscoreMatch.Success)
         {
             return underscoreMatch.Groups[1].Value;
-        }
-
-        Match directNumberMatch = Regex.Match(fileNameWithoutExtension, @"^(.*?)[1-9][0-9]*$");
-        if (directNumberMatch.Success)
-        {
-            return directNumberMatch.Groups[1].Value;
         }
 
         return fileNameWithoutExtension;
