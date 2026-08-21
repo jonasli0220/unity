@@ -654,9 +654,9 @@ public class ProjectImageDuplicateImportResolver : AssetPostprocessor
         {
             ReplacePromptDecision decision = ShowReplacePrompt(
                 "Project 中检测到同名图片导入：\n\n" +
-                "已有资源：\n" + originalAssetPath + "\n\n" +
-                "刚导入的序号副本：\n" + duplicateAssetPath + "\n\n" +
-                "是否用刚导入的图片替换已有资源？\n确认后会保留已有资源 GUID，并删除这个序号副本。",
+                "已有资源（将保留 GUID）：\n" + originalAssetPath + "\n\n" +
+                "刚拖入的同名图片被 Unity 临时导入为：\n" + duplicateAssetPath + "\n\n" +
+                "是否用刚拖入的图片内容覆盖已有资源？\n确认后会保留已有资源 GUID，并删除这个 Unity 临时文件。",
                 replaceCount);
             if (decision == ReplacePromptDecision.Skip)
             {
