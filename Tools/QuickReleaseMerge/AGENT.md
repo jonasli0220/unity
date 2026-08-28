@@ -39,7 +39,9 @@
 - CN/NA release 目标路径已有文件内容改动、非 `svn:mergeinfo` 属性改动或冲突时，必须按目标分支分别阻止自动 merge。
 - release 目录仅有未提交的 `svn:mergeinfo` 属性修改时，标记为可继续的 Warning，不作为内容冲突阻止；提示用户后允许继续 merge，并由后续手动提交一并提交 mergeinfo。
 - 发生 SVN merge 冲突时，默认停止；只有用户在弹窗中明确确认“用 trunk 覆盖冲突”后，才允许对本次单号 merge 使用 `--accept theirs-full`，并对 `local missing/deleted + incoming edit` 这类 tree conflict 从 trunk 对应 revision `svn export --force` 到 release 工作副本后 `svn resolve --accept working`。
+- 调用 `svn.exe` 等原生命令时，stderr 警告必须连同退出码一起返回给上层判断，不能被全局 PowerShell `ErrorActionPreference=Stop` 提前转换为致命异常，导致冲突回退逻辑失效。
 - 如果 SVN 输出曾报告冲突，但 `svn status` 已没有未解决的 `C` 路径，应视为 `--accept theirs-full` 已自动处理完文本冲突并继续后续 revision，不要误报失败。
+- 用户点击目标 merge 后、执行 dry-run 前，必须按“单号 + 本单在该目标的全部 UI/RemoteAssets 路径”检查 release SVN log；如果目标分支已经完整提交，标记为已提交并阻止重复 merge。若工作副本还有上次失败留下的本地状态，只给出精确清理提示，不自动 revert 或覆盖。
 - trunk 提交包含 UI 与 RemoteAssets 之外的路径时，必须标红/提示；继续合并前需要用户确认。
 - 工具只按单号对应的 trunk UI/RemoteAssets 提交内容 merge，不做整棵 UI 或 RemoteAssets 目录的大范围复制、覆盖或 merge。
 - 同一张单可同时包含 UI 与 RemoteAssets merge group；真实 merge 前必须先完成全部 group 的 dry-run，发生冲突时只允许在用户明确确认后覆盖本单涉及的冲突路径。

@@ -547,14 +547,17 @@ function Invoke-ExternalCommand {
     )
 
     $oldLocation = Get-Location
+    $oldErrorActionPreference = $ErrorActionPreference
     try {
         if (-not [string]::IsNullOrWhiteSpace($WorkingDirectory)) {
             Set-Location -LiteralPath $WorkingDirectory
         }
+        $ErrorActionPreference = "Continue"
         $output = & $FilePath @Arguments 2>&1
         $exitCode = $LASTEXITCODE
     }
     finally {
+        $ErrorActionPreference = $oldErrorActionPreference
         Set-Location $oldLocation
     }
 
@@ -2017,6 +2020,7 @@ function Get-TargetCommitEntries {
     foreach ($logMatch in $logMatches) {
         $body = [string]$logMatch.Groups["body"].Value
         $paths = @()
+        $pathDetails = @()
         $pathMatches = [regex]::Matches($body, '<path\b(?<attrs>[^>]*)>(?<path>.*?)</path>', [System.Text.RegularExpressions.RegexOptions]::Singleline)
         foreach ($pathMatch in $pathMatches) {
             $pathText = [string]$pathMatch.Groups["path"].Value
@@ -2026,19 +2030,181 @@ function Get-TargetCommitEntries {
             catch {
             }
             $paths += $pathText
+            $attributes = [string]$pathMatch.Groups["attrs"].Value
+            $attributeValues = @{}
+            foreach ($attributeName in @("action", "kind", "copyfrom-path", "copyfrom-rev")) {
+                $attributePattern = '(?s)\b{0}\s*=\s*"(?<value>[^"]*)"' -f [regex]::Escape($attributeName)
+                $attributeMatch = [regex]::Match($attributes, $attributePattern)
+                if ($attributeMatch.Success) {
+                    $attributeValues[$attributeName] = [System.Net.WebUtility]::HtmlDecode([string]$attributeMatch.Groups["value"].Value)
+                }
+            }
+            $copyFromRevision = 0
+            [int]::TryParse([string]$attributeValues["copyfrom-rev"], [ref]$copyFromRevision) | Out-Null
+            $pathDetails += [pscustomobject]@{
+                path = $pathText
+                action = [string]$attributeValues["action"]
+                kind = [string]$attributeValues["kind"]
+                copyFromPath = [string]$attributeValues["copyfrom-path"]
+                copyFromRevision = $copyFromRevision
+            }
         }
 
         $entries += [pscustomobject]@{
             revision = [int]$logMatch.Groups["revision"].Value
             paths = @($paths)
+            pathDetails = @($pathDetails)
         }
     }
 
     return @($entries | Sort-Object revision)
 }
 
-function Assert-TargetCommitted {
+function ConvertTo-NormalizedSvnRepoPath {
+    param([string]$Path)
+
+    if ([string]::IsNullOrWhiteSpace($Path)) {
+        return ""
+    }
+
+    $normalized = $Path.Trim().Replace("\", "/")
+    if ($normalized.StartsWith("^/", [System.StringComparison]::Ordinal)) {
+        $normalized = $normalized.Substring(1)
+    }
+    if (-not $normalized.StartsWith("/", [System.StringComparison]::Ordinal)) {
+        $normalized = "/$normalized"
+    }
+    if ($normalized.Length -gt 1) {
+        $normalized = $normalized.TrimEnd("/")
+    }
+    return $normalized
+}
+
+function Get-TargetAreaRepositoryPath {
+    param($Target, $TargetArea)
+
+    $result = Invoke-Svn -Arguments @("info", "--xml", [string]$TargetArea.root) -WorkingDirectory ([string]$TargetArea.root)
+    if ($result.exitCode -ne 0) {
+        throw "读取 $($Target.name) $($TargetArea.name) SVN 仓库路径失败：$($result.stdout)"
+    }
+
+    try {
+        $document = New-Object System.Xml.XmlDocument
+        $document.LoadXml($result.stdout)
+        $relativeUrlNode = $document.SelectSingleNode("/info/entry/relative-url")
+        if ($null -eq $relativeUrlNode -or [string]::IsNullOrWhiteSpace([string]$relativeUrlNode.InnerText)) {
+            throw "svn info 没有返回 relative-url"
+        }
+        return ConvertTo-NormalizedSvnRepoPath ([string]$relativeUrlNode.InnerText)
+    }
+    catch {
+        throw "无法解析 $($Target.name) $($TargetArea.name) SVN 仓库路径：$($_.Exception.Message)"
+    }
+}
+
+function Test-TargetCommitEntryCoversChange {
+    param($Entry, [string]$ExpectedTargetPath, [string]$ExpectedSourcePath, [int]$ExpectedSourceRevision)
+
+    $pathDetails = @($Entry.pathDetails)
+    if ($pathDetails.Count -eq 0) {
+        $pathDetails = @($Entry.paths | ForEach-Object {
+            [pscustomobject]@{
+                path = [string]$_
+                action = ""
+                kind = ""
+                copyFromPath = ""
+                copyFromRevision = 0
+            }
+        })
+    }
+
+    foreach ($detail in $pathDetails) {
+        $committedPath = ConvertTo-NormalizedSvnRepoPath ([string]$detail.path)
+        if ($committedPath -ieq $ExpectedTargetPath -and [int]$Entry.revision -ge $ExpectedSourceRevision) {
+            return $true
+        }
+
+        if ([string]$detail.action -ine "A" -or [string]$detail.kind -ine "dir") {
+            continue
+        }
+        $copyFromPath = ConvertTo-NormalizedSvnRepoPath ([string]$detail.copyFromPath)
+        $copyFromRevision = [int]$detail.copyFromRevision
+        if ([string]::IsNullOrWhiteSpace($copyFromPath) -or $copyFromRevision -lt $ExpectedSourceRevision) {
+            continue
+        }
+        $targetCovered = $ExpectedTargetPath.StartsWith("$committedPath/", [System.StringComparison]::OrdinalIgnoreCase)
+        $sourceCovered = $ExpectedSourcePath.StartsWith("$copyFromPath/", [System.StringComparison]::OrdinalIgnoreCase)
+        if ($targetCovered -and $sourceCovered) {
+            return $true
+        }
+    }
+    return $false
+}
+
+function Get-ExistingTargetCommitCoverage {
     param($Analysis, $Assessment)
+
+    $areaCommits = @()
+    $allMissingPaths = @()
+    foreach ($targetArea in @(Get-AssessmentTargetAreas $Assessment)) {
+        $areaChanges = @($Analysis.changes | Where-Object { [string]$_.areaKey -eq [string]$targetArea.key })
+        if ($areaChanges.Count -eq 0) {
+            continue
+        }
+
+        $repositoryPath = Get-TargetAreaRepositoryPath -Target $Assessment.target -TargetArea $targetArea
+        $expectedChanges = @($areaChanges | ForEach-Object {
+            [pscustomobject]@{
+                targetPath = ConvertTo-NormalizedSvnRepoPath "$repositoryPath/$([string]$_.relativePath)"
+                sourcePath = ConvertTo-NormalizedSvnRepoPath ([string]$_.repoPath)
+                sourceRevision = [int]$_.revision
+            }
+        } | Sort-Object targetPath -Unique)
+        $expectedPaths = @($expectedChanges | ForEach-Object { $_.targetPath })
+        $entries = @(Get-TargetCommitEntries -Ticket $Analysis.ticket -Target $Assessment.target -TargetArea $targetArea)
+        $missingPaths = @($expectedChanges | Where-Object {
+            $expectedChange = $_
+            @($entries | Where-Object {
+                Test-TargetCommitEntryCoversChange -Entry $_ -ExpectedTargetPath ([string]$expectedChange.targetPath) -ExpectedSourcePath ([string]$expectedChange.sourcePath) -ExpectedSourceRevision ([int]$expectedChange.sourceRevision)
+            }).Count -eq 0
+        } | ForEach-Object { $_.targetPath })
+        $allMissingPaths += @($missingPaths)
+        $contributingRevisions = @($entries | Where-Object {
+            $entry = $_
+            @($expectedChanges | Where-Object {
+                Test-TargetCommitEntryCoversChange -Entry $entry -ExpectedTargetPath ([string]$_.targetPath) -ExpectedSourcePath ([string]$_.sourcePath) -ExpectedSourceRevision ([int]$_.sourceRevision)
+            }).Count -gt 0
+        } | ForEach-Object { [int]$_.revision } | Sort-Object -Unique)
+
+        $areaCommits += [pscustomobject]@{
+            areaKey = [string]$targetArea.key
+            areaName = [string]$targetArea.name
+            complete = ($expectedPaths.Count -gt 0 -and $missingPaths.Count -eq 0)
+            expectedPaths = @($expectedPaths)
+            missingPaths = @($missingPaths)
+            revisions = @($contributingRevisions)
+            revision = [int](@($contributingRevisions | Sort-Object -Descending | Select-Object -First 1)[0])
+        }
+    }
+
+    $isComplete = ($areaCommits.Count -gt 0 -and @($areaCommits | Where-Object { -not $_.complete }).Count -eq 0)
+    $revisions = @($areaCommits | ForEach-Object { $_.revisions } | ForEach-Object { $_ } | Sort-Object -Unique)
+    $summaryParts = @($areaCommits | Where-Object { $_.complete } | ForEach-Object {
+        $revisionText = @($_.revisions | ForEach-Object { "r$_" }) -join ", "
+        "$($_.areaName) $revisionText"
+    })
+    return [pscustomobject]@{
+        complete = $isComplete
+        revision = [int](@($revisions | Sort-Object -Descending | Select-Object -First 1)[0])
+        revisions = @($revisions)
+        summary = ($summaryParts -join "；")
+        areaCommits = @($areaCommits)
+        missingPaths = @($allMissingPaths | Sort-Object -Unique)
+    }
+}
+
+function Get-AssessmentPendingStatuses {
+    param($Assessment)
 
     $dirty = @()
     $statusChecks = @{}
@@ -2057,35 +2223,24 @@ function Assert-TargetCommitted {
             $dirty += "$($group.areaName)\$localPath`n$($status.stdout)"
         }
     }
+    return @($dirty)
+}
+
+function Assert-TargetCommitted {
+    param($Analysis, $Assessment)
+
+    $dirty = @(Get-AssessmentPendingStatuses $Assessment)
 
     if ($dirty.Count -gt 0) {
         throw "$($Assessment.target.name) 还有未提交状态，暂不标记已提交：`r`n$($dirty -join "`r`n")"
     }
 
-    $areaCommits = @()
-    foreach ($targetArea in @(Get-AssessmentTargetAreas $Assessment)) {
-        $entries = @(Get-TargetCommitEntries -Ticket $Analysis.ticket -Target $Assessment.target -TargetArea $targetArea)
-        if ($entries.Count -eq 0) {
-            throw "$($Assessment.target.name) $($targetArea.name) SVN 日志里还没找到单号 #$($Analysis.ticket.id)。请确认对应 TortoiseSVN 窗口已提交且 message 包含单号。"
-        }
-
-        $latest = $entries | Sort-Object revision -Descending | Select-Object -First 1
-        $areaCommits += [pscustomobject]@{
-            areaKey = [string]$targetArea.key
-            areaName = [string]$targetArea.name
-            revision = [int]$latest.revision
-            paths = @($latest.paths)
-        }
+    $coverage = Get-ExistingTargetCommitCoverage -Analysis $Analysis -Assessment $Assessment
+    if (-not $coverage.complete) {
+        $missingText = Limit-MessageText (@($coverage.missingPaths) -join "`r`n")
+        throw "$($Assessment.target.name) SVN 日志尚未完整覆盖单子 #$($Analysis.ticket.id) 的全部目标路径。请确认所有 TortoiseSVN 窗口都已提交且 message 包含单号。`r`n`r`n未覆盖路径：`r`n$missingText"
     }
-
-    $revisions = @($areaCommits | ForEach-Object { [int]$_.revision } | Sort-Object -Unique)
-    return [pscustomobject]@{
-        revision = [int](@($revisions | Sort-Object -Descending | Select-Object -First 1)[0])
-        revisions = @($revisions)
-        summary = (@($areaCommits | ForEach-Object { "$($_.areaName) r$($_.revision)" }) -join "；")
-        areaCommits = @($areaCommits)
-        paths = @($areaCommits | ForEach-Object { $_.paths } | ForEach-Object { $_ })
-    }
+    return $coverage
 }
 
 function Assert-StartPathAllowed {
@@ -2748,6 +2903,46 @@ function Show-QuickMergeDialog {
             return
         }
         $targetName = [string]$assessment.target.name
+
+        $existingCommit = $null
+        $existingLocalStates = @()
+        try {
+            $form.Cursor = [System.Windows.Forms.Cursors]::WaitCursor
+            $grid.Enabled = $false
+            $status.Text = "正在检查 $targetName 是否已经提交：#$($analysis.ticket.id) ..."
+            [System.Windows.Forms.Application]::DoEvents()
+            $existingCommit = Get-ExistingTargetCommitCoverage -Analysis $analysis -Assessment $assessment
+            if ($existingCommit.complete) {
+                $existingLocalStates = @(Get-AssessmentPendingStatuses $assessment)
+            }
+        }
+        catch {
+            $status.Text = "提交预检失败：#$($analysis.ticket.id)"
+            [System.Windows.Forms.MessageBox]::Show("为了避免重复 merge，本次未执行。`r`n`r`n无法检查 $targetName 是否已提交：`r`n$($_.Exception.Message)`r`n`r`n请确认 SVN 可用后重试。", "merge 预检失败", "OK", "Error") | Out-Null
+            return
+        }
+        finally {
+            $grid.Enabled = $true
+            $form.Cursor = [System.Windows.Forms.Cursors]::Default
+        }
+
+        if ($existingCommit.complete) {
+            $assessment.commitRevision = [int]$existingCommit.revision
+            $assessment | Add-Member -MemberType NoteProperty -Name commitRevisionText -Value ([string]$existingCommit.summary) -Force
+            $assessment.flowDone = $true
+            $assessment.state = "Submitted"
+            $localStateMessage = "目标工作副本当前没有本单范围内的未提交状态。"
+            $assessment.riskText = "已提交：$targetName $($existingCommit.summary)；无需重复 merge。请点击【打开单子】手动流转流程。"
+            if ($existingLocalStates.Count -gt 0) {
+                $localStateText = Limit-MessageText ($existingLocalStates -join "`r`n")
+                $localStateMessage = "目标工作副本还有本地状态，通常是重复 merge 失败留下的冲突或 mergeinfo：`r`n`r`n$localStateText`r`n`r`n请先在 TortoiseSVN 中核对，并且只 Revert 本次失败残留，再点击【重新加载】；不要再次 merge。"
+                $assessment.riskText = "已提交：$targetName $($existingCommit.summary)；无需重复 merge。工作副本还有本地状态，请核对后只 Revert 本次失败残留。"
+            }
+            & $reloadGrid
+            $status.Text = "已提交：#$($analysis.ticket.id) $targetName $($existingCommit.summary)；已阻止重复 merge。"
+            [System.Windows.Forms.MessageBox]::Show("这个单已经完整提交到 $targetName：`r`n`r`n$($existingCommit.summary)`r`n`r`n工具已阻止重复 merge。`r`n`r`n$localStateMessage", "已提交，无需重复 merge", "OK", "Information") | Out-Null
+            return
+        }
 
         if ($assessment.state -eq "Blocked") {
             [System.Windows.Forms.MessageBox]::Show($assessment.riskText, "已阻止 merge", "OK", "Warning") | Out-Null
