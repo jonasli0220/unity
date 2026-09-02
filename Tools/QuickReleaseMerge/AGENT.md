@@ -48,6 +48,7 @@
 - UI 与 RemoteAssets 的目标本地状态、mergeinfo、提交检测必须按各自工作副本分别检查，不能用 UI 工作副本状态代替 RemoteAssets。
 - 同一 merge group 内必须逐 revision 执行 dry-run / merge，避免 SVN 在中途冲突后跳过后续 revision。
 - 单据列表默认实时拉取 Meego 服务，不自动使用 `tickets.cache.json` 兜底；缓存兜底只能作为临时排障开关。
+- 需求单是否进入 merge 列表必须以 Meego 返回的实时 `current_nodes` 为准；单据服务不得只依赖易过期的 `sub_stages` 静态白名单，否则新流程状态会在主工具筛选前被静默漏掉。
 - 启动分析应优先把多张单号合并为一次 `svn log --search` 查询，并把同一 release 目标的多个路径合并为一次 `svn status`；不得为了性能改用可能过期的单据或 SVN 结果缓存。
 - 同一 release 目标需要检查的路径较多时，`svn status` 必须按路径数量和参数总长度自动分批，再合并为同一份状态缓存；不得把全部路径拼成超过 Windows 命令行长度上限的一次调用。
 - 右键启动后应立即显示加载反馈，耗时的 Meego/SVN 查询结束后再进入主列表，避免用户误以为工具没有响应。

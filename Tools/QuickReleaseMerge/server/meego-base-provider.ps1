@@ -2,7 +2,7 @@ param(
     [string]$BaseUrl = "https://fastgatecraft.sgra.woa.com/meego-base",
     [string]$ProjectKey = "dragon_heir",
     [string[]]$WorkItemTypeKeys = @("story", "6745be52ca5bd28affaa7241"),
-    [string[]]$OpenStorySubStages = @("started", "qdm4u_x1d", "sub_stage_3", "linshihong_3331583827552071", "36pl0to30", "sub_stage_1651205593210", "oke8rkmep", "sub_stage_2", "sub_stage_1660535137631", "53c2802s2"),
+    [string[]]$OpenStorySubStages = @(),
     [string[]]$OpenBugStateKeys = @("started", "9cR44p7mQ", "TbEabtpyH", "53c2802s2"),
     [string[]]$ExcludedNodeKeywords = @(),
     [int]$PageSize = 200,
