@@ -55,7 +55,7 @@ NA RemoteAssets: G:\Dragon\NA RemoteAssets
 ## 日常使用
 
 1. 在 trunk UI 目录空白处右键，点击【快速 merge】。
-2. 工具会立即显示加载进度，并实时拉取当前用户名下节点为【待提交 CN release】的需求/BUG，同时查询 trunk UI 与 RemoteAssets 提交。
+2. 工具会立即显示加载进度，并实时拉取当前用户名下节点为【待提交/提交 CN release】或【待提交/提交 NA release】的需求/BUG，同时查询 trunk UI 与 RemoteAssets 提交。
 3. 需要提前处理仍在【QA测试】节点的单子时，勾选窗口右上角的【包含 QA测试】；工具会立即重新拉取，并把 QA 测试中的需求/BUG 一起纳入 SVN 检测。该勾选只在本次打开期间有效，下次启动仍默认不勾选。
 4. 选择一行，点击【merge to CN release】或【merge to NA release】。
 5. 工具会先按“单号 + 本单全部目标路径”检查 release SVN log。若该单已经完整提交，会直接显示提交 revision 并阻止重复 merge；若工作副本还有上次失败留下的状态，只提示核对和清理，不会自动 Revert。
@@ -76,7 +76,7 @@ NA RemoteAssets: G:\Dragon\NA RemoteAssets
 
 启动时，多张单号会合并为一批 SVN 日志查询，UI 与 RemoteAssets 日志会并行读取，同一 CN/NA 目标的路径状态也会按工作副本批量检查。这里只减少 SVN 调用次数，不使用过期缓存，单据状态和新提交仍会在每次打开或点击【重新加载】时刷新。
 
-需求单是否进入列表以 Meego 实时返回的 `current_nodes` 为准。内置单据服务不会再用固定的需求子状态 key 白名单提前过滤，因此流程新增或更换状态 key 后，只要节点名称仍是【提交 CN release】（含无空格写法），工具就能识别；更新脚本后无需重新安装或清理缓存，点击【重新加载】即可生效。
+需求单是否进入列表以 Meego 实时返回的 `current_nodes` 为准。内置单据服务不会再用固定的需求子状态 key 白名单提前过滤；只要节点名称是【待提交/提交 CN release】或【待提交/提交 NA release】（均兼容无空格写法），工具就能识别。更新脚本后无需重新安装或清理缓存，点击【重新加载】即可生效。
 
 勾选【包含 QA测试】后，如果单据涉及的 UI/RemoteAssets 路径很多，工具会自动把 `svn status` 拆成多批执行并汇总结果，避免超过 Windows 命令行长度上限。加载窗口关闭前请等待检查完成。
 

@@ -150,7 +150,11 @@ function Get-TargetNodeFilters {
         "待提交 CN release",
         "待提交CN release",
         "提交 CN release",
-        "提交CN release"
+        "提交CN release",
+        "待提交 NA release",
+        "待提交NA release",
+        "提交 NA release",
+        "提交NA release"
     )
 
     $includeQaTesting = $false
