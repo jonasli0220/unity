@@ -18,3 +18,4 @@
 - 不保存、不提交 API key；API key 只从 `MEEGO_BASE_API_KEY` 用户环境变量读取。
 - 不接入流程流转、评论、状态修改等写接口。
 - 需求单默认不使用写死的 `sub_stages` 白名单做服务端过滤；应返回当前用户的需求，再由主工具按实时 `current_nodes` 选择“提交 CN release”“提交 NA release”或可选的“QA测试”，避免流程新增状态 key 后静默漏单。
+- Provider 必须保留飞书返回的真实状态；status 或当前节点精确命中 `end`、`ended`、`closed`、`done`、`finish`、`finished`、`completed`、`closed_done` 时，在服务端排除该单据。

@@ -4,6 +4,7 @@ param(
     [string[]]$WorkItemTypeKeys = @("story", "6745be52ca5bd28affaa7241"),
     [string[]]$OpenStorySubStages = @(),
     [string[]]$OpenBugStateKeys = @("started", "9cR44p7mQ", "TbEabtpyH", "53c2802s2"),
+    [string[]]$TerminalStateLabels = @("end", "ended", "closed", "done", "finish", "finished", "completed", "closed_done"),
     [string[]]$ExcludedNodeKeywords = @(),
     [int]$PageSize = 200,
     [int]$MaxPages = 0,
@@ -160,18 +161,29 @@ function Convert-ToTicket {
     $status = Get-StatusText $Item.work_item_status
     $node = Get-CurrentNodeText $Item
     if ([string]::IsNullOrWhiteSpace($node)) { $node = $status }
+    if ([string]::IsNullOrWhiteSpace($status)) { $status = $node }
+    if ([string]::IsNullOrWhiteSpace($status)) { $status = "open" }
 
     [pscustomobject]@{
         id = $id
         type = $type
         title = $title
-        status = "open"
+        status = $status
         node = $node
     }
 }
 
 function Test-ExcludedTicket {
     param($Ticket)
+
+    $terminalLabels = @($TerminalStateLabels | ForEach-Object { ([string]$_).Trim().ToLowerInvariant() })
+    $stateValues = @([string]$Ticket.status) + @(([string]$Ticket.node) -split ",")
+    foreach ($value in $stateValues) {
+        $normalized = ([string]$value).Trim().ToLowerInvariant()
+        if (-not [string]::IsNullOrWhiteSpace($normalized) -and $terminalLabels -contains $normalized) {
+            return $true
+        }
+    }
 
     foreach ($keyword in $ExcludedNodeKeywords) {
         if ([string]::IsNullOrWhiteSpace($keyword)) { continue }
