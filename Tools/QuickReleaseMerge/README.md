@@ -88,6 +88,8 @@ NA RemoteAssets: G:\Dragon\NA RemoteAssets
 - `Warning`：可以 merge，但有风险提示，例如包含 UI/RemoteAssets 根目录变更，或目标目录仅有待提交的 SVN 合并记录（`svn:mergeinfo`）。
 - `Blocked`：工具会阻止 merge，例如目标 release 工作副本已有文件内容修改、其他属性修改、冲突，或没有找到对应 trunk UI/远程资源提交。
 
+如果提示“工作副本被 SVN 锁定”，这是 `svn status` 第三列的 `L`，通常表示之前的 Update、Merge 或 Commit 被中断，不代表本单修改了提示中的所有目录。先确认没有其他 SVN 操作正在运行，再在提示的目标工作副本根目录执行 TortoiseSVN【Clean up】（不要勾选删除未版本控制文件），完成后回到工具点击【重新加载】。工具不会自动执行 Cleanup。
+
 点击 merge 时，如果 release SVN log 中已经存在该单号，并且日志路径完整覆盖本单的全部 UI/RemoteAssets 变更，工具会显示【已提交，无需重复 merge】。这是为了避免把 trunk 的“新增文件”revision 再次合到已经拥有这些文件的 release，产生 `local file obstruction, incoming file add` tree conflict。
 
 SVN merge 可能在 UI 或 RemoteAssets 目录上留下 `svn:mergeinfo` 属性修改。它只记录已合入的 revision，不代表 prefab、图片等文件内容被本地修改；工具会显示黄色提示并允许继续，之后在对应 TortoiseSVN 提交窗口中与本次 merge 一并提交即可。

@@ -38,6 +38,7 @@
 - Meego Base API key 只写入 Windows 用户环境变量 `MEEGO_BASE_API_KEY`，不写入代码、示例配置或分享包。
 - 不删除资源文件。
 - CN/NA release 目标路径已有文件内容改动、非 `svn:mergeinfo` 属性改动或冲突时，必须按目标分支分别阻止自动 merge。
+- `svn status` 中只有第三列 `L` 的记录是工作副本 write lock，不是文件内容改动；仍须阻止 merge，但同一目标/资源范围只显示一条汇总提示，指导用户确认没有其他 SVN 操作后手动执行 SVN Cleanup，再重新加载。工具不得自动 Cleanup。
 - release 目录仅有未提交的 `svn:mergeinfo` 属性修改时，标记为可继续的 Warning，不作为内容冲突阻止；提示用户后允许继续 merge，并由后续手动提交一并提交 mergeinfo。
 - 发生 SVN merge 冲突时，默认停止；只有用户在弹窗中明确确认“用 trunk 覆盖冲突”后，才允许对本次单号 merge 使用 `--accept theirs-full`，并对 `local missing/deleted + incoming edit` 这类 tree conflict 从 trunk 对应 revision `svn export --force` 到 release 工作副本后 `svn resolve --accept working`。
 - 调用 `svn.exe` 等原生命令时，stderr 警告必须连同退出码一起返回给上层判断，不能被全局 PowerShell `ErrorActionPreference=Stop` 提前转换为致命异常，导致冲突回退逻辑失效。

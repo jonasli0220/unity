@@ -1300,6 +1300,26 @@ function Get-RawSvnStatusLine {
     return $StatusLine
 }
 
+function Test-SvnStatusIsWorkingCopyLockOnly {
+    param([string]$StatusLine)
+
+    $rawStatusLine = Get-RawSvnStatusLine $StatusLine
+    if ($rawStatusLine.Length -lt 7) {
+        return $false
+    }
+
+    $statusColumns = $rawStatusLine.Substring(0, 7)
+    if ($statusColumns[2] -ne "L") {
+        return $false
+    }
+    for ($i = 0; $i -lt $statusColumns.Length; $i += 1) {
+        if ($i -ne 2 -and $statusColumns[$i] -ne " ") {
+            return $false
+        }
+    }
+    return $true
+}
+
 function Get-SvnStatusReportedPath {
     param([string]$StatusLine)
 
@@ -1488,7 +1508,18 @@ function Get-TargetMergeAssessment {
             $targetPaths += @($areaChanges | ForEach-Object { $_.relativePath })
             $targetPaths += @($areaChanges | ForEach-Object { Get-MergeParentRelativePath $_.relativePath })
             $targetPaths = @($targetPaths | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) } | Sort-Object -Unique)
-            foreach ($statusLine in @(Get-ReleaseLocalStatuses -RelativePaths $targetPaths -TargetArea $targetArea)) {
+            $localStatusLines = @(Get-ReleaseLocalStatuses -RelativePaths $targetPaths -TargetArea $targetArea)
+            $workingCopyLocks = @($localStatusLines | Where-Object { Test-SvnStatusIsWorkingCopyLockOnly $_ })
+            if ($workingCopyLocks.Count -gt 0) {
+                $lockPaths = @($workingCopyLocks | ForEach-Object { Get-SvnStatusReportedPath $_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Sort-Object { $_.Length }, { $_ } -Unique)
+                $firstLockPath = if ($lockPaths.Count -gt 0) { [string]$lockPaths[0] } else { $targetRoot }
+                Add-Risk $risks "Block" "$($Target.name) $($targetArea.name) 工作副本被 SVN 锁定（检测到 $($workingCopyLocks.Count) 个锁标记，起始路径：$firstLockPath）。这不是文件内容改动。请确认没有其他 SVN 操作正在运行，然后在 $targetRoot 执行 SVN Cleanup，完成后点击【重新加载】。"
+            }
+
+            foreach ($statusLine in $localStatusLines) {
+                if (Test-SvnStatusIsWorkingCopyLockOnly $statusLine) {
+                    continue
+                }
                 if ($statusLine.StartsWith("[mergeinfo-only] ", [System.StringComparison]::Ordinal)) {
                     $reportedPath = Get-SvnStatusReportedPath $statusLine
                     Add-Risk $risks "Warn" "$($Target.name) $($targetArea.name) 仅有 SVN 合并记录待提交，不影响文件内容：$reportedPath"
