@@ -20,8 +20,14 @@ public class UIAnimationPathRepairWindow : EditorWindow
 
     private readonly List<AnimationClip> clips = new List<AnimationClip>();
     private readonly List<PathRepairRow> rows = new List<PathRepairRow>();
+    private readonly List<string> copySourcePaths = new List<string>();
+    private readonly List<SourceCurveGroup> copyCurveGroups = new List<SourceCurveGroup>();
+    private readonly List<Transform> copyTargets = new List<Transform>();
     [SerializeField] private EditorWindow sourceAnimationWindow;
     private Vector2 scrollPosition;
+    private Vector2 nodeCopyScrollPosition;
+    private int workflowTab;
+    private int copySourceIndex = -1;
     private GameObject targetRoot;
     private AnimationClip observedAnimationClip;
     private GameObject observedAnimationRoot;
@@ -82,6 +88,11 @@ public class UIAnimationPathRepairWindow : EditorWindow
 
     private void Update()
     {
+        if (workflowTab == 1)
+        {
+            return;
+        }
+
         if (EditorApplication.timeSinceStartup < nextContextPollTime)
         {
             return;
@@ -94,7 +105,7 @@ public class UIAnimationPathRepairWindow : EditorWindow
 
     private void OnGUI()
     {
-        EditorGUILayout.LabelField("Animation 丢失路径复制 / 修复", EditorStyles.boldLabel);
+        EditorGUILayout.LabelField("Animation 曲线复制 / 路径修复", EditorStyles.boldLabel);
         using (new EditorGUILayout.HorizontalScope(EditorStyles.helpBox))
         {
             EditorGUILayout.LabelField("当前 AnimationClip", GUILayout.Width(125));
@@ -102,12 +113,38 @@ public class UIAnimationPathRepairWindow : EditorWindow
                 observedAnimationClip != null ? observedAnimationClip.name : "未检测到",
                 EditorStyles.boldLabel);
             GUILayout.FlexibleSpace();
-            EditorGUILayout.LabelField("自动跟随", EditorStyles.miniLabel, GUILayout.Width(55));
+            EditorGUILayout.LabelField(workflowTab == 0 ? "自动跟随" : "已固定", EditorStyles.miniLabel, GUILayout.Width(55));
         }
 
-        DrawActionArea();
-        EditorGUILayout.Space(8);
-        DrawResultArea();
+        var nextTab = GUILayout.Toolbar(workflowTab, new[] { "修复 Missing 路径", "复制到其他节点" });
+        if (nextTab != workflowTab)
+        {
+            if (nextTab == 1)
+            {
+                RefreshAnimationWindowContextIfChanged();
+            }
+
+            workflowTab = nextTab;
+            if (workflowTab == 0)
+            {
+                RefreshAnimationWindowContextIfChanged();
+            }
+            else
+            {
+                RefreshNodeCopySources();
+            }
+        }
+
+        if (workflowTab == 0)
+        {
+            DrawActionArea();
+            EditorGUILayout.Space(8);
+            DrawResultArea();
+        }
+        else
+        {
+            DrawNodeCopyArea();
+        }
     }
 
     private void DrawActionArea()
@@ -261,6 +298,142 @@ public class UIAnimationPathRepairWindow : EditorWindow
         EditorGUILayout.EndScrollView();
     }
 
+    private void DrawNodeCopyArea()
+    {
+        EditorGUILayout.HelpBox(
+            "当前 AnimationClip 和根节点已固定。先选来源属性，再在 Hierarchy 多选目标节点并添加；目标无需预先创建关键帧轨道。",
+            MessageType.Info);
+        using (new EditorGUILayout.HorizontalScope())
+        {
+            EditorGUILayout.LabelField(
+                "动画根节点：" + (targetRoot != null ? targetRoot.name : "未检测到"));
+            if (GUILayout.Button("读取 Animation 当前动画", GUILayout.Width(165)))
+            {
+                var context = UIAnimationPathRepairAnimationWindowAccess.GetCurrentContext(sourceAnimationWindow);
+                if (context.Clip == null || context.Root == null)
+                {
+                    SetActionMessage("Animation 窗口没有可用的 Clip 或根节点。请先选中动画根节点并打开动画。", MessageType.Warning);
+                }
+                else
+                {
+                    ApplyAnimationWindowContext(context, true);
+                }
+            }
+        }
+
+        if (observedAnimationClip == null || targetRoot == null)
+        {
+            EditorGUILayout.HelpBox("请先在 Animation 窗口打开可编辑的动画，再点击“读取 Animation 当前动画”。", MessageType.Warning);
+            DrawActionMessage();
+            return;
+        }
+
+        if (copySourcePaths.Count == 0)
+        {
+            RefreshNodeCopySources();
+        }
+
+        if (copySourcePaths.Count == 0)
+        {
+            EditorGUILayout.HelpBox("当前动画根节点下没有可复制的有效曲线。", MessageType.Warning);
+            DrawActionMessage();
+            return;
+        }
+
+        nodeCopyScrollPosition = EditorGUILayout.BeginScrollView(nodeCopyScrollPosition);
+        EditorGUILayout.Space(8);
+        EditorGUILayout.LabelField("1. 选择已有关键帧的来源节点", EditorStyles.boldLabel);
+        var sourceLabels = copySourcePaths.Select(path => string.IsNullOrEmpty(path) ? "(动画根节点)" : path).ToArray();
+        var nextSourceIndex = EditorGUILayout.Popup("来源节点", Math.Max(copySourceIndex, 0), sourceLabels);
+        if (nextSourceIndex != copySourceIndex)
+        {
+            copySourceIndex = nextSourceIndex;
+            RebuildNodeCopyGroups();
+        }
+
+        if (GUILayout.Button("使用 Hierarchy 当前选中节点作为来源"))
+        {
+            var selected = Selection.activeTransform;
+            var path = selected != null && (selected == targetRoot.transform || selected.IsChildOf(targetRoot.transform))
+                ? GetRelativePath(targetRoot.transform, selected)
+                : null;
+            var index = path != null ? copySourcePaths.IndexOf(path) : -1;
+            if (index < 0)
+            {
+                SetActionMessage("所选节点不在当前动画根节点下，或该节点在当前 Clip 中没有有效曲线。", MessageType.Warning);
+            }
+            else
+            {
+                copySourceIndex = index;
+                RebuildNodeCopyGroups();
+                actionMessage = string.Empty;
+            }
+        }
+
+        EditorGUILayout.Space(6);
+        EditorGUILayout.LabelField("2. 选择要复制的属性", EditorStyles.boldLabel);
+        foreach (var group in copyCurveGroups)
+        {
+            group.Selected = EditorGUILayout.ToggleLeft(group.DisplayLabel, group.Selected);
+        }
+
+        EditorGUILayout.Space(6);
+        EditorGUILayout.LabelField("3. 在 Hierarchy 多选目标节点", EditorStyles.boldLabel);
+        if (GUILayout.Button("添加 Hierarchy 当前所选节点"))
+        {
+            AddSelectedNodeCopyTargets();
+        }
+
+        for (var i = copyTargets.Count - 1; i >= 0; i--)
+        {
+            var target = copyTargets[i];
+            using (new EditorGUILayout.HorizontalScope(EditorStyles.helpBox))
+            {
+                EditorGUILayout.LabelField(
+                    target != null ? GetRelativePath(targetRoot.transform, target) : "目标节点已删除");
+                if (GUILayout.Button("移除", GUILayout.Width(55)))
+                {
+                    copyTargets.RemoveAt(i);
+                    continue;
+                }
+            }
+
+            var warning = GetNodeCopyTargetWarning(target);
+            if (!string.IsNullOrEmpty(warning))
+            {
+                EditorGUILayout.HelpBox(warning, MessageType.Warning);
+            }
+        }
+        EditorGUILayout.EndScrollView();
+
+        var selectedGroups = copyCurveGroups.Where(group => group.Selected).ToArray();
+        var canCopy = selectedGroups.Length > 0
+            && copyTargets.Count > 0
+            && copyTargets.All(target => string.IsNullOrEmpty(GetNodeCopyTargetWarning(target)));
+        using (new EditorGUI.DisabledScope(!canCopy))
+        {
+            if (GUILayout.Button("复制关键帧到目标节点", GUILayout.Height(32)))
+            {
+                ApplyNodeCopies();
+            }
+        }
+
+        if (selectedGroups.Length == 0 || copyTargets.Count == 0)
+        {
+            EditorGUILayout.HelpBox("选择至少一组属性，并添加至少一个目标节点。", MessageType.None);
+        }
+
+        DrawActionMessage();
+    }
+
+    private void DrawActionMessage()
+    {
+        if (!string.IsNullOrEmpty(actionMessage))
+        {
+            EditorGUILayout.HelpBox(actionMessage, actionMessageType);
+        }
+    }
+
     private void DrawCandidateLine(PathRepairRow row, int candidateIndex)
     {
         var candidate = row.Candidates[candidateIndex];
@@ -307,6 +480,7 @@ public class UIAnimationPathRepairWindow : EditorWindow
         observedAnimationClip = clips.FirstOrDefault(clip => clip != null);
         observedAnimationRoot = targetRoot;
         rows.Clear();
+        ResetNodeCopyContext();
         scanMessage = targetRoot == null
             ? "没有自动找到根节点。请打开 Prefab 或选中一个 GameObject。"
             : "已自动获取上下文，可以扫描。";
@@ -344,6 +518,7 @@ public class UIAnimationPathRepairWindow : EditorWindow
         clips.Clear();
         AddClip(observedAnimationClip);
         rows.Clear();
+        ResetNodeCopyContext();
         actionMessage = string.Empty;
         scrollPosition = Vector2.zero;
 
@@ -370,6 +545,7 @@ public class UIAnimationPathRepairWindow : EditorWindow
         }
 
         Scan();
+        RefreshNodeCopySources();
         scanMessage = string.Format(
             "已自动切换并刷新：{0}\n{1}",
             observedAnimationClip.name,
@@ -486,6 +662,186 @@ public class UIAnimationPathRepairWindow : EditorWindow
         }
 
         clips.Add(clip);
+    }
+
+    private void ResetNodeCopyContext()
+    {
+        copySourcePaths.Clear();
+        copyCurveGroups.Clear();
+        copyTargets.Clear();
+        copySourceIndex = -1;
+        nodeCopyScrollPosition = Vector2.zero;
+    }
+
+    private string SelectedNodeCopySourcePath
+    {
+        get
+        {
+            return copySourceIndex >= 0 && copySourceIndex < copySourcePaths.Count
+                ? copySourcePaths[copySourceIndex]
+                : null;
+        }
+    }
+
+    private void RefreshNodeCopySources()
+    {
+        var previousSource = SelectedNodeCopySourcePath;
+        copySourcePaths.Clear();
+        copyCurveGroups.Clear();
+        copySourceIndex = -1;
+        if (observedAnimationClip == null || targetRoot == null)
+        {
+            return;
+        }
+
+        var bindings = AnimationUtility.GetCurveBindings(observedAnimationClip)
+            .Concat(AnimationUtility.GetObjectReferenceCurveBindings(observedAnimationClip));
+        foreach (var group in bindings.GroupBy(binding => binding.path ?? string.Empty))
+        {
+            var transform = FindByPath(targetRoot.transform, group.Key);
+            if (transform == null || !group.Any(binding => CanGameObjectSatisfyType(transform, binding.type)))
+            {
+                continue;
+            }
+
+            copySourcePaths.Add(group.Key);
+        }
+
+        copySourcePaths.Sort(StringComparer.Ordinal);
+        copySourceIndex = previousSource != null ? copySourcePaths.IndexOf(previousSource) : -1;
+        if (copySourceIndex < 0 && Selection.activeTransform != null
+            && (Selection.activeTransform == targetRoot.transform || Selection.activeTransform.IsChildOf(targetRoot.transform)))
+        {
+            copySourceIndex = copySourcePaths.IndexOf(GetRelativePath(targetRoot.transform, Selection.activeTransform));
+        }
+
+        if (copySourceIndex < 0 && copySourcePaths.Count > 0)
+        {
+            copySourceIndex = 0;
+        }
+
+        RebuildNodeCopyGroups();
+    }
+
+    private void RebuildNodeCopyGroups()
+    {
+        copyCurveGroups.Clear();
+        var sourcePath = SelectedNodeCopySourcePath;
+        if (sourcePath == null || observedAnimationClip == null)
+        {
+            return;
+        }
+
+        var bindings = AnimationUtility.GetCurveBindings(observedAnimationClip)
+            .Concat(AnimationUtility.GetObjectReferenceCurveBindings(observedAnimationClip))
+            .Where(binding => string.Equals(binding.path ?? string.Empty, sourcePath, StringComparison.Ordinal)
+                && CanGameObjectSatisfyType(FindByPath(targetRoot.transform, sourcePath), binding.type));
+        foreach (var binding in bindings)
+        {
+            var groupName = GetNodeCopyGroupName(binding);
+            var group = copyCurveGroups.FirstOrDefault(item => item.Key == groupName);
+            if (group == null)
+            {
+                group = new SourceCurveGroup(groupName, GetNodeCopyGroupLabel(binding));
+                copyCurveGroups.Add(group);
+            }
+
+            group.Bindings.Add(binding);
+        }
+
+        copyCurveGroups.Sort((left, right) => string.Compare(left.DisplayLabel, right.DisplayLabel, StringComparison.Ordinal));
+    }
+
+    private static string GetNodeCopyGroupName(EditorCurveBinding binding)
+    {
+        var propertyName = binding.propertyName ?? string.Empty;
+        if (propertyName.Length >= 3 && propertyName[propertyName.Length - 2] == '.'
+            && "xyzwrgba".IndexOf(propertyName[propertyName.Length - 1]) >= 0)
+        {
+            propertyName = propertyName.Substring(0, propertyName.Length - 2);
+        }
+
+        return (binding.type != null ? binding.type.FullName : "MissingType") + "|" + propertyName;
+    }
+
+    private static string GetNodeCopyGroupLabel(EditorCurveBinding binding)
+    {
+        var groupName = GetNodeCopyGroupName(binding);
+        var propertyName = groupName.Substring(groupName.IndexOf('|') + 1);
+        if (propertyName.StartsWith("m_", StringComparison.Ordinal))
+        {
+            propertyName = propertyName.Substring(2);
+        }
+
+        return (binding.type != null ? binding.type.Name : "MissingType")
+            + " · " + ObjectNames.NicifyVariableName(propertyName);
+    }
+
+    private void AddSelectedNodeCopyTargets()
+    {
+        var sourcePath = SelectedNodeCopySourcePath;
+        var addedCount = 0;
+        var skippedCount = 0;
+        foreach (var target in Selection.transforms)
+        {
+            if (target == null || targetRoot == null
+                || (target != targetRoot.transform && !target.IsChildOf(targetRoot.transform)))
+            {
+                skippedCount++;
+                continue;
+            }
+
+            var path = GetRelativePath(targetRoot.transform, target);
+            if (string.Equals(path, sourcePath, StringComparison.Ordinal)
+                || FindByPath(targetRoot.transform, path) != target
+                || copyTargets.Any(existing => existing == target))
+            {
+                skippedCount++;
+                continue;
+            }
+
+            copyTargets.Add(target);
+            addedCount++;
+        }
+
+        SetActionMessage(
+            addedCount > 0
+                ? string.Format("已添加 {0} 个目标节点。{1}", addedCount,
+                    skippedCount > 0 ? string.Format("跳过 {0} 个不适用或重复节点。", skippedCount) : string.Empty)
+                : "没有添加目标节点。请在 Hierarchy 选择当前动画根节点下、与来源不同的节点。",
+            addedCount > 0 ? MessageType.Info : MessageType.Warning);
+    }
+
+    private string GetNodeCopyTargetWarning(Transform target)
+    {
+        if (target == null || targetRoot == null)
+        {
+            return "目标节点已删除，或动画根节点不可用。";
+        }
+
+        if (target != targetRoot.transform && !target.IsChildOf(targetRoot.transform))
+        {
+            return "目标节点已移出当前动画根节点。";
+        }
+
+        var path = GetRelativePath(targetRoot.transform, target);
+        if (string.Equals(path, SelectedNodeCopySourcePath, StringComparison.Ordinal))
+        {
+            return "目标节点与来源相同。";
+        }
+
+        if (FindByPath(targetRoot.transform, path) != target)
+        {
+            return "目标节点与同级节点重名，动画路径无法唯一定位。请先改名。";
+        }
+
+        var types = copyCurveGroups.Where(group => group.Selected)
+            .SelectMany(group => group.Bindings)
+            .Select(binding => binding.type);
+        var missingTypes = GetMissingRequiredTypeNames(target, types);
+        return missingTypes.Length > 0
+            ? "目标节点缺少动画所需组件：" + string.Join(", ", missingTypes)
+            : string.Empty;
     }
 
     private void Scan()
@@ -675,6 +1031,139 @@ public class UIAnimationPathRepairWindow : EditorWindow
                     ? "\n原 Missing 曲线仍保留；Animation 窗口中会同时出现新路径曲线。"
                     : string.Empty),
             MessageType.Info);
+    }
+
+    private void ApplyNodeCopies()
+    {
+        if (observedAnimationClip == null || targetRoot == null
+            || copyTargets.Count == 0 || copyCurveGroups.All(group => !group.Selected)
+            || copyTargets.Any(target => !string.IsNullOrEmpty(GetNodeCopyTargetWarning(target))))
+        {
+            SetActionMessage("来源属性或目标节点已变化，请检查列表后再复制。", MessageType.Warning);
+            return;
+        }
+
+        var selectedBindings = copyCurveGroups.Where(group => group.Selected)
+            .SelectMany(group => group.Bindings).ToArray();
+        var source = FindByPath(targetRoot.transform, SelectedNodeCopySourcePath);
+        if (source == null
+            || GetMissingRequiredTypeNames(source, selectedBindings.Select(binding => binding.type)).Length > 0)
+        {
+            SetActionMessage("来源节点或所选属性组件已经变化。请重新读取当前动画。", MessageType.Warning);
+            return;
+        }
+
+        var targetPaths = copyTargets
+            .Select(target => GetRelativePath(targetRoot.transform, target))
+            .Distinct(StringComparer.Ordinal).ToArray();
+        var plan = BuildNodeCopyPlan(
+            observedAnimationClip,
+            SelectedNodeCopySourcePath,
+            selectedBindings,
+            targetPaths);
+        if (plan.BindingCount != selectedBindings.Length * targetPaths.Length)
+        {
+            SetActionMessage("来源曲线已经变化。请重新选择来源节点或读取当前动画后再试。", MessageType.Warning);
+            return;
+        }
+
+        if (plan.TargetConflictCount > 0
+            && !EditorUtility.DisplayDialog(
+                "覆盖目标动画曲线",
+                string.Format("{0} 个目标节点中已有 {1} 条同属性曲线，继续会覆盖这些曲线。来源曲线会保留。",
+                    targetPaths.Length, plan.TargetConflictCount),
+                "覆盖并复制",
+                "取消"))
+        {
+            return;
+        }
+
+        const string undoLabel = "Copy Animation Curves To Nodes";
+        Undo.IncrementCurrentGroup();
+        var undoGroup = Undo.GetCurrentGroup();
+        Undo.SetCurrentGroupName(undoLabel);
+        try
+        {
+            Undo.RecordObject(plan.Clip, undoLabel);
+            ApplyTransferPlan(plan, BindingTransferMode.Copy);
+            EditorUtility.SetDirty(plan.Clip);
+            AssetDatabase.SaveAssets();
+
+            var verificationError = VerifyTransferPlans(new[] { plan }, BindingTransferMode.Copy);
+            if (!string.IsNullOrEmpty(verificationError))
+            {
+                throw new InvalidOperationException(verificationError);
+            }
+
+            Undo.CollapseUndoOperations(undoGroup);
+        }
+        catch (Exception ex)
+        {
+            Undo.RevertAllDownToGroup(undoGroup);
+            AssetDatabase.SaveAssets();
+            UIAnimationPathRepairAnimationWindowAccess.ForceRefreshOpenWindows();
+            SetActionMessage("复制失败，已撤销本次写入。\n" + ex.Message, MessageType.Error);
+            Debug.LogException(ex);
+            return;
+        }
+
+        UIAnimationPathRepairAnimationWindowAccess.ForceRefreshOpenWindows();
+        SetActionMessage(
+            string.Format("✓ 已复制到 {0} 个节点，新建或更新 {1} 条曲线；已回读确认关键帧和来源曲线完整。",
+                targetPaths.Length, plan.BindingCount),
+            MessageType.Info);
+    }
+
+    private static ClipTransferPlan BuildNodeCopyPlan(
+        AnimationClip clip,
+        string sourcePath,
+        IEnumerable<EditorCurveBinding> selectedBindings,
+        IEnumerable<string> targetPaths)
+    {
+        var plan = new ClipTransferPlan(clip);
+        var floatBindings = AnimationUtility.GetCurveBindings(clip);
+        var objectBindings = AnimationUtility.GetObjectReferenceCurveBindings(clip);
+        foreach (var selectedBinding in selectedBindings)
+        {
+            var floatBinding = floatBindings.FirstOrDefault(binding => AreSameBinding(binding, selectedBinding));
+            var isFloatCurve = floatBindings.Any(binding => AreSameBinding(binding, selectedBinding));
+            var isObjectCurve = objectBindings.Any(binding => AreSameBinding(binding, selectedBinding));
+            if ((!isFloatCurve && !isObjectCurve)
+                || !string.Equals(selectedBinding.path ?? string.Empty, sourcePath, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            foreach (var targetPath in targetPaths)
+            {
+                var targetBinding = selectedBinding;
+                targetBinding.path = targetPath;
+                if (isFloatCurve)
+                {
+                    plan.FloatCurves.Add(new FloatCurveTransfer(
+                        floatBinding,
+                        targetBinding,
+                        AnimationUtility.GetEditorCurve(clip, floatBinding)));
+                    if (floatBindings.Any(binding => AreSameBinding(binding, targetBinding)))
+                    {
+                        plan.TargetConflictCount++;
+                    }
+                }
+                else
+                {
+                    plan.ObjectCurves.Add(new ObjectCurveTransfer(
+                        selectedBinding,
+                        targetBinding,
+                        AnimationUtility.GetObjectReferenceCurve(clip, selectedBinding)));
+                    if (objectBindings.Any(binding => AreSameBinding(binding, targetBinding)))
+                    {
+                        plan.TargetConflictCount++;
+                    }
+                }
+            }
+        }
+
+        return plan;
     }
 
     private void SetActionMessage(string message, MessageType messageType)
@@ -981,6 +1470,20 @@ public class UIAnimationPathRepairWindow : EditorWindow
     {
         Copy,
         Move
+    }
+
+    private sealed class SourceCurveGroup
+    {
+        public SourceCurveGroup(string key, string displayLabel)
+        {
+            Key = key;
+            DisplayLabel = displayLabel;
+        }
+
+        public string Key { get; private set; }
+        public string DisplayLabel { get; private set; }
+        public bool Selected { get; set; } = true;
+        public List<EditorCurveBinding> Bindings { get; } = new List<EditorCurveBinding>();
     }
 
     private sealed class ClipTransferPlan
@@ -1399,7 +1902,7 @@ public static class UIAnimationPathRepairAnimationWindowButton
         {
             name = ButtonName,
             text = ButtonText,
-            tooltip = "扫描当前 AnimationClip 的 Missing 路径，完整复制曲线到重命名后的节点，或迁移原曲线路径。"
+            tooltip = "复制当前 AnimationClip 的曲线到其他节点，或修复 Missing 路径。目标无需预先创建关键帧。"
         };
 
         button.AddToClassList("unity-button");
