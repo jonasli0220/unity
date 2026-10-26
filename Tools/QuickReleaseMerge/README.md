@@ -107,6 +107,10 @@ svn resolve --accept working <release_conflict_path>
 
 这里的 `theirs` 指本次从 trunk 合过来的版本。若 SVN 返回 tree conflict，例如 release 里目标文件/目录缺失、但 trunk 有编辑，工具会在你确认后把 trunk 对应 revision 的文件/目录导出到 release 工作副本，再用 `svn resolve --accept working` 标记已处理。这个动作可能覆盖 release 上同一文件/目录的改动，所以工具不会默认执行，必须由你在弹窗里二次确认。
 
+如果冲突来自“本单较早 revision 新增路径、后续 revision 又删除路径”，工具会先做三重校验：release 冲突项必须是 `added + copied + tree-conflicted`，trunk 路径必须在上一 revision 存在，并且在当前 revision 已不存在。只有你已经确认【用 trunk 覆盖冲突】且三项全部满足时，工具才会对这一条精确路径执行 `svn revert` 接受 incoming delete；不会删除其他路径或未版本控制内容。校验不完整时会停止并保留现场。
+
+冲突回退导出 trunk 内容时，工具会同时固定 operative revision 和 peg revision，避免路径在后续 revision 被删除或移动后出现 `E160013 path not found`。
+
 如果 SVN 返回过冲突信息，但 `svn status` 已经没有未解决的 `C` 路径，工具会认为 `--accept theirs-full` 已经自动处理完文本冲突，并继续后续 revision。
 
 ## API Key

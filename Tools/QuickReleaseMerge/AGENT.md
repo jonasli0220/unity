@@ -36,11 +36,12 @@
 - 不自动执行 `svn commit`。
 - 不接入 Meegle workflow 写接口，不读取 workflow token；提交后只检测 release SVN log，流程由用户手动打开单子流转。
 - Meego Base API key 只写入 Windows 用户环境变量 `MEEGO_BASE_API_KEY`，不写入代码、示例配置或分享包。
-- 不删除资源文件。
+- 不主动删除资源文件。唯一例外是用户已在冲突弹窗明确确认“用 trunk 覆盖”，且工具同时验证冲突路径是本次连续 merge 产生的 `added + copied + tree-conflicted` 状态、远端路径在上一 revision 存在而在当前 revision 已删除；此时允许仅对该精确冲突路径执行 `svn revert` 接受 incoming delete，不得删除其他路径或未版本控制内容。
 - CN/NA release 目标路径已有文件内容改动、非 `svn:mergeinfo` 属性改动或冲突时，必须按目标分支分别阻止自动 merge。
 - `svn status` 中只有第三列 `L` 的记录是工作副本 write lock，不是文件内容改动；仍须阻止 merge，但同一目标/资源范围只显示一条汇总提示，指导用户确认没有其他 SVN 操作后手动执行 SVN Cleanup，再重新加载。工具不得自动 Cleanup。
 - release 目录仅有未提交的 `svn:mergeinfo` 属性修改时，标记为可继续的 Warning，不作为内容冲突阻止；提示用户后允许继续 merge，并由后续手动提交一并提交 mergeinfo。
 - 发生 SVN merge 冲突时，默认停止；只有用户在弹窗中明确确认“用 trunk 覆盖冲突”后，才允许对本次单号 merge 使用 `--accept theirs-full`，并对 `local missing/deleted + incoming edit` 这类 tree conflict 从 trunk 对应 revision `svn export --force` 到 release 工作副本后 `svn resolve --accept working`。
+- 对 `local added/copied + incoming delete` tree conflict，只有在上述三重校验全部通过后才允许用 `svn revert --depth infinity` 接受 trunk 删除；远端删除校验不通过、工作副本状态不精确匹配或 revert 后路径仍存在时必须停止并报错。
 - 调用 `svn.exe` 等原生命令时，stderr 警告必须连同退出码一起返回给上层判断，不能被全局 PowerShell `ErrorActionPreference=Stop` 提前转换为致命异常，导致冲突回退逻辑失效。
 - 如果 SVN 输出曾报告冲突，但 `svn status` 已没有未解决的 `C` 路径，应视为 `--accept theirs-full` 已自动处理完文本冲突并继续后续 revision，不要误报失败。
 - 用户点击目标 merge 后、执行 dry-run 前，必须按“单号 + 本单在该目标的全部 UI/RemoteAssets 路径”检查 release SVN log；如果目标分支已经完整提交，标记为已提交并阻止重复 merge。若工作副本还有上次失败留下的本地状态，只给出精确清理提示，不自动 revert 或覆盖。

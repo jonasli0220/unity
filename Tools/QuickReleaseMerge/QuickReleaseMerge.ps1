@@ -1729,38 +1729,83 @@ function Limit-MessageText {
     return "$($Text.Substring(0, $MaxLength))`r`n..."
 }
 
-function Get-SvnConflictPaths {
+function Get-SvnConflictEntries {
     param([string]$WorkingDirectory, [string]$TargetPath)
 
-    $result = Invoke-Svn -Arguments @("status", "--quiet", $TargetPath) -WorkingDirectory $WorkingDirectory
+    $result = Invoke-Svn -Arguments @("status", "--xml", "--quiet", $TargetPath) -WorkingDirectory $WorkingDirectory
     if ($result.exitCode -ne 0) {
         throw "读取冲突状态失败：$($result.stdout)"
     }
 
-    $paths = New-Object System.Collections.Generic.List[string]
-    foreach ($line in ($result.stdout -split "`n")) {
-        $text = [string]$line
-        if ([string]::IsNullOrWhiteSpace($text)) {
-            continue
-        }
+    try {
+        [xml]$statusXml = $result.stdout
+    }
+    catch {
+        throw "无法解析 SVN 冲突状态：$($_.Exception.Message)"
+    }
 
-        $match = [regex]::Match($text, "^(?<status>.{1,8})\s+(?<path>.+?)\s*$")
-        if (-not $match.Success) {
-            continue
-        }
+    $entries = New-Object System.Collections.Generic.List[object]
+    foreach ($target in @($statusXml.status.target)) {
+        foreach ($entry in @($target.entry)) {
+            $wcStatus = $entry.'wc-status'
+            if ($null -eq $wcStatus) {
+                continue
+            }
 
-        $statusText = [string]$match.Groups["status"].Value
-        if ($statusText.IndexOf("C", [System.StringComparison]::OrdinalIgnoreCase) -lt 0) {
-            continue
-        }
+            $item = [string]$wcStatus.item
+            $treeConflicted = ([string]$wcStatus.'tree-conflicted' -eq "true")
+            if (-not $treeConflicted -and $item -ne "conflicted") {
+                continue
+            }
 
-        $path = [string]$match.Groups["path"].Value
-        if (-not [string]::IsNullOrWhiteSpace($path)) {
-            $paths.Add($path)
+            $path = [string]$entry.path
+            if ([string]::IsNullOrWhiteSpace($path)) {
+                continue
+            }
+
+            $entries.Add([pscustomobject]@{
+                path = $path
+                item = $item
+                copied = ([string]$wcStatus.copied -eq "true")
+                treeConflicted = $treeConflicted
+            }) | Out-Null
         }
     }
 
-    return @($paths | Sort-Object -Unique)
+    return @($entries | Sort-Object path -Unique)
+}
+
+function Get-SvnConflictPaths {
+    param([string]$WorkingDirectory, [string]$TargetPath)
+
+    return @(Get-SvnConflictEntries -WorkingDirectory $WorkingDirectory -TargetPath $TargetPath | ForEach-Object { $_.path })
+}
+
+function Test-SvnUrlExistsAtRevision {
+    param([string]$WorkingDirectory, [string]$Url, [int]$Revision)
+
+    if ($Revision -lt 0 -or [string]::IsNullOrWhiteSpace($Url)) {
+        return $false
+    }
+
+    $pegUrl = "$Url@$Revision"
+    $result = Invoke-Svn -Arguments @("info", "--xml", "-r", [string]$Revision, "--", $pegUrl) -WorkingDirectory $WorkingDirectory
+    return ($result.exitCode -eq 0)
+}
+
+function Test-SvnSourcePathDeletedAtRevision {
+    param([string]$WorkingDirectory, [string]$Url, [int]$Revision)
+
+    if ($Revision -le 0) {
+        return $false
+    }
+
+    $existedBefore = Test-SvnUrlExistsAtRevision -WorkingDirectory $WorkingDirectory -Url $Url -Revision ($Revision - 1)
+    if (-not $existedBefore) {
+        return $false
+    }
+
+    return -not (Test-SvnUrlExistsAtRevision -WorkingDirectory $WorkingDirectory -Url $Url -Revision $Revision)
 }
 
 function Resolve-SvnConflictsWithTrunk {
@@ -1770,12 +1815,13 @@ function Resolve-SvnConflictsWithTrunk {
     $targetPath = [string]$Group.targetPath
     $sourceUrl = [string]$Group.sourceUrl
     $sourceRevision = Get-MaxRevisionFromSpec ([string]$Group.revisionSpec)
-    $conflictPaths = @(Get-SvnConflictPaths -WorkingDirectory $WorkingDirectory -TargetPath $targetPath)
-    if ($conflictPaths.Count -eq 0) {
+    $conflictEntries = @(Get-SvnConflictEntries -WorkingDirectory $WorkingDirectory -TargetPath $targetPath)
+    if ($conflictEntries.Count -eq 0) {
         return "SVN 报告过冲突，但 svn status 已没有未解决冲突；通常表示 --accept theirs-full 已自动处理完文本冲突，继续后续 revision。"
     }
 
-    foreach ($path in $conflictPaths) {
+    foreach ($conflictEntry in $conflictEntries) {
+        $path = [string]$conflictEntry.path
         $resolved = $false
         $first = Invoke-Svn -Arguments @("resolve", "--accept", "theirs-full", $path) -WorkingDirectory $WorkingDirectory
         $outputs.Add("resolve --accept theirs-full $path`n$($first.stdout)") | Out-Null
@@ -1794,13 +1840,41 @@ function Resolve-SvnConflictsWithTrunk {
             $relativeToGroup = Get-ConflictPathUnderMergeTarget -ConflictPath $path -TargetPath $targetPath
             $conflictSourceUrl = Join-SvnUrlPath -BaseUrl $sourceUrl -RelativePath $relativeToGroup
             $destinationPath = Get-WorkingCopyFullPath -WorkingDirectory $WorkingDirectory -RelativePath $path
+
+            $canAcceptIncomingDelete = ([string]$conflictEntry.item -eq "added") -and
+                ($conflictEntry.copied -eq $true) -and
+                ($conflictEntry.treeConflicted -eq $true) -and
+                (Test-SvnSourcePathDeletedAtRevision -WorkingDirectory $WorkingDirectory -Url $conflictSourceUrl -Revision $sourceRevision)
+            if ($canAcceptIncomingDelete) {
+                $revert = Invoke-Svn -Arguments @("revert", "--depth", "infinity", "--", $path) -WorkingDirectory $WorkingDirectory
+                $outputs.Add("accept trunk incoming delete r$sourceRevision $path`n$($revert.stdout)") | Out-Null
+                if ($revert.exitCode -ne 0) {
+                    throw "确认 trunk 已删除冲突路径，但无法接受 incoming delete：$path`r`n$($revert.stdout)"
+                }
+                if (Test-Path -LiteralPath $destinationPath) {
+                    throw "已撤销冲突路径的待新增状态，但本地路径仍存在，已停止以避免删除未版本控制内容：$path"
+                }
+
+                $remainingForPath = @(Get-SvnConflictEntries -WorkingDirectory $WorkingDirectory -TargetPath $targetPath | Where-Object { [string]$_.path -ieq $path })
+                if ($remainingForPath.Count -gt 0) {
+                    throw "已尝试接受 trunk 删除，但冲突仍未解决：$path"
+                }
+                $resolved = $true
+            }
+        }
+
+        if (-not $resolved) {
+            $relativeToGroup = Get-ConflictPathUnderMergeTarget -ConflictPath $path -TargetPath $targetPath
+            $conflictSourceUrl = Join-SvnUrlPath -BaseUrl $sourceUrl -RelativePath $relativeToGroup
+            $conflictSourceUrlWithPeg = "$conflictSourceUrl@$sourceRevision"
+            $destinationPath = Get-WorkingCopyFullPath -WorkingDirectory $WorkingDirectory -RelativePath $path
             $destinationParent = Split-Path -Parent $destinationPath
             if (-not [string]::IsNullOrWhiteSpace($destinationParent) -and -not (Test-Path -LiteralPath $destinationParent -PathType Container)) {
                 New-Item -ItemType Directory -Path $destinationParent -Force | Out-Null
             }
 
-            $export = Invoke-Svn -Arguments @("export", "--force", "-r", [string]$sourceRevision, $conflictSourceUrl, $destinationPath) -WorkingDirectory $WorkingDirectory
-            $outputs.Add("export trunk r$sourceRevision $conflictSourceUrl -> $path`n$($export.stdout)") | Out-Null
+            $export = Invoke-Svn -Arguments @("export", "--force", "-r", [string]$sourceRevision, $conflictSourceUrlWithPeg, $destinationPath) -WorkingDirectory $WorkingDirectory
+            $outputs.Add("export trunk r$sourceRevision $conflictSourceUrlWithPeg -> $path`n$($export.stdout)") | Out-Null
             if ($export.exitCode -ne 0) {
                 throw "无法从 trunk 导出冲突路径：$path`r`n$($export.stdout)"
             }
@@ -3002,7 +3076,7 @@ function Show-QuickMergeDialog {
                 $form.Cursor = [System.Windows.Forms.Cursors]::Default
                 $grid.Enabled = $true
                 $conflictText = Limit-MessageText $dryRunOutput
-                $confirmConflict = [System.Windows.Forms.MessageBox]::Show("dry-run 发现 SVN 冲突。`r`n`r`n如果继续，将对本次 merge 使用 trunk 版本覆盖冲突点；普通冲突会使用 svn merge --accept theirs-full，tree conflict 会从 trunk 导出对应文件/目录后标记 resolved。`r`n`r`n这可能覆盖 release 上同一文件/目录的改动，请确认你确实要以 trunk 为准。`r`n`r`n冲突摘要：`r`n$conflictText`r`n`r`n继续吗？", "用 trunk 覆盖冲突？", "YesNo", "Warning")
+                $confirmConflict = [System.Windows.Forms.MessageBox]::Show("dry-run 发现 SVN 冲突。`r`n`r`n如果继续，将以本次 trunk revision 为准处理冲突：普通冲突使用 trunk 内容；如果确认该路径正是在当前 revision 被 trunk 删除，工具会接受删除结果；其他 tree conflict 会从 trunk 导出对应文件/目录后标记已解决。`r`n`r`n这可能覆盖 release 上同一文件/目录的改动，请确认你确实要以 trunk 为准。`r`n`r`n冲突摘要：`r`n$conflictText`r`n`r`n继续吗？", "用 trunk 覆盖冲突？", "YesNo", "Warning")
                 if ($confirmConflict -ne [System.Windows.Forms.DialogResult]::Yes) {
                     $status.Text = "已取消：#$($analysis.ticket.id) dry-run 发现冲突。"
                     return
@@ -3022,7 +3096,7 @@ function Show-QuickMergeDialog {
             $mergeOutput = Invoke-ActualMerge $assessment -AcceptTheirsFull:$acceptTrunkConflicts
             $mergeMode = "MERGE"
             if ($acceptTrunkConflicts) {
-                $mergeMode = "MERGE --accept theirs-full + trunk export for tree conflicts"
+                $mergeMode = "MERGE --accept theirs-full + verified trunk delete/export for tree conflicts"
             }
             $logPath = Save-ToolLog $Config $analysis.ticket.id $assessment.target.key ("TARGET $targetName`r`nDRY RUN`r`n$dryRunOutput`r`n`r`n$mergeMode`r`n$mergeOutput")
 
