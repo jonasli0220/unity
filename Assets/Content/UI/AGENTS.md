@@ -218,6 +218,15 @@ This is not intended to be pixel-perfect runtime parity. The practical target is
 - During Play Mode, allow Sprite drag-to-UI only inside an open UI Prefab Stage, where changes are written to the prefab editing scene and can be saved. Keep ordinary runtime scenes protected because objects created there disappear when Play Mode ends.
 - Do not intercept Sprite dragging while the toggle is disabled, during a Play Mode transition, or when no valid Canvas/UI parent can be resolved.
 
+## Image Grid Slicing Convention
+
+- Keep the self-contained editor tool in `Editor/UIImageGridSlicerWindow.cs`, exposed at `UITools/图片等分切图`.
+- Accept one PNG/JPG image from the Project window or external file explorer. Default to 4 columns and 4 rows; preview and number cells left-to-right, top-to-bottom.
+- Slice the original file pixels without resizing, cropping, or changing the source asset/importer. Require dimensions divisible by the selected grid.
+- Write `piece_1.png` through `piece_N.png` in a sibling `piece` folder. If occupied, create `piece_2`, `piece_3`, etc.; never overwrite existing assets.
+- Import generated project assets as single, uncompressed Sprites, without mipmaps or non-power-of-two scaling. Keep generated game images out of script publishing.
+- Mirror the script and usage notes into the flat shared `UIEditorTools` SVN collection without `.meta` files.
+
 ## Project Image Import Convention
 
 - When images are dragged from the operating-system file explorer into the Unity Project window under `Assets/Content/UI/`, intercept the Project-window drop before Unity's native unique-name import runs. Use each external file's exact filename to decide whether the target folder already has a same-name asset.
