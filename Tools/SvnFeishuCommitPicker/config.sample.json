@@ -1,0 +1,39 @@
+{
+  "endpoint": "",
+  "defaultProject": "dragon",
+  "projectProfiles": [
+    {
+      "id": "dragon",
+      "projectName": "Dragon",
+      "pathPatterns": ["\\Dragon\\", "sgra_dragon", "dragon_assets"],
+      "ticketBaseUrl": "https://project.feishu.cn/dragon_heir",
+      "bugDetailType": "bug2",
+      "endpoint": "http://127.0.0.1:18765/api/my-open-workitems",
+      "providerCommand": "",
+      "allowCacheFallback": true
+    },
+    {
+      "id": "life",
+      "projectName": "Life",
+      "pathPatterns": ["\\Life\\", "sgra_life", "life_assets"],
+      "ticketBaseUrl": "https://project.feishu.cn/sgra_life",
+      "bugDetailType": "issue",
+      "endpoint": "",
+      "providerCommand": "& (Join-Path $env:SVN_FEISHU_TOOL_DIR 'server\\meego-base-provider.ps1') -ProjectKey '66d18041dc33a1a07a8e6d85' -WorkItemTypeKeys @('story','issue') -BugTypeKeys @('issue','bug') -OpenStorySubStages @() -OpenBugStateKeys @('OPEN','RESOLVED') -ApiKeyEnvironmentVariable 'MEEGO_BASE_API_KEY_LIFE'",
+      "allowCacheFallback": false
+    }
+  ],
+  "userMapFile": "user-map.local.json",
+  "defaultEmailDomain": "tencent.com",
+  "providerCommand": "",
+  "cacheFile": "tickets.cache.json",
+  "defaultQuery": "",
+  "appendMode": "append",
+  "messageFormat": "#{id} {title}",
+  "includeTypes": [
+    "story",
+    "bug"
+  ],
+  "includeClosed": false,
+  "timeoutSeconds": 15
+}

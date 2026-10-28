@@ -1,0 +1,34 @@
+{
+  "jonasssli": [
+    {
+      "id": "6930591895",
+      "type": "story",
+      "title": "【海外】月初付费活动（7月初上线）",
+      "status": "open",
+      "node": "开发中"
+    },
+    {
+      "id": "6986370059",
+      "type": "bug",
+      "title": "【种植】配置正式植物列表背景图片",
+      "status": "open",
+      "node": "待提交 CN release"
+    }
+  ],
+  "dantefeng": [
+    {
+      "id": "6883146388",
+      "type": "story",
+      "title": "【A7】大陆挑战赛BP配置",
+      "status": "open",
+      "node": "测试验收"
+    },
+    {
+      "id": "6476080520",
+      "type": "story",
+      "title": "【A8】新海神Boss制作",
+      "status": "open",
+      "node": "开发中"
+    }
+  ]
+}

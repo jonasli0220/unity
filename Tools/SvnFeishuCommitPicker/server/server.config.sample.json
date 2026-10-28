@@ -1,0 +1,7 @@
+{
+  "prefix": "http://127.0.0.1:18765/",
+  "providerCommand": "",
+  "providerTimeoutSeconds": 20,
+  "mockTicketsFile": "mock-tickets.sample.json",
+  "defaultTicketType": "story"
+}
