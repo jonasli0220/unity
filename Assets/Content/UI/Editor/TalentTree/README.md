@@ -1,0 +1,11 @@
+# Talent Tree Editor
+
+Open **Tools > UI > Talent Tree > Open**. Create a definition in `Definitions/`, then drag **Small** or **Core** from the left panel into the canvas. Click a node to edit its numeric table ID and Sprite icon. Right-click a source node, choose **从此节点连接至...**, then click the target node. Select a line to drag its two yellow Bezier handles. Right-drag or middle-drag to pan; use the wheel to zoom around the pointer.
+
+The six equal sectors are visual guides only. A node's position does not create sector data or restrict connections. Every directed incoming edge represents one mandatory direct prerequisite. Nodes without incoming edges are starting nodes. The editor blocks cycles and validates positive unique IDs before export.
+
+**生成 Prefab + JSON** writes a matching pair to `Assets/Content/UI/Prefab/talent_tree/`. The definition asset is the only source of edits; regenerate after changing nodes or style. The prefab has a transparent viewport, clipped radial background, batched curves, node UI, `TalentTreeData`, and `TalentTreePanZoom`. Put it under an existing Canvas and EventSystem; resize its root RectTransform to the desired window area. The prefab does not implement unlocking or save data.
+
+The JSON has `version`, `sourceGuid`, `name`, `boardSize`, `nodes`, and `edges`. Each node has `id`, `type` (`Small` or `Core`), `position`, `iconAssetPath`, and sorted `prerequisiteIds`. Each edge has `fromId`, `toId`, `fromHandle`, and `toHandle`. Coordinates and Bezier handles use canvas-local Unity units. The prefab's `TalentTreeData` exposes the same graph, including direct references to each node view and icon Sprite.
+
+For a first look, run **Tools > UI > Talent Tree > Create Example Tree**. It creates `ExampleTalentTree.asset` and its matching output pair, with a two-prerequisite merge node. **Run Validation Checks** tests duplicate IDs and directed cycles in memory. **Run 1000 Node Stress Check** creates temporary assets, verifies four curve batches, and deletes only those temporary assets after the check.

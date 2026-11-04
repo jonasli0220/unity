@@ -166,10 +166,11 @@ This is not intended to be pixel-perfect runtime parity. The practical target is
 
 ## Development Conventions
 
-- All newly created Unity C# scripts for this UI workspace must be placed under `Assets/Content/UI/Editor`; create a clearly named subdirectory there when a tool contains multiple files.
+- New editor-only Unity C# scripts for this UI workspace belong under `Assets/Content/UI/Editor`; create a clearly named subdirectory when a tool contains multiple files.
+- The Talent Tree tool uses `Assets/Content/UI/Editor/TalentTree` for authoring code and definitions, `Assets/Content/UI/Runtime/TalentTree` for player-safe UI components, and `Assets/Content/UI/Prefab/talent_tree` for generated prefab and JSON pairs. Each new directory has its own `AGENTS.md` defining contents and cleanup. The authoring definition is the sole source of graph edits; regenerate both outputs together instead of editing generated files.
 - `UICreator` has one active implementation at `Assets/Content/UI/Editor/UICreator.cs`. The SVN-managed legacy file at `Assets/Scripts/SgrProject/UI/Editor/UITools/UICreator.cs` is retained as a compile-disabled compatibility shell because deleting it causes SVN/update workflows to restore a second `UICreator` after restart. Never enable both implementations or define another global `UICreator` class.
 - Keep `UICreator` focused on UI creation commands: Scene right-click quick-create, legacy `GameObject/UI` creation entries, and the existing component-added UI defaults. Sprite drag-to-UI belongs in `Assets/Content/UI/Editor/UISpriteDragToUICreator.cs`; do not add Scene-view drag handlers back into `UICreator`.
-- Because Unity compiles everything under an `Editor` directory into an editor-only assembly, do not create runtime/player scripts without first updating this convention and agreeing on a runtime script location.
+- Because Unity compiles everything under an `Editor` directory into an editor-only assembly, runtime/player scripts require a documented runtime location. The agreed Talent Tree runtime location is `Assets/Content/UI/Runtime/TalentTree`.
 - Prefer small, local edits inside `Assets/Content/UI/Editor/FigmaBridge`.
 - Do not move Figma Bridge docs to project root. Put detailed tool docs in `Editor/FigmaBridge/README.md`; use this `AGENTS.md` only as startup context.
 - Preserve user changes. Do not revert unrelated files.
