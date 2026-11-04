@@ -1,6 +1,6 @@
 # Talent Tree Editor
 
-Open **Tools > UI > Talent Tree > Open**. Create a definition in `Definitions/`, then drag **Small** or **Core** from the left panel into the canvas. Click a node to edit its numeric table ID and Sprite icon. Right-click a source node, choose **从此节点连接至...**, then click the target node. Select a line to drag its two yellow Bezier handles. Right-drag or middle-drag to pan; use the wheel to zoom around the pointer.
+Open **Tools > UI > Talent Tree > Open**. Create a definition in `Definitions/`, then drag **Small** or **Core** from the left panel into the canvas. Drag on empty canvas space to box-select nodes, then drag any selected node to move the group without changing its layout. Shift-drag another box to add nodes; Shift/Ctrl-click a node to add or remove it. Delete removes all selected nodes and their connected edges in one Undo step. Click a single node to edit its numeric table ID and Sprite icon. Right-click a source node, choose **从此节点连接至...**, then click the target node. Select a line to drag its two yellow Bezier handles. Right-drag or middle-drag to pan; use the wheel to zoom around the pointer.
 
 The six equal sectors are visual guides only. A node's position does not create sector data or restrict connections. Every directed incoming edge represents one mandatory direct prerequisite. Nodes without incoming edges are starting nodes. The editor blocks cycles and validates positive unique IDs before export.
 

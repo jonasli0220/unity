@@ -15,13 +15,20 @@ namespace Dragon.UI.TalentTree.Editor
         private const float MaxZoom = 2.5f;
         private TalentTreeDefinition definition;
         private string selectedNodeKey;
+        private readonly HashSet<string> selectedNodeKeys = new HashSet<string>();
+        private readonly Dictionary<string, Vector2> nodeDragStartPositions = new Dictionary<string, Vector2>();
+        private readonly HashSet<string> marqueeBaseSelection = new HashSet<string>();
         private int selectedEdge = -1;
         private string pendingSourceKey;
         private Vector2 pan;
         private float zoom = 0.36f;
         private Vector2 lastMouse;
         private Vector2 rightDown;
-        private Vector2 nodeDragOffset;
+        private Vector2 nodeDragStartBoard;
+        private Vector2 marqueeStart;
+        private Vector2 marqueeCurrent;
+        private bool marqueeActive;
+        private bool marqueeAdditive;
         private bool rightPanning;
         private bool draggingNode;
         private int draggingHandle;
@@ -45,7 +52,12 @@ namespace Dragon.UI.TalentTree.Editor
         }
 
         private void OnDisable() => Undo.undoRedoPerformed -= OnUndoRedo;
-        private void OnUndoRedo() => Repaint();
+        private void OnUndoRedo()
+        {
+            selectedNodeKeys.RemoveWhere(key => definition == null || definition.FindNode(key) == null);
+            UpdatePrimarySelection();
+            Repaint();
+        }
 
         private void OnGUI()
         {
@@ -96,7 +108,9 @@ namespace Dragon.UI.TalentTree.Editor
             }
             GUILayout.Space(14);
             GUILayout.Label("画布操作", EditorStyles.boldLabel);
-            GUILayout.Label("左键拖动节点；右键节点连接", EditorStyles.wordWrappedMiniLabel);
+            GUILayout.Label("空白处框选；拖动选中节点整体移动", EditorStyles.wordWrappedMiniLabel);
+            GUILayout.Label("Shift 框选追加；Shift/Ctrl 点击增减节点", EditorStyles.wordWrappedMiniLabel);
+            GUILayout.Label("右键节点连接", EditorStyles.wordWrappedMiniLabel);
             GUILayout.Label("右键拖动 / 中键拖动：平移", EditorStyles.wordWrappedMiniLabel);
             GUILayout.Label("滚轮：缩放；Delete：删除", EditorStyles.wordWrappedMiniLabel);
             GUILayout.Label("Esc：取消连线", EditorStyles.wordWrappedMiniLabel);
@@ -141,7 +155,8 @@ namespace Dragon.UI.TalentTree.Editor
             EditorGUI.DrawRect(rect, new Color(0.17f, 0.18f, 0.21f));
             GUILayout.BeginArea(new Rect(rect.x + 10, rect.y + 10, rect.width - 20, rect.height - 20));
             if (definition == null) { GUILayout.Label("请先创建配置", EditorStyles.boldLabel); GUILayout.EndArea(); return; }
-            var node = definition.FindNode(selectedNodeKey);
+            if (selectedNodeKeys.Count > 1) { DrawMultiNodeInspector(); GUILayout.EndArea(); return; }
+            var node = selectedNodeKeys.Count == 1 ? definition.FindNode(selectedNodeKey) : null;
             if (node != null) DrawNodeInspector(node);
             else if (selectedEdge >= 0 && selectedEdge < definition.edges.Count) DrawEdgeInspector(definition.edges[selectedEdge]);
             else DrawTreeInspector();
@@ -170,6 +185,14 @@ namespace Dragon.UI.TalentTree.Editor
             GUILayout.Label("直接前置：" + previousCount + " 个（全部满足）", EditorStyles.wordWrappedMiniLabel);
             GUILayout.Space(8);
             if (GUILayout.Button("删除节点")) DeleteSelection();
+        }
+
+        private void DrawMultiNodeInspector()
+        {
+            GUILayout.Label("已选中 " + selectedNodeKeys.Count + " 个节点", EditorStyles.boldLabel);
+            GUILayout.Label("拖动任一选中节点可整体移动，连线会跟随节点更新。", EditorStyles.wordWrappedMiniLabel);
+            GUILayout.Space(8);
+            if (GUILayout.Button("删除选中节点")) DeleteSelection();
         }
 
         private void DrawEdgeInspector(TalentTreeAuthorEdge edge)
@@ -239,6 +262,11 @@ namespace Dragon.UI.TalentTree.Editor
             DrawSectors(local);
             DrawEdges(local);
             DrawNodes(local);
+            if (marqueeActive)
+            {
+                Rect marquee = GetMarqueeRect();
+                Handles.DrawSolidRectangleWithOutline(marquee, new Color(0.3f, 0.6f, 1f, 0.14f), new Color(0.45f, 0.72f, 1f, 0.9f));
+            }
             if (!string.IsNullOrEmpty(pendingSourceKey))
             {
                 var source = definition.FindNode(pendingSourceKey);
@@ -312,7 +340,7 @@ namespace Dragon.UI.TalentTree.Editor
                 if (center.x + radius < 0 || center.y + radius < 0 || center.x - radius > canvas.width || center.y - radius > canvas.height) continue;
                 Handles.color = node.type == TalentNodeType.Core ? definition.coreFillColor : definition.smallFillColor;
                 Handles.DrawSolidDisc(center, Vector3.forward, radius);
-                Handles.color = node.key == selectedNodeKey ? Color.yellow : definition.nodeRimColor;
+                Handles.color = definition.nodeRimColor;
                 Handles.DrawWireDisc(center, Vector3.forward, radius);
                 Sprite frame = node.type == TalentNodeType.Core ? definition.coreFrame : definition.smallFrame;
                 if (frame != null && GetPreview(frame) is Texture frameTexture)
@@ -328,6 +356,11 @@ namespace Dragon.UI.TalentTree.Editor
                         float iconSize = radius * 1.18f;
                         GUI.DrawTexture(new Rect(center.x - iconSize * 0.5f, center.y - iconSize * 0.5f, iconSize, iconSize), texture, ScaleMode.ScaleToFit, true);
                     }
+                }
+                if (selectedNodeKeys.Contains(node.key))
+                {
+                    Handles.color = Color.yellow;
+                    Handles.DrawWireDisc(center, Vector3.forward, radius + 3f);
                 }
                 if (zoom > 0.23f)
                     GUI.Label(new Rect(center.x - 35f, center.y + radius + 2f, 70f, 18f), node.id.ToString(), EditorStyles.centeredGreyMiniLabel);
@@ -365,6 +398,14 @@ namespace Dragon.UI.TalentTree.Editor
             {
                 pendingSourceKey = null; e.Use(); Repaint(); return;
             }
+            if (e.type == EventType.KeyDown && e.keyCode == KeyCode.Escape && marqueeActive)
+            {
+                selectedNodeKeys.Clear();
+                selectedNodeKeys.UnionWith(marqueeBaseSelection);
+                UpdatePrimarySelection();
+                marqueeActive = false;
+                e.Use(); Repaint(); return;
+            }
             if (e.type == EventType.MouseDown && rect.Contains(e.mousePosition))
             {
                 Vector2 local = e.mousePosition - rect.position;
@@ -396,12 +437,39 @@ namespace Dragon.UI.TalentTree.Editor
                 var node = HitNode(local, localRect);
                 if (node != null)
                 {
-                    selectedNodeKey = node.key; selectedEdge = -1; draggingNode = true;
-                    nodeDragOffset = node.position - CanvasToBoard(local, localRect);
-                    Undo.RecordObject(definition, "移动天赋节点");
+                    selectedEdge = -1;
+                    if (e.shift || e.control || e.command)
+                    {
+                        if (!selectedNodeKeys.Add(node.key)) selectedNodeKeys.Remove(node.key);
+                        UpdatePrimarySelection();
+                        e.Use(); Repaint(); return;
+                    }
+                    if (!selectedNodeKeys.Contains(node.key)) SelectSingleNode(node.key);
+                    draggingNode = true;
+                    nodeDragStartBoard = CanvasToBoard(local, localRect);
+                    nodeDragStartPositions.Clear();
+                    foreach (var selectedNode in definition.nodes)
+                        if (selectedNodeKeys.Contains(selectedNode.key)) nodeDragStartPositions.Add(selectedNode.key, selectedNode.position);
+                    Undo.RecordObject(definition, selectedNodeKeys.Count > 1 ? "移动天赋节点组" : "移动天赋节点");
                     e.Use(); Repaint(); return;
                 }
-                selectedEdge = HitEdge(local, localRect); selectedNodeKey = null;
+                selectedEdge = HitEdge(local, localRect);
+                if (selectedEdge >= 0)
+                {
+                    selectedNodeKeys.Clear();
+                    selectedNodeKey = null;
+                }
+                else
+                {
+                    marqueeActive = true;
+                    marqueeStart = local;
+                    marqueeCurrent = local;
+                    marqueeAdditive = e.shift;
+                    marqueeBaseSelection.Clear();
+                    if (marqueeAdditive) marqueeBaseSelection.UnionWith(selectedNodeKeys);
+                    else selectedNodeKeys.Clear();
+                    UpdatePrimarySelection();
+                }
                 e.Use(); Repaint(); return;
             }
             if (e.type == EventType.MouseDrag)
@@ -412,14 +480,21 @@ namespace Dragon.UI.TalentTree.Editor
                     if (rightPanning) pan += e.mousePosition - lastMouse;
                     lastMouse = e.mousePosition; e.Use(); Repaint(); return;
                 }
+                if (e.button == 0 && marqueeActive)
+                {
+                    marqueeCurrent = e.mousePosition - rect.position;
+                    UpdateMarqueeSelection(new Rect(0, 0, rect.width, rect.height));
+                    e.Use(); Repaint(); return;
+                }
                 if (e.button == 0 && (draggingNode || draggingHandle != 0))
                 {
                     var localRect = new Rect(0, 0, rect.width, rect.height);
                     Vector2 world = CanvasToBoard(e.mousePosition - rect.position, localRect);
                     if (draggingNode)
                     {
-                        var node = definition.FindNode(selectedNodeKey);
-                        if (node != null) node.position = ClampToBoard(world + nodeDragOffset, node.type);
+                        Vector2 delta = ClampGroupDelta(world - nodeDragStartBoard);
+                        foreach (var selectedNode in definition.nodes)
+                            if (nodeDragStartPositions.TryGetValue(selectedNode.key, out var start)) selectedNode.position = start + delta;
                     }
                     else if (selectedEdge >= 0 && selectedEdge < definition.edges.Count)
                     {
@@ -446,11 +521,77 @@ namespace Dragon.UI.TalentTree.Editor
                     rightDown = Vector2.zero; rightPanning = false; e.Use(); return;
                 }
                 if (e.button == 2 && rightPanning) { rightPanning = false; rightDown = Vector2.zero; e.Use(); return; }
+                if (e.button == 0 && marqueeActive)
+                {
+                    marqueeCurrent = e.mousePosition - rect.position;
+                    UpdateMarqueeSelection(new Rect(0, 0, rect.width, rect.height));
+                    marqueeActive = false;
+                    marqueeBaseSelection.Clear();
+                    e.Use(); Repaint(); return;
+                }
                 if (e.button == 0 && (draggingNode || draggingHandle != 0))
                 {
-                    draggingNode = false; draggingHandle = 0; e.Use(); return;
+                    draggingNode = false; draggingHandle = 0; nodeDragStartPositions.Clear(); e.Use(); return;
                 }
             }
+        }
+
+        private Rect GetMarqueeRect()
+        {
+            return Rect.MinMaxRect(
+                Mathf.Min(marqueeStart.x, marqueeCurrent.x), Mathf.Min(marqueeStart.y, marqueeCurrent.y),
+                Mathf.Max(marqueeStart.x, marqueeCurrent.x), Mathf.Max(marqueeStart.y, marqueeCurrent.y));
+        }
+
+        private void UpdateMarqueeSelection(Rect canvas)
+        {
+            Rect marquee = GetMarqueeRect();
+            selectedNodeKeys.Clear();
+            if (marqueeAdditive) selectedNodeKeys.UnionWith(marqueeBaseSelection);
+            foreach (var node in definition.nodes)
+                if (marquee.Contains(BoardToCanvas(node.position, canvas))) selectedNodeKeys.Add(node.key);
+            UpdatePrimarySelection();
+        }
+
+        private Vector2 ClampGroupDelta(Vector2 delta)
+        {
+            if (CanTranslateSelection(delta)) return delta;
+            float low = 0f;
+            float high = 1f;
+            for (int i = 0; i < 16; i++)
+            {
+                float middle = (low + high) * 0.5f;
+                if (CanTranslateSelection(delta * middle)) low = middle;
+                else high = middle;
+            }
+            return delta * low;
+        }
+
+        private bool CanTranslateSelection(Vector2 delta)
+        {
+            foreach (var node in definition.nodes)
+            {
+                if (!nodeDragStartPositions.TryGetValue(node.key, out var start)) continue;
+                float nodeRadius = (node.type == TalentNodeType.Core ? definition.coreNodeSize : definition.smallNodeSize) * 0.5f;
+                float limit = Mathf.Max(1f, definition.boardSize * 0.5f - nodeRadius);
+                if ((start + delta).sqrMagnitude > limit * limit) return false;
+            }
+            return true;
+        }
+
+        private void SelectSingleNode(string key)
+        {
+            selectedNodeKeys.Clear();
+            selectedNodeKeys.Add(key);
+            selectedNodeKey = key;
+            selectedEdge = -1;
+        }
+
+        private void UpdatePrimarySelection()
+        {
+            selectedNodeKey = null;
+            if (selectedNodeKeys.Count != 1) return;
+            foreach (var key in selectedNodeKeys) selectedNodeKey = key;
         }
 
         private void HandleKeys()
@@ -468,7 +609,12 @@ namespace Dragon.UI.TalentTree.Editor
             if (node != null)
             {
                 menu.AddItem(new GUIContent("从此节点连接至..."), false, () => { pendingSourceKey = node.key; status = "点击目标节点完成连接，Esc 取消"; Repaint(); });
-                menu.AddItem(new GUIContent("删除节点"), false, () => { selectedNodeKey = node.key; selectedEdge = -1; DeleteSelection(); });
+                bool deleteGroup = selectedNodeKeys.Count > 1 && selectedNodeKeys.Contains(node.key);
+                menu.AddItem(new GUIContent(deleteGroup ? "删除选中节点" : "删除节点"), false, () =>
+                {
+                    if (!deleteGroup) SelectSingleNode(node.key);
+                    DeleteSelection();
+                });
             }
             else
             {
@@ -484,7 +630,7 @@ namespace Dragon.UI.TalentTree.Editor
             Undo.RecordObject(definition, "添加天赋节点");
             var node = new TalentTreeAuthorNode { key = Guid.NewGuid().ToString("N"), id = definition.NextId(), type = type, position = ClampToBoard(world, type) };
             definition.nodes.Add(node);
-            selectedNodeKey = node.key; selectedEdge = -1;
+            SelectSingleNode(node.key);
             EditorUtility.SetDirty(definition); Repaint();
         }
 
@@ -503,18 +649,20 @@ namespace Dragon.UI.TalentTree.Editor
                 definition.edges.RemoveAt(definition.edges.Count - 1);
                 status = "已阻止成环连接";
             }
-            else { selectedEdge = definition.edges.Count - 1; selectedNodeKey = null; status = "已连接 " + from.id + " → " + to.id; }
+            else { selectedEdge = definition.edges.Count - 1; selectedNodeKeys.Clear(); selectedNodeKey = null; status = "已连接 " + from.id + " → " + to.id; }
             EditorUtility.SetDirty(definition); Repaint();
         }
 
         private void DeleteSelection()
         {
             if (definition == null) return;
-            if (definition.FindNode(selectedNodeKey) != null)
+            if (selectedNodeKeys.Count > 0)
             {
-                Undo.RecordObject(definition, "删除天赋节点");
-                definition.nodes.RemoveAll(node => node.key == selectedNodeKey);
-                definition.edges.RemoveAll(edge => edge.fromKey == selectedNodeKey || edge.toKey == selectedNodeKey);
+                Undo.RecordObject(definition, selectedNodeKeys.Count > 1 ? "删除天赋节点组" : "删除天赋节点");
+                definition.nodes.RemoveAll(node => selectedNodeKeys.Contains(node.key));
+                definition.edges.RemoveAll(edge => selectedNodeKeys.Contains(edge.fromKey) || selectedNodeKeys.Contains(edge.toKey));
+                if (selectedNodeKeys.Contains(pendingSourceKey)) pendingSourceKey = null;
+                selectedNodeKeys.Clear();
                 selectedNodeKey = null;
             }
             else if (selectedEdge >= 0 && selectedEdge < definition.edges.Count)
@@ -523,6 +671,7 @@ namespace Dragon.UI.TalentTree.Editor
                 definition.edges.RemoveAt(selectedEdge);
                 selectedEdge = -1;
             }
+            else return;
             EditorUtility.SetDirty(definition); Repaint();
         }
 
@@ -556,7 +705,18 @@ namespace Dragon.UI.TalentTree.Editor
             status = "已创建配置"; Repaint();
         }
 
-        private void ClearSelection() { selectedNodeKey = null; selectedEdge = -1; pendingSourceKey = null; }
+        private void ClearSelection()
+        {
+            selectedNodeKey = null;
+            selectedNodeKeys.Clear();
+            selectedEdge = -1;
+            pendingSourceKey = null;
+            draggingNode = false;
+            draggingHandle = 0;
+            nodeDragStartPositions.Clear();
+            marqueeActive = false;
+            marqueeBaseSelection.Clear();
+        }
 
         private Texture GetPreview(Sprite sprite)
         {
