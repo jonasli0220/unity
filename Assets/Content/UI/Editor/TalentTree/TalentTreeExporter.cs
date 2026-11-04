@@ -17,8 +17,9 @@ namespace Dragon.UI.TalentTree.Editor
 
         [Serializable] private sealed class ExportDocument
         {
-            public int version = 1;
+            public int version = 2;
             public string sourceGuid;
+            public string layoutGuid;
             public string name;
             public float boardSize;
             public ExportNode[] nodes;
@@ -42,13 +43,19 @@ namespace Dragon.UI.TalentTree.Editor
             public Vector2 toHandle;
         }
 
-        public static bool Export(TalentTreeDefinition definition, out string message)
+        public static bool Export(TalentTreeDefinition definition, TalentTreeLayout layout, out string message)
         {
-            var errors = TalentTreeValidator.Validate(definition);
+            var errors = TalentTreeValidator.Validate(definition, layout);
             if (errors.Count > 0) { message = string.Join("\n", errors); return false; }
             string sourcePath = AssetDatabase.GetAssetPath(definition);
-            if (string.IsNullOrEmpty(sourcePath)) { message = "请先把配置保存为 .asset 文件。"; return false; }
+            string layoutPath = AssetDatabase.GetAssetPath(layout);
+            if (string.IsNullOrEmpty(sourcePath) || string.IsNullOrEmpty(layoutPath))
+            {
+                message = "请先保存逻辑配置和表现配置两个 .asset 文件。";
+                return false;
+            }
             string sourceGuid = AssetDatabase.AssetPathToGUID(sourcePath);
+            string layoutGuid = AssetDatabase.AssetPathToGUID(layoutPath);
             string name = Path.GetFileNameWithoutExtension(sourcePath);
             if (!AssetDatabase.IsValidFolder(OutputFolder))
                 AssetDatabase.CreateFolder("Assets/Content/UI/Prefab", "talent_tree");
@@ -67,28 +74,31 @@ namespace Dragon.UI.TalentTree.Editor
             for (int i = 0; i < orderedNodes.Length; i++)
             {
                 var node = orderedNodes[i];
+                var visual = layout.FindNode(node.key);
                 int[] prerequisites = orderedEdges.Where(edge => edge.toKey == node.key)
                     .Select(edge => nodeByKey[edge.fromKey].id).OrderBy(id => id).ToArray();
-                runtimeNodes[i] = new TalentTreeNodeRecord { id = node.id, type = node.type, position = node.position, prerequisiteIds = prerequisites, icon = node.icon };
-                exportNodes[i] = new ExportNode { id = node.id, type = node.type.ToString(), position = node.position,
-                    iconAssetPath = node.icon != null ? AssetDatabase.GetAssetPath(node.icon) : string.Empty,
+                runtimeNodes[i] = new TalentTreeNodeRecord { id = node.id, type = node.type, position = visual.position, prerequisiteIds = prerequisites, icon = visual.icon };
+                exportNodes[i] = new ExportNode { id = node.id, type = node.type.ToString(), position = visual.position,
+                    iconAssetPath = visual.icon != null ? AssetDatabase.GetAssetPath(visual.icon) : string.Empty,
                     prerequisiteIds = prerequisites };
             }
             for (int i = 0; i < orderedEdges.Length; i++)
             {
                 var edge = orderedEdges[i];
+                var visual = layout.FindEdge(edge.fromKey, edge.toKey);
                 int fromId = nodeByKey[edge.fromKey].id;
                 int toId = nodeByKey[edge.toKey].id;
-                runtimeEdges[i] = new TalentTreeEdgeRecord { fromId = fromId, toId = toId, fromHandle = edge.fromHandle, toHandle = edge.toHandle };
-                exportEdges[i] = new ExportEdge { fromId = fromId, toId = toId, fromHandle = edge.fromHandle, toHandle = edge.toHandle };
+                runtimeEdges[i] = new TalentTreeEdgeRecord { fromId = fromId, toId = toId, fromHandle = visual.fromHandle, toHandle = visual.toHandle };
+                exportEdges[i] = new ExportEdge { fromId = fromId, toId = toId, fromHandle = visual.fromHandle, toHandle = visual.toHandle };
             }
-            var document = new ExportDocument { sourceGuid = sourceGuid, name = name, boardSize = definition.boardSize, nodes = exportNodes, edges = exportEdges };
+            var document = new ExportDocument { sourceGuid = sourceGuid, layoutGuid = layoutGuid, name = name,
+                boardSize = layout.boardSize, nodes = exportNodes, edges = exportEdges };
             string json = JsonUtility.ToJson(document, true) + "\n";
 
             GameObject root = null;
             try
             {
-                root = BuildPrefab(name, sourceGuid, definition, orderedNodes, nodeByKey, orderedEdges, runtimeNodes, runtimeEdges);
+                root = BuildPrefab(name, sourceGuid, layout, orderedNodes, orderedEdges, runtimeNodes, runtimeEdges);
                 var missingRenderer = root.GetComponentsInChildren<Graphic>(true)
                     .FirstOrDefault(graphic => graphic.GetComponent<CanvasRenderer>() == null);
                 if (missingRenderer != null)
@@ -141,10 +151,11 @@ namespace Dragon.UI.TalentTree.Editor
             return true;
         }
 
-        private static GameObject BuildPrefab(string name, string sourceGuid, TalentTreeDefinition definition,
-            TalentTreeAuthorNode[] orderedNodes, Dictionary<string, TalentTreeAuthorNode> byKey,
+        private static GameObject BuildPrefab(string name, string sourceGuid, TalentTreeLayout layout,
+            TalentTreeAuthorNode[] orderedNodes,
             TalentTreeAuthorEdge[] orderedEdges, TalentTreeNodeRecord[] runtimeNodes, TalentTreeEdgeRecord[] runtimeEdges)
         {
+            var positions = orderedNodes.ToDictionary(node => node.key, node => layout.FindNode(node.key).position);
             var root = new GameObject(name, typeof(RectTransform), typeof(CanvasRenderer), typeof(Image), typeof(RectMask2D), typeof(TalentTreePanZoom), typeof(TalentTreeData));
             var viewport = (RectTransform)root.transform;
             viewport.anchorMin = Vector2.zero;
@@ -152,7 +163,7 @@ namespace Dragon.UI.TalentTree.Editor
             viewport.offsetMin = Vector2.zero;
             viewport.offsetMax = Vector2.zero;
             root.GetComponent<Image>().color = new Color(0f, 0f, 0f, 0f);
-            var content = NewRect("Content", viewport, definition.boardSize);
+            var content = NewRect("Content", viewport, layout.boardSize);
             root.GetComponent<TalentTreePanZoom>().SetContent(content);
             var sectors = NewStretchRect("Six Sectors", content);
             sectors.gameObject.AddComponent<CanvasRenderer>();
@@ -165,29 +176,30 @@ namespace Dragon.UI.TalentTree.Editor
                 for (int i = 0; i < count; i++)
                 {
                     var edge = orderedEdges[offset + i];
-                    curves[i] = new TalentTreeCurve { start = byKey[edge.fromKey].position, end = byKey[edge.toKey].position,
-                        fromHandle = edge.fromHandle, toHandle = edge.toHandle };
+                    var visual = layout.FindEdge(edge.fromKey, edge.toKey);
+                    curves[i] = new TalentTreeCurve { start = positions[edge.fromKey], end = positions[edge.toKey],
+                        fromHandle = visual.fromHandle, toHandle = visual.toHandle };
                 }
                 var chunk = NewStretchRect("Curves " + (offset / CurvesPerGraphic + 1), edgeLayer);
                 chunk.gameObject.AddComponent<CanvasRenderer>();
-                chunk.gameObject.AddComponent<TalentTreeCurveGraphic>().SetCurves(curves, definition.lineWidth, definition.lineColor);
+                chunk.gameObject.AddComponent<TalentTreeCurveGraphic>().SetCurves(curves, layout.lineWidth, layout.lineColor);
             }
             var nodeLayer = NewStretchRect("Nodes", content);
             for (int i = 0; i < orderedNodes.Length; i++)
             {
                 var node = orderedNodes[i];
-                float size = node.type == TalentNodeType.Core ? definition.coreNodeSize : definition.smallNodeSize;
+                float size = node.type == TalentNodeType.Core ? layout.coreNodeSize : layout.smallNodeSize;
                 var view = NewRect("Node " + node.id, nodeLayer, size);
-                view.anchoredPosition = node.position;
+                view.anchoredPosition = runtimeNodes[i].position;
                 view.gameObject.AddComponent<CanvasRenderer>();
                 view.gameObject.AddComponent<TalentTreeNodeGraphic>().SetAppearance(
-                    node.type == TalentNodeType.Core ? definition.coreFillColor : definition.smallFillColor, definition.nodeRimColor);
-                Sprite frame = node.type == TalentNodeType.Core ? definition.coreFrame : definition.smallFrame;
+                    node.type == TalentNodeType.Core ? layout.coreFillColor : layout.smallFillColor, layout.nodeRimColor);
+                Sprite frame = node.type == TalentNodeType.Core ? layout.coreFrame : layout.smallFrame;
                 if (frame != null) AddImage("Frame", view, frame, 1f);
-                if (node.icon != null) AddImage("Icon", view, node.icon, 0.62f);
+                if (runtimeNodes[i].icon != null) AddImage("Icon", view, runtimeNodes[i].icon, 0.62f);
                 runtimeNodes[i].view = view;
             }
-            root.GetComponent<TalentTreeData>().SetGeneratedData(sourceGuid, definition.boardSize, runtimeNodes, runtimeEdges);
+            root.GetComponent<TalentTreeData>().SetGeneratedData(sourceGuid, layout.boardSize, runtimeNodes, runtimeEdges);
             return root;
         }
 
