@@ -3,6 +3,7 @@ using UnityEngine.UI;
 
 namespace Dragon.UI.TalentTree
 {
+    [RequireComponent(typeof(CanvasRenderer))]
     public sealed class TalentTreeSectorGraphic : MaskableGraphic
     {
         [SerializeField] private Color evenColor = new Color(0.09f, 0.13f, 0.19f, 0.7f);

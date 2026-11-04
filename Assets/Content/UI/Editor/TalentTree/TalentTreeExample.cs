@@ -4,6 +4,7 @@ using System.Linq;
 using Dragon.UI.TalentTree;
 using UnityEditor;
 using UnityEngine;
+using UnityEngine.UI;
 
 namespace Dragon.UI.TalentTree.Editor
 {
@@ -21,7 +22,7 @@ namespace Dragon.UI.TalentTree.Editor
                 AssetDatabase.CreateFolder("Assets/Content/UI/Editor/TalentTree", "Definitions");
             if (AssetDatabase.LoadAssetAtPath<TalentTreeDefinition>(PathToDefinition) != null)
             {
-                Debug.Log("Talent Tree example already exists: " + PathToDefinition);
+                RebuildExample();
                 return;
             }
             var definition = ScriptableObject.CreateInstance<TalentTreeDefinition>();
@@ -45,14 +46,25 @@ namespace Dragon.UI.TalentTree.Editor
             if (errors.Count != 0) throw new InvalidOperationException(string.Join("\n", errors));
             AssetDatabase.CreateAsset(definition, PathToDefinition);
             AssetDatabase.SaveAssets();
+            RebuildExample();
+        }
+
+        [MenuItem("Tools/UI/Talent Tree/Rebuild Example Prefab", false, 2334)]
+        public static void RebuildExample()
+        {
+            var definition = AssetDatabase.LoadAssetAtPath<TalentTreeDefinition>(PathToDefinition);
+            if (definition == null) throw new InvalidOperationException("Create Example Tree first.");
             if (!TalentTreeExporter.Export(definition, out string message)) throw new InvalidOperationException(message);
             var prefab = AssetDatabase.LoadAssetAtPath<GameObject>(PathToPrefab);
             var data = prefab != null ? prefab.GetComponent<TalentTreeData>() : null;
             if (data == null || data.Nodes.Count != 14 || data.Edges.Count != 14) throw new InvalidOperationException("Example prefab graph is incomplete.");
             if (!data.TryGetNode(14, out var merge) || !merge.prerequisiteIds.SequenceEqual(new[] { 8, 9 }))
                 throw new InvalidOperationException("Merge-node AND prerequisites were exported incorrectly.");
+            var missingRenderer = prefab.GetComponentsInChildren<Graphic>(true)
+                .FirstOrDefault(graphic => graphic.GetComponent<CanvasRenderer>() == null);
+            if (missingRenderer != null) throw new InvalidOperationException("Missing CanvasRenderer: " + missingRenderer.gameObject.name);
             if (!File.Exists(System.IO.Path.GetFullPath(PathToJson))) throw new InvalidOperationException("Example JSON is missing.");
-            Debug.Log("Talent Tree example validated: 14 nodes, 14 edges, merge prerequisites [8, 9]. " + message);
+            Debug.Log("Talent Tree example validated: 14 nodes, 14 edges, all Graphics have CanvasRenderer. " + message);
         }
 
         [MenuItem("Tools/UI/Talent Tree/Run Validation Checks", false, 2332)]

@@ -13,6 +13,7 @@ namespace Dragon.UI.TalentTree
         public Vector2 toHandle;
     }
 
+    [RequireComponent(typeof(CanvasRenderer))]
     public sealed class TalentTreeCurveGraphic : MaskableGraphic
     {
         [SerializeField] private TalentTreeCurve[] curves = Array.Empty<TalentTreeCurve>();

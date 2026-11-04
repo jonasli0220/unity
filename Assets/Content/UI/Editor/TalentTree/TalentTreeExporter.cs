@@ -89,6 +89,10 @@ namespace Dragon.UI.TalentTree.Editor
             try
             {
                 root = BuildPrefab(name, sourceGuid, definition, orderedNodes, nodeByKey, orderedEdges, runtimeNodes, runtimeEdges);
+                var missingRenderer = root.GetComponentsInChildren<Graphic>(true)
+                    .FirstOrDefault(graphic => graphic.GetComponent<CanvasRenderer>() == null);
+                if (missingRenderer != null)
+                    throw new InvalidOperationException("UI 图形缺少 CanvasRenderer：" + missingRenderer.gameObject.name);
                 if (PrefabUtility.SaveAsPrefabAsset(root, prefabPath) == null) throw new InvalidOperationException("Prefab 保存失败。");
                 File.WriteAllText(Path.GetFullPath(jsonPath), json, new UTF8Encoding(false));
                 AssetDatabase.ImportAsset(jsonPath);
@@ -141,7 +145,7 @@ namespace Dragon.UI.TalentTree.Editor
             TalentTreeAuthorNode[] orderedNodes, Dictionary<string, TalentTreeAuthorNode> byKey,
             TalentTreeAuthorEdge[] orderedEdges, TalentTreeNodeRecord[] runtimeNodes, TalentTreeEdgeRecord[] runtimeEdges)
         {
-            var root = new GameObject(name, typeof(RectTransform), typeof(Image), typeof(RectMask2D), typeof(TalentTreePanZoom), typeof(TalentTreeData));
+            var root = new GameObject(name, typeof(RectTransform), typeof(CanvasRenderer), typeof(Image), typeof(RectMask2D), typeof(TalentTreePanZoom), typeof(TalentTreeData));
             var viewport = (RectTransform)root.transform;
             viewport.anchorMin = Vector2.zero;
             viewport.anchorMax = Vector2.one;
@@ -151,6 +155,7 @@ namespace Dragon.UI.TalentTree.Editor
             var content = NewRect("Content", viewport, definition.boardSize);
             root.GetComponent<TalentTreePanZoom>().SetContent(content);
             var sectors = NewStretchRect("Six Sectors", content);
+            sectors.gameObject.AddComponent<CanvasRenderer>();
             sectors.gameObject.AddComponent<TalentTreeSectorGraphic>().raycastTarget = false;
             var edgeLayer = NewStretchRect("Connections", content);
             for (int offset = 0; offset < orderedEdges.Length; offset += CurvesPerGraphic)
@@ -164,6 +169,7 @@ namespace Dragon.UI.TalentTree.Editor
                         fromHandle = edge.fromHandle, toHandle = edge.toHandle };
                 }
                 var chunk = NewStretchRect("Curves " + (offset / CurvesPerGraphic + 1), edgeLayer);
+                chunk.gameObject.AddComponent<CanvasRenderer>();
                 chunk.gameObject.AddComponent<TalentTreeCurveGraphic>().SetCurves(curves, definition.lineWidth, definition.lineColor);
             }
             var nodeLayer = NewStretchRect("Nodes", content);
@@ -173,6 +179,7 @@ namespace Dragon.UI.TalentTree.Editor
                 float size = node.type == TalentNodeType.Core ? definition.coreNodeSize : definition.smallNodeSize;
                 var view = NewRect("Node " + node.id, nodeLayer, size);
                 view.anchoredPosition = node.position;
+                view.gameObject.AddComponent<CanvasRenderer>();
                 view.gameObject.AddComponent<TalentTreeNodeGraphic>().SetAppearance(
                     node.type == TalentNodeType.Core ? definition.coreFillColor : definition.smallFillColor, definition.nodeRimColor);
                 Sprite frame = node.type == TalentNodeType.Core ? definition.coreFrame : definition.smallFrame;
@@ -208,6 +215,7 @@ namespace Dragon.UI.TalentTree.Editor
         private static void AddImage(string name, RectTransform parent, Sprite sprite, float scale)
         {
             var rect = NewRect(name, parent, parent.sizeDelta.x * scale);
+            rect.gameObject.AddComponent<CanvasRenderer>();
             var image = rect.gameObject.AddComponent<Image>();
             image.sprite = sprite;
             image.preserveAspect = true;
