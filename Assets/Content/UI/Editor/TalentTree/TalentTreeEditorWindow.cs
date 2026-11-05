@@ -13,10 +13,8 @@ namespace Dragon.UI.TalentTree.Editor
         private const float RightWidth = 280f;
         private const float MinZoom = 0.15f;
         private const float MaxZoom = 2.5f;
-        private enum EditRole { Logic, Layout }
         private TalentTreeDefinition definition;
         private TalentTreeLayout layout;
-        private EditRole editRole = EditRole.Layout;
         private string selectedNodeKey;
         private readonly HashSet<string> selectedNodeKeys = new HashSet<string>();
         private readonly Dictionary<string, Vector2> nodeDragStartPositions = new Dictionary<string, Vector2>();
@@ -73,7 +71,6 @@ namespace Dragon.UI.TalentTree.Editor
             {
                 layout = selectedLayout;
                 definition = selectedLayout.definition;
-                editRole = EditRole.Layout;
                 ClearSelection();
                 iconCache.Clear();
                 return true;
@@ -113,8 +110,8 @@ namespace Dragon.UI.TalentTree.Editor
             {
                 using (new GUILayout.HorizontalScope())
                 {
-                    if (GUILayout.Button("新建逻辑", EditorStyles.toolbarButton, GUILayout.Width(72))) CreateDefinition();
-                    GUILayout.Label("策划逻辑", EditorStyles.miniLabel, GUILayout.Width(48));
+                    if (GUILayout.Button("新建天赋树", EditorStyles.toolbarButton, GUILayout.Width(82))) CreateDefinition();
+                    GUILayout.Label("逻辑数据", EditorStyles.miniLabel, GUILayout.Width(48));
                     var next = (TalentTreeDefinition)EditorGUILayout.ObjectField(definition, typeof(TalentTreeDefinition), false, GUILayout.Width(205));
                     if (next != definition)
                     {
@@ -122,7 +119,7 @@ namespace Dragon.UI.TalentTree.Editor
                         layout = TalentTreeLayoutUtility.Find(next);
                         ClearSelection(); iconCache.Clear();
                     }
-                    GUILayout.Label("UI 表现", EditorStyles.miniLabel, GUILayout.Width(48));
+                    GUILayout.Label("表现数据", EditorStyles.miniLabel, GUILayout.Width(48));
                     var nextLayout = (TalentTreeLayout)EditorGUILayout.ObjectField(layout, typeof(TalentTreeLayout), false, GUILayout.Width(205));
                     if (nextLayout != layout)
                     {
@@ -143,8 +140,6 @@ namespace Dragon.UI.TalentTree.Editor
                 }
                 using (new GUILayout.HorizontalScope())
                 {
-                    var nextRole = (EditRole)GUILayout.Toolbar((int)editRole, new[] { "策划：逻辑", "UI：表现" }, EditorStyles.toolbarButton, GUILayout.Width(190));
-                    if (nextRole != editRole) { editRole = nextRole; ClearSelection(); }
                     using (new EditorGUI.DisabledScope(definition == null))
                     {
                         if (GUILayout.Button("保存", EditorStyles.toolbarButton, GUILayout.Width(55))) AssetDatabase.SaveAssets();
@@ -161,36 +156,29 @@ namespace Dragon.UI.TalentTree.Editor
         {
             EditorGUI.DrawRect(rect, new Color(0.17f, 0.18f, 0.21f));
             GUILayout.BeginArea(new Rect(rect.x + 10, rect.y + 10, rect.width - 20, rect.height - 20));
-            GUILayout.Label(editRole == EditRole.Logic ? "策划逻辑" : "UI 表现", EditorStyles.boldLabel);
-            if (editRole == EditRole.Logic)
+            GUILayout.Label("添加节点", EditorStyles.boldLabel);
+            using (new EditorGUI.DisabledScope(definition == null))
             {
-                using (new EditorGUI.DisabledScope(definition == null))
-                {
-                    if (GUILayout.Button("新增小节点", GUILayout.Height(36))) AddNode(TalentNodeType.Small);
-                    if (GUILayout.Button("新增核心节点", GUILayout.Height(36))) AddNode(TalentNodeType.Core);
-                }
-                GUILayout.Label("编辑 ID、类型和前置连线。新增节点后交给 UI 同步摆位。", EditorStyles.wordWrappedMiniLabel);
+                if (GUILayout.Button("新增小节点", GUILayout.Height(36))) AddNode(TalentNodeType.Small);
+                if (GUILayout.Button("新增核心节点", GUILayout.Height(36))) AddNode(TalentNodeType.Core);
             }
-            else
+            if (layout == null)
+                GUILayout.Label("创建表现配置后即可摆放节点、编辑图标和曲线。", EditorStyles.wordWrappedMiniLabel);
+            else if (definition != null)
             {
-                GUILayout.Label("调整节点位置、图标、曲线和画布样式。", EditorStyles.wordWrappedMiniLabel);
-                using (new EditorGUI.DisabledScope(layout == null))
-                    if (GUILayout.Button("同步新增节点/连线", GUILayout.Height(28))) SyncLayout();
-                if (definition != null && layout != null)
+                int shown = 0;
+                foreach (var node in definition.nodes)
                 {
-                    int shown = 0;
-                    foreach (var node in definition.nodes)
-                    {
-                        if (layout.FindNode(node.key) != null) continue;
-                        if (shown++ == 0) GUILayout.Label("待摆放节点（拖入画布）", EditorStyles.miniBoldLabel);
-                        if (shown <= 6) DrawUnplacedNode(node);
-                    }
-                    if (shown > 6) GUILayout.Label("还有 " + (shown - 6) + " 个，点击上方同步按钮。", EditorStyles.wordWrappedMiniLabel);
+                    if (layout.FindNode(node.key) != null) continue;
+                    if (shown++ == 0) GUILayout.Label("待摆放节点（拖入画布）", EditorStyles.miniBoldLabel);
+                    if (shown <= 6) DrawUnplacedNode(node);
                 }
+                if (shown > 6) GUILayout.Label("还有 " + (shown - 6) + " 个，点击上方同步按钮。", EditorStyles.wordWrappedMiniLabel);
             }
             GUILayout.Space(14);
             GUILayout.Label("画布操作", EditorStyles.boldLabel);
-            GUILayout.Label(editRole == EditRole.Layout ? "空白处框选；拖动选中节点整体移动" : "右键节点连接；Delete 删除逻辑节点或连线", EditorStyles.wordWrappedMiniLabel);
+            GUILayout.Label("空白处框选；拖动选中节点整体移动", EditorStyles.wordWrappedMiniLabel);
+            GUILayout.Label("右键节点连接；Delete 删除节点或连线", EditorStyles.wordWrappedMiniLabel);
             GUILayout.Label("Shift 框选追加；Shift/Ctrl 点击增减节点", EditorStyles.wordWrappedMiniLabel);
             GUILayout.Label("右键拖动 / 中键拖动：平移", EditorStyles.wordWrappedMiniLabel);
             GUILayout.Label("滚轮：缩放", EditorStyles.wordWrappedMiniLabel);
@@ -249,54 +237,48 @@ namespace Dragon.UI.TalentTree.Editor
         {
             GUILayout.Label("节点属性", EditorStyles.boldLabel);
             GUILayout.Label("配表 ID：" + node.id, EditorStyles.miniLabel);
-            if (editRole == EditRole.Logic)
+            int id = EditorGUILayout.IntField("配表 ID", node.id);
+            var type = (TalentNodeType)EditorGUILayout.EnumPopup("类型", node.type);
+            if (id != node.id || type != node.type)
             {
-                int id = EditorGUILayout.IntField("配表 ID", node.id);
-                var type = (TalentNodeType)EditorGUILayout.EnumPopup("类型", node.type);
-                if (id != node.id || type != node.type)
-                {
-                    Undo.RecordObject(definition, "编辑天赋节点逻辑");
-                    node.id = id;
-                    node.type = type;
-                    EditorUtility.SetDirty(definition);
-                    Repaint();
-                }
-                int previousCount = 0;
-                foreach (var edge in definition.edges) if (edge.toKey == node.key) previousCount++;
-                GUILayout.Label("直接前置：" + previousCount + " 个（全部满足）", EditorStyles.wordWrappedMiniLabel);
-                GUILayout.Space(8);
-                if (GUILayout.Button("删除逻辑节点")) DeleteSelection();
-                return;
+                Undo.RecordObject(definition, "编辑天赋节点逻辑");
+                node.id = id;
+                node.type = type;
+                EditorUtility.SetDirty(definition);
+                Repaint();
             }
+            int previousCount = 0;
+            foreach (var edge in definition.edges) if (edge.toKey == node.key) previousCount++;
+            GUILayout.Label("直接前置：" + previousCount + " 个（全部满足）", EditorStyles.wordWrappedMiniLabel);
+            GUILayout.Space(8);
             var visual = layout != null ? layout.FindNode(node.key) : null;
             if (visual == null)
             {
                 EditorGUILayout.HelpBox("这个节点还没有 UI 布局。请创建表现配置或同步新增节点。", MessageType.Info);
-                return;
             }
-            var icon = (Sprite)EditorGUILayout.ObjectField("图标", visual.icon, typeof(Sprite), false);
-            Vector2 location = EditorGUILayout.Vector2Field("画布位置", visual.position);
-            if (icon != visual.icon || location != visual.position)
+            else
             {
-                Undo.RecordObject(layout, "编辑天赋节点表现");
-                visual.icon = icon;
-                visual.position = ClampToBoard(location, node.type);
-                EditorUtility.SetDirty(layout);
-                Repaint();
+                var icon = (Sprite)EditorGUILayout.ObjectField("图标", visual.icon, typeof(Sprite), false);
+                Vector2 location = EditorGUILayout.Vector2Field("画布位置", visual.position);
+                if (icon != visual.icon || location != visual.position)
+                {
+                    Undo.RecordObject(layout, "编辑天赋节点表现");
+                    visual.icon = icon;
+                    visual.position = ClampToBoard(location, node.type);
+                    EditorUtility.SetDirty(layout);
+                    Repaint();
+                }
             }
+            GUILayout.Space(8);
+            if (GUILayout.Button("删除节点")) DeleteSelection();
         }
 
         private void DrawMultiNodeInspector()
         {
             GUILayout.Label("已选中 " + selectedNodeKeys.Count + " 个节点", EditorStyles.boldLabel);
-            if (editRole == EditRole.Layout)
-                GUILayout.Label("拖动任一选中节点可整体移动，连线会跟随节点更新。", EditorStyles.wordWrappedMiniLabel);
-            else
-            {
-                GUILayout.Label("可一次删除这些逻辑节点及其连线。", EditorStyles.wordWrappedMiniLabel);
-                GUILayout.Space(8);
-                if (GUILayout.Button("删除选中逻辑节点")) DeleteSelection();
-            }
+            GUILayout.Label("拖动任一选中节点可整体移动，连线会跟随节点更新。", EditorStyles.wordWrappedMiniLabel);
+            GUILayout.Space(8);
+            if (GUILayout.Button("删除选中节点")) DeleteSelection();
         }
 
         private void DrawEdgeInspector(TalentTreeAuthorEdge edge)
@@ -305,45 +287,39 @@ namespace Dragon.UI.TalentTree.Editor
             var from = definition.FindNode(edge.fromKey);
             var to = definition.FindNode(edge.toKey);
             GUILayout.Label((from != null ? from.id.ToString() : "?") + " → " + (to != null ? to.id.ToString() : "?"));
-            if (editRole == EditRole.Logic)
-            {
-                if (GUILayout.Button("删除逻辑连线")) DeleteSelection();
-                return;
-            }
             var visual = layout != null ? layout.FindEdge(edge.fromKey, edge.toKey) : null;
             if (visual == null)
             {
                 EditorGUILayout.HelpBox("这条连线还没有 UI 曲线配置。请同步新增连线。", MessageType.Info);
-                return;
             }
-            Vector2 fromHandle = EditorGUILayout.Vector2Field("起点控制柄", visual.fromHandle);
-            Vector2 toHandle = EditorGUILayout.Vector2Field("终点控制柄", visual.toHandle);
-            if (fromHandle != visual.fromHandle || toHandle != visual.toHandle)
+            else
             {
-                Undo.RecordObject(layout, "调整天赋曲线");
-                visual.fromHandle = fromHandle;
-                visual.toHandle = toHandle;
-                EditorUtility.SetDirty(layout);
+                Vector2 fromHandle = EditorGUILayout.Vector2Field("起点控制柄", visual.fromHandle);
+                Vector2 toHandle = EditorGUILayout.Vector2Field("终点控制柄", visual.toHandle);
+                if (fromHandle != visual.fromHandle || toHandle != visual.toHandle)
+                {
+                    Undo.RecordObject(layout, "调整天赋曲线");
+                    visual.fromHandle = fromHandle;
+                    visual.toHandle = toHandle;
+                    EditorUtility.SetDirty(layout);
+                }
+                if (GUILayout.Button("重置为直线") && from != null && to != null)
+                {
+                    Undo.RecordObject(layout, "重置天赋曲线");
+                    Vector2 delta = NodePosition(to) - NodePosition(from);
+                    visual.fromHandle = delta / 3f;
+                    visual.toHandle = -delta / 3f;
+                    EditorUtility.SetDirty(layout);
+                }
             }
-            if (GUILayout.Button("重置为直线") && from != null && to != null)
-            {
-                Undo.RecordObject(layout, "重置天赋曲线");
-                Vector2 delta = NodePosition(to) - NodePosition(from);
-                visual.fromHandle = delta / 3f;
-                visual.toHandle = -delta / 3f;
-                EditorUtility.SetDirty(layout);
-            }
+            GUILayout.Space(8);
+            if (GUILayout.Button("删除连线")) DeleteSelection();
         }
 
         private void DrawTreeInspector()
         {
-            if (editRole == EditRole.Logic)
-            {
-                GUILayout.Label("逻辑概览", EditorStyles.boldLabel);
-                GUILayout.Label("节点 " + definition.nodes.Count + "，前置连线 " + definition.edges.Count, EditorStyles.wordWrappedMiniLabel);
-                GUILayout.Label("选择节点可编辑配表 ID 和类型；右键节点可建立前置关系。", EditorStyles.wordWrappedMiniLabel);
-                return;
-            }
+            GUILayout.Label("天赋树概览", EditorStyles.boldLabel);
+            GUILayout.Label("节点 " + definition.nodes.Count + "，前置连线 " + definition.edges.Count, EditorStyles.wordWrappedMiniLabel);
             if (layout == null)
             {
                 EditorGUILayout.HelpBox("请先创建 UI 表现配置。旧树的坐标和曲线会在创建时迁移。", MessageType.Info);
@@ -501,7 +477,7 @@ namespace Dragon.UI.TalentTree.Editor
             if (e.type == EventType.DragUpdated || e.type == EventType.DragPerform)
             {
                 string key = DragAndDrop.GetGenericData("DragonTalentLayoutNodeKey") as string;
-                if (editRole == EditRole.Layout && layout != null && !string.IsNullOrEmpty(key) &&
+                if (layout != null && !string.IsNullOrEmpty(key) &&
                     definition.FindNode(key) != null && rect.Contains(e.mousePosition))
                 {
                     DragAndDrop.visualMode = DragAndDropVisualMode.Move;
@@ -553,7 +529,7 @@ namespace Dragon.UI.TalentTree.Editor
                     if (target != null) AddEdge(pendingSourceKey, target.key);
                     pendingSourceKey = null; e.Use(); Repaint(); return;
                 }
-                if (editRole == EditRole.Layout && layout != null && selectedEdge >= 0 && selectedEdge < definition.edges.Count)
+                if (layout != null && selectedEdge >= 0 && selectedEdge < definition.edges.Count)
                 {
                     var edge = definition.edges[selectedEdge];
                     var from = definition.FindNode(edge.fromKey);
@@ -577,7 +553,7 @@ namespace Dragon.UI.TalentTree.Editor
                         e.Use(); Repaint(); return;
                     }
                     if (!selectedNodeKeys.Contains(node.key)) SelectSingleNode(node.key);
-                    if (editRole != EditRole.Layout || layout == null)
+                    if (layout == null)
                     {
                         e.Use(); Repaint(); return;
                     }
@@ -741,7 +717,7 @@ namespace Dragon.UI.TalentTree.Editor
         private void HandleKeys()
         {
             Event e = Event.current;
-            if (editRole == EditRole.Logic && e.type == EventType.KeyDown && e.keyCode == KeyCode.Delete && GUIUtility.keyboardControl == 0)
+            if (e.type == EventType.KeyDown && e.keyCode == KeyCode.Delete && GUIUtility.keyboardControl == 0)
             {
                 DeleteSelection(); e.Use();
             }
@@ -750,20 +726,11 @@ namespace Dragon.UI.TalentTree.Editor
         private void ShowContextMenu(TalentTreeAuthorNode node, Vector2 world)
         {
             var menu = new GenericMenu();
-            if (editRole == EditRole.Layout)
-            {
-                if (layout != null && node != null && layout.FindNode(node.key) == null)
-                    menu.AddItem(new GUIContent("摆放此节点"), false, () => PlaceNodeLayout(node.key, ClampToBoard(world, node.type)));
-                else if (layout != null)
-                    menu.AddItem(new GUIContent("同步新增节点/连线"), false, SyncLayout);
-                else
-                    menu.AddDisabledItem(new GUIContent("请先创建表现配置"));
-                menu.ShowAsContext();
-                return;
-            }
             if (node != null)
             {
                 menu.AddItem(new GUIContent("从此节点连接至..."), false, () => { pendingSourceKey = node.key; status = "点击目标节点完成连接，Esc 取消"; Repaint(); });
+                if (layout != null && layout.FindNode(node.key) == null)
+                    menu.AddItem(new GUIContent("摆放此节点"), false, () => PlaceNodeLayout(node.key, ClampToBoard(world, node.type)));
                 bool deleteGroup = selectedNodeKeys.Count > 1 && selectedNodeKeys.Contains(node.key);
                 menu.AddItem(new GUIContent(deleteGroup ? "删除选中节点" : "删除节点"), false, () =>
                 {
@@ -776,23 +743,24 @@ namespace Dragon.UI.TalentTree.Editor
                 menu.AddItem(new GUIContent("添加小节点"), false, () => AddNode(TalentNodeType.Small));
                 menu.AddItem(new GUIContent("添加核心节点"), false, () => AddNode(TalentNodeType.Core));
             }
+            if (layout != null) menu.AddItem(new GUIContent("同步新增节点/连线"), false, SyncLayout);
             menu.ShowAsContext();
         }
 
         private void AddNode(TalentNodeType type)
         {
-            if (definition == null || editRole != EditRole.Logic) return;
+            if (definition == null) return;
             Undo.RecordObject(definition, "添加天赋逻辑节点");
             var node = new TalentTreeAuthorNode { key = Guid.NewGuid().ToString("N"), id = definition.NextId(), type = type };
             definition.nodes.Add(node);
             SelectSingleNode(node.key);
-            status = "已添加逻辑节点，UI 可同步并摆放";
+            status = "已添加节点，可从左侧拖入画布或同步摆位";
             EditorUtility.SetDirty(definition); Repaint();
         }
 
         private void AddEdge(string fromKey, string toKey)
         {
-            if (editRole != EditRole.Logic) return;
+            if (definition == null) return;
             var from = definition.FindNode(fromKey);
             var to = definition.FindNode(toKey);
             if (from == null || to == null || from == to) { status = "请选择另一个节点作为目标"; return; }
@@ -805,13 +773,13 @@ namespace Dragon.UI.TalentTree.Editor
                 definition.edges.RemoveAt(definition.edges.Count - 1);
                 status = "已阻止成环连接";
             }
-            else { selectedEdge = definition.edges.Count - 1; selectedNodeKeys.Clear(); selectedNodeKey = null; status = "已连接 " + from.id + " → " + to.id + "，UI 可调整曲线"; }
+            else { selectedEdge = definition.edges.Count - 1; selectedNodeKeys.Clear(); selectedNodeKey = null; status = "已连接 " + from.id + " → " + to.id + "，可调整曲线"; }
             EditorUtility.SetDirty(definition); Repaint();
         }
 
         private void DeleteSelection()
         {
-            if (definition == null || editRole != EditRole.Logic) return;
+            if (definition == null) return;
             if (selectedNodeKeys.Count > 0)
             {
                 Undo.RecordObject(definition, selectedNodeKeys.Count > 1 ? "删除天赋节点组" : "删除天赋节点");
@@ -857,8 +825,10 @@ namespace Dragon.UI.TalentTree.Editor
             var asset = CreateInstance<TalentTreeDefinition>();
             AssetDatabase.CreateAsset(asset, path);
             AssetDatabase.SaveAssets();
-            definition = asset; layout = null; editRole = EditRole.Logic; Selection.activeObject = asset; ClearSelection();
-            status = "已创建逻辑配置，可添加节点；UI 稍后创建表现配置"; Repaint();
+            definition = asset;
+            layout = TalentTreeLayoutUtility.Create(asset);
+            Selection.activeObject = asset; ClearSelection();
+            status = "已创建天赋树，可添加节点并摆放"; Repaint();
         }
 
         private void CreateLayout()
@@ -866,7 +836,6 @@ namespace Dragon.UI.TalentTree.Editor
             try
             {
                 layout = TalentTreeLayoutUtility.Create(definition);
-                editRole = EditRole.Layout;
                 ClearSelection();
                 status = "已创建表现配置，旧坐标与曲线已尽可能迁移";
                 Repaint();
