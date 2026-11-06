@@ -143,7 +143,7 @@ namespace Dragon.UI.TalentTree.Editor
             try
             {
                 incomplete.nodes.RemoveAt(0);
-                if (!TalentTreeValidator.Validate(source, incomplete).Any(error => error.Contains("缺少 1 个节点布局")))
+                if (!TalentTreeValidator.Validate(source, incomplete).Any(error => error.Contains("缺少 1 个节点位置")))
                     throw new InvalidOperationException("Missing UI layout was not rejected.");
                 string before = File.ReadAllText(Path.GetFullPath(PathToJson));
                 if (TalentTreeExporter.Export(source, incomplete, out _))

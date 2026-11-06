@@ -91,7 +91,7 @@ namespace Dragon.UI.TalentTree.Editor
                 if (!IsFinite(visual.position)) errors.Add("节点 " + node.id + " 的坐标无效。");
             }
             if (missingNodes.Count > 0)
-                errors.Add("表现配置缺少 " + missingNodes.Count + " 个节点布局（例如 ID " + missingNodes[0] + "），请点击“同步新增节点/连线”。");
+                errors.Add("表现配置缺少 " + missingNodes.Count + " 个节点位置（例如 ID " + missingNodes[0] + "），请点击“补齐位置和曲线”。");
 
             var edgeKeys = new HashSet<string>();
             foreach (var edge in layout.edges)
@@ -104,7 +104,7 @@ namespace Dragon.UI.TalentTree.Editor
             }
             int missingEdges = definition.edges.Count(edge => !edgeKeys.Contains(EdgeKey(edge.fromKey, edge.toKey)));
             if (missingEdges > 0)
-                errors.Add("表现配置缺少 " + missingEdges + " 条连线样式，请点击“同步新增节点/连线”。");
+                errors.Add("表现配置缺少 " + missingEdges + " 条曲线记录，请点击“补齐位置和曲线”。");
             return errors.Distinct().ToList();
         }
 

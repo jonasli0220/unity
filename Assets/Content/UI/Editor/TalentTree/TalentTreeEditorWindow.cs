@@ -173,7 +173,9 @@ namespace Dragon.UI.TalentTree.Editor
                         {
                             if (GUILayout.Button("创建表现配置", EditorStyles.toolbarButton, GUILayout.Width(96))) CreateLayout();
                         }
-                        else if (GUILayout.Button("同步新增节点/连线", EditorStyles.toolbarButton, GUILayout.Width(120))) SyncLayout();
+                        else if (HasMissingLayoutEntries() &&
+                                 GUILayout.Button(new GUIContent("补齐位置和曲线", "给旧节点和连线补上缺失的外观记录"),
+                                     EditorStyles.toolbarButton, GUILayout.Width(110))) SyncLayout();
                     }
                     GUILayout.FlexibleSpace();
                     GUILayout.Label(status, EditorStyles.miniLabel, GUILayout.MaxWidth(240));
@@ -296,7 +298,7 @@ namespace Dragon.UI.TalentTree.Editor
             var visual = layout != null ? layout.FindNode(node.key) : null;
             if (visual == null)
             {
-                EditorGUILayout.HelpBox("这个节点还没有 UI 布局。请创建表现配置或同步新增节点。", MessageType.Info);
+                EditorGUILayout.HelpBox("这个节点还没有位置记录。可直接拖动摆放；若有多处缺失，点击“补齐位置和曲线”。", MessageType.Info);
             }
             else
             {
@@ -788,7 +790,8 @@ namespace Dragon.UI.TalentTree.Editor
                 menu.AddItem(new GUIContent("添加小节点"), false, () => AddNode(TalentNodeType.Small, world));
                 menu.AddItem(new GUIContent("添加核心节点"), false, () => AddNode(TalentNodeType.Core, world));
             }
-            if (layout != null) menu.AddItem(new GUIContent("同步新增节点/连线"), false, SyncLayout);
+            if (HasMissingLayoutEntries())
+                menu.AddItem(new GUIContent("补齐位置和曲线"), false, SyncLayout);
             menu.ShowAsContext();
         }
 
@@ -959,13 +962,33 @@ namespace Dragon.UI.TalentTree.Editor
                 return;
             }
             if (layout.definition != definition) { status = "表现配置未关联当前逻辑配置"; return; }
-            int group = BeginUndoGroup("同步天赋表现配置");
-            Undo.RecordObject(layout, "同步天赋表现配置");
+            int group = BeginUndoGroup("补齐天赋位置和曲线");
+            Undo.RecordObject(layout, "补齐天赋位置和曲线");
             int added = TalentTreeLayoutUtility.SyncMissingEntries(definition, layout);
             if (added > 0) EditorUtility.SetDirty(layout);
             EndUndoGroup(group);
-            status = added > 0 ? "已同步 " + added + " 条新增布局记录" : "表现配置已与逻辑同步";
+            status = added > 0 ? "已补齐 " + added + " 条位置或曲线记录" : "没有缺失的位置或曲线记录";
             Repaint();
+        }
+
+        private bool HasMissingLayoutEntries()
+        {
+            if (definition == null || layout == null || layout.definition != definition) return false;
+            if (definition.nodes == null || definition.edges == null || layout.nodes == null || layout.edges == null)
+                return false;
+            var nodeKeys = new HashSet<string>();
+            foreach (var node in layout.nodes)
+                if (node != null && !string.IsNullOrEmpty(node.key)) nodeKeys.Add(node.key);
+            foreach (var node in definition.nodes)
+                if (node != null && !nodeKeys.Contains(node.key)) return true;
+            var edgeKeys = new HashSet<string>();
+            foreach (var edge in layout.edges)
+                if (edge != null && edge.fromKey != null && edge.toKey != null)
+                    edgeKeys.Add(edge.fromKey.Length + ":" + edge.fromKey + edge.toKey);
+            foreach (var edge in definition.edges)
+                if (edge != null && edge.fromKey != null && edge.toKey != null &&
+                    !edgeKeys.Contains(edge.fromKey.Length + ":" + edge.fromKey + edge.toKey)) return true;
+            return false;
         }
 
         private void PlaceNodeLayout(string key, Vector2 position)
