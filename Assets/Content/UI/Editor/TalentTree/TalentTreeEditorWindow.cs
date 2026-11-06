@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using Dragon.UI.TalentTree;
 using UnityEditor;
 using UnityEditor.Callbacks;
@@ -9,6 +10,7 @@ namespace Dragon.UI.TalentTree.Editor
 {
     public sealed class TalentTreeEditorWindow : EditorWindow
     {
+        [Serializable] private sealed class ExportSource { public string sourceGuid; }
         private const float ToolbarHeight = 52f;
         private const float LeftWidth = 230f;
         private const float RightWidth = 280f;
@@ -99,10 +101,19 @@ namespace Dragon.UI.TalentTree.Editor
             if (Selection.activeObject is GameObject selectedPrefab &&
                 !string.IsNullOrEmpty(AssetDatabase.GetAssetPath(selectedPrefab)))
             {
-                var data = selectedPrefab.GetComponent<TalentTreeData>();
-                if (data != null && !string.IsNullOrEmpty(data.SourceGuid))
+                string prefabPath = AssetDatabase.GetAssetPath(selectedPrefab);
+                string jsonPath = Path.ChangeExtension(prefabPath, ".json").Replace('\\', '/');
+                string guid = null;
+                var legacy = selectedPrefab.GetComponent<TalentTreeData>();
+                if (legacy != null) guid = legacy.SourceGuid;
+                else if (File.Exists(Path.GetFullPath(jsonPath)))
                 {
-                    string sourcePath = AssetDatabase.GUIDToAssetPath(data.SourceGuid);
+                    try { guid = JsonUtility.FromJson<ExportSource>(File.ReadAllText(Path.GetFullPath(jsonPath)))?.sourceGuid; }
+                    catch (Exception) { /* An unrelated or invalid JSON is not a source link. */ }
+                }
+                if (!string.IsNullOrEmpty(guid))
+                {
+                    string sourcePath = AssetDatabase.GUIDToAssetPath(guid);
                     var source = AssetDatabase.LoadAssetAtPath<TalentTreeDefinition>(sourcePath);
                     if (source != null && source != definition) { ShowDefinition(source); return true; }
                 }

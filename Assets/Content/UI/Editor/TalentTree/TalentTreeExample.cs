@@ -16,12 +16,20 @@ namespace Dragon.UI.TalentTree.Editor
             public Vector2 contentSize;
             public Vector2 contentCenter;
             public ExportNodeSummary[] nodes;
+            public ExportEdgeSummary[] edges;
         }
 
         [Serializable] private sealed class ExportNodeSummary
         {
             public int id;
             public Vector2 position;
+            public int[] prerequisiteIds;
+        }
+
+        [Serializable] private sealed class ExportEdgeSummary
+        {
+            public int fromId;
+            public int toId;
         }
 
         private const string PathToDefinition = "Assets/Content/UI/Editor/TalentTree/Definitions/ExampleTalentTree.asset";
@@ -79,31 +87,26 @@ namespace Dragon.UI.TalentTree.Editor
             var layout = TalentTreeLayoutUtility.Find(definition) ?? TalentTreeLayoutUtility.Create(definition);
             if (!TalentTreeExporter.Export(definition, layout, out string message)) throw new InvalidOperationException(message);
             var prefab = AssetDatabase.LoadAssetAtPath<GameObject>(PathToPrefab);
-            var data = prefab != null ? prefab.GetComponent<TalentTreeData>() : null;
-            if (data == null || data.Nodes.Count != 14 || data.Edges.Count != 14)
-                throw new InvalidOperationException("Example prefab graph is incomplete.");
-            if (!data.TryGetNode(14, out var merge) || !merge.prerequisiteIds.SequenceEqual(new[] { 8, 9 }))
+            var json = JsonUtility.FromJson<ExportSummary>(File.ReadAllText(Path.GetFullPath(PathToJson)));
+            if (prefab == null || json == null || json.nodes == null || json.edges == null ||
+                json.nodes.Length != 14 || json.edges.Length != 14)
+                throw new InvalidOperationException("Example prefab or JSON graph is incomplete.");
+            var merge = json.nodes.First(node => node.id == 14);
+            if (!merge.prerequisiteIds.SequenceEqual(new[] { 8, 9 }))
                 throw new InvalidOperationException("Merge-node AND prerequisites were exported incorrectly.");
             var bounds = TalentTreeBoundsUtility.CalculateOriginCentered(definition, layout);
             if (Vector2.Distance(merge.position, layout.FindNode("example-14").position) > 0.01f)
                 throw new InvalidOperationException("Example layout position was not merged into the prefab.");
             var content = prefab.transform.Find("Content") as RectTransform;
             if (content == null || Vector2.Distance(content.sizeDelta, bounds.Size) > 0.01f ||
-                Vector2.Distance(data.ContentSize, bounds.Size) > 0.01f ||
-                data.ContentCenter != Vector2.zero || content.anchoredPosition != Vector2.zero ||
+                Vector2.Distance(json.contentSize, bounds.Size) > 0.01f ||
+                json.contentCenter != Vector2.zero || content.anchoredPosition != Vector2.zero ||
                 content.pivot != new Vector2(0.5f, 0.5f))
                 throw new InvalidOperationException("Example prefab did not keep the authored origin centered.");
-            if (prefab.GetComponentInChildren<TalentTreeSectorGraphic>(true) != null ||
-                prefab.GetComponentsInChildren<TalentTreeCurveGraphic>(true).Length != data.Edges.Count * 2 ||
-                data.Edges.Any(edge => edge.view == null || edge.activeView == null ||
-                    edge.view.name != "Edge " + edge.fromId + " to " + edge.toId ||
-                    edge.activeView.name != "Active" || edge.activeView.gameObject.activeSelf))
-                throw new InvalidOperationException("Example prefab must have a hidden Active curve per edge and no sector guide.");
+            AssertPatchSafe(prefab, json);
             var missingRenderer = prefab.GetComponentsInChildren<Graphic>(true)
                 .FirstOrDefault(graphic => graphic.GetComponent<CanvasRenderer>() == null);
             if (missingRenderer != null) throw new InvalidOperationException("Missing CanvasRenderer: " + missingRenderer.gameObject.name);
-            if (!File.Exists(Path.GetFullPath(PathToJson))) throw new InvalidOperationException("Example JSON is missing.");
-            var json = JsonUtility.FromJson<ExportSummary>(File.ReadAllText(Path.GetFullPath(PathToJson)));
             if (json == null || json.version != 4 || Vector2.Distance(json.contentSize, bounds.Size) > 0.01f ||
                 json.contentCenter != Vector2.zero || json.nodes == null ||
                 Vector2.Distance(json.nodes.First(node => node.id == 14).position, layout.FindNode("example-14").position) > 0.01f)
@@ -204,13 +207,11 @@ namespace Dragon.UI.TalentTree.Editor
                 AssetDatabase.CreateAsset(layout, layoutPath);
                 if (!TalentTreeExporter.Export(definition, layout, out string message)) throw new InvalidOperationException(message);
                 var prefab = AssetDatabase.LoadAssetAtPath<GameObject>(prefabPath);
-                var data = prefab != null ? prefab.GetComponent<TalentTreeData>() : null;
-                int chunks = prefab != null ? prefab.GetComponentsInChildren<TalentTreeCurveGraphic>(true).Length : 0;
-                if (data == null || data.Nodes.Count != 1000 || data.Edges.Count != 999 || chunks != 1998 ||
-                    data.Edges.Any(edge => edge.view == null || edge.activeView == null ||
-                        edge.activeView.gameObject.activeSelf) ||
-                    prefab.GetComponentInChildren<TalentTreeSectorGraphic>(true) != null)
+                var json = JsonUtility.FromJson<ExportSummary>(File.ReadAllText(Path.GetFullPath(jsonPath)));
+                if (prefab == null || json == null || json.nodes.Length != 1000 || json.edges.Length != 999 ||
+                    prefab.GetComponentsInChildren<UILineRenderer>(true).Length != 1998)
                     throw new InvalidOperationException("Stress-check prefab graph or individual curves are incomplete.");
+                AssertPatchSafe(prefab, json);
                 timer.Stop();
                 Debug.Log("Talent Tree 1000-node stress check passed: 1000 nodes, 999 edges with hidden Active curves, " + timer.ElapsedMilliseconds + " ms.");
             }
@@ -301,43 +302,35 @@ namespace Dragon.UI.TalentTree.Editor
                 if (!TalentTreeExporter.Export(definition, layout, out string message))
                     throw new InvalidOperationException(message);
                 var prefab = AssetDatabase.LoadAssetAtPath<GameObject>(prefabPath);
-                var data = prefab != null ? prefab.GetComponent<TalentTreeData>() : null;
-                if (data == null || data.Nodes.Count != 4 || data.Edges.Count != 4 ||
-                    data.ContentSize.x < 256f || data.ContentSize.y < 256f ||
-                    data.ContentCenter != Vector2.zero ||
-                    data.Edges.Any(edge => edge.view == null || edge.activeView == null ||
-                        edge.activeView.gameObject.activeSelf || edge.view.Curves.Count != 1 ||
-                        edge.activeView.Curves.Count != 1) ||
-                    prefab.GetComponentsInChildren<TalentTreeCurveGraphic>(true).Length != data.Edges.Count * 2 ||
-                    prefab.GetComponentInChildren<TalentTreeSectorGraphic>(true) != null ||
-                    prefab.GetComponentsInChildren<Graphic>(true).Any(graphic => graphic.GetComponent<CanvasRenderer>() == null))
-                    throw new InvalidOperationException("临时树导出的 Prefab 数据或画布不正确。");
-                foreach (var node in data.Nodes)
+                var json = JsonUtility.FromJson<ExportSummary>(File.ReadAllText(Path.GetFullPath(jsonPath)));
+                if (prefab == null || json == null || json.nodes.Length != 4 || json.edges.Length != 4 ||
+                    json.contentSize.x < 256f || json.contentSize.y < 256f ||
+                    json.contentCenter != Vector2.zero)
+                    throw new InvalidOperationException("临时树导出的 Prefab 或 JSON 数据不正确。");
+                AssertPatchSafe(prefab, json);
+                foreach (var node in json.nodes)
                 {
                     Vector2 authored = layout.FindNode("example-" + node.id).position;
+                    var view = prefab.transform.Find("Content/Nodes/Node " + node.id) as RectTransform;
                     if (Vector2.Distance(node.position, authored) > 0.01f ||
-                        Vector2.Distance(node.view.anchoredPosition, authored) > 0.01f)
+                        view == null || Vector2.Distance(view.anchoredPosition, authored) > 0.01f)
                         throw new InvalidOperationException("Prefab 节点坐标与编辑器不一致：" + node.id);
                 }
-                var json = JsonUtility.FromJson<ExportSummary>(File.ReadAllText(Path.GetFullPath(jsonPath)));
-                if (json == null || json.version != 4 || Vector2.Distance(json.contentSize, data.ContentSize) > 0.01f ||
+                if (json.version != 4 ||
                     json.contentCenter != Vector2.zero || json.nodes == null ||
                     json.nodes.Any(node => Vector2.Distance(node.position, layout.FindNode("example-" + node.id).position) > 0.01f))
                     throw new InvalidOperationException("临时树 JSON 画布数据不正确。");
-                int styledFromId = data.Edges[0].fromId;
-                int styledToId = data.Edges[0].toId;
+                int styledFromId = json.edges[0].fromId;
+                int styledToId = json.edges[0].toId;
                 var editable = PrefabUtility.LoadPrefabContents(prefabPath);
                 try
                 {
-                    var styledEdge = editable.GetComponent<TalentTreeData>().Edges[0];
-                    styledEdge.view.color = Color.magenta;
-                    styledEdge.activeView.color = Color.cyan;
-                    var baseStyle = new SerializedObject(styledEdge.view);
-                    baseStyle.FindProperty("lineWidth").floatValue = 13f;
-                    baseStyle.ApplyModifiedPropertiesWithoutUndo();
-                    var activeStyle = new SerializedObject(styledEdge.activeView);
-                    activeStyle.FindProperty("lineWidth").floatValue = 19f;
-                    activeStyle.ApplyModifiedPropertiesWithoutUndo();
+                    var styledEdge = FindEdge(editable, styledFromId, styledToId);
+                    var styledActive = styledEdge.transform.Find("Active").GetComponent<UILineRenderer>();
+                    styledEdge.color = Color.magenta;
+                    styledActive.color = Color.cyan;
+                    styledEdge.LineThickness = 13f;
+                    styledActive.LineThickness = 19f;
                     PrefabUtility.SaveAsPrefabAsset(editable, prefabPath);
                 }
                 finally { PrefabUtility.UnloadPrefabContents(editable); }
@@ -348,23 +341,26 @@ namespace Dragon.UI.TalentTree.Editor
                 layout.FindEdge(changedEdge.fromKey, changedEdge.toKey).fromHandle += new Vector2(10f, 20f);
                 if (!TalentTreeExporter.Export(definition, layout, out string updatedMessage))
                     throw new InvalidOperationException(updatedMessage);
-                var updated = AssetDatabase.LoadAssetAtPath<GameObject>(prefabPath).GetComponent<TalentTreeData>();
-                if (!updated.TryGetEdge(styledFromId, styledToId, out var updatedEdge) ||
-                    updatedEdge.view.color != Color.magenta || updatedEdge.activeView.color != Color.cyan ||
-                    Mathf.Abs(updatedEdge.view.LineWidth - 13f) > 0.01f ||
-                    Mathf.Abs(updatedEdge.activeView.LineWidth - 19f) > 0.01f ||
-                    updatedEdge.activeView.gameObject.activeSelf ||
-                    Vector2.Distance(updatedEdge.view.Curves[0].start, layout.FindNode(changedEdge.fromKey).position) > 0.01f ||
-                    Vector2.Distance(updatedEdge.activeView.Curves[0].fromHandle,
-                        layout.FindEdge(changedEdge.fromKey, changedEdge.toKey).fromHandle) > 0.01f)
+                var updated = AssetDatabase.LoadAssetAtPath<GameObject>(prefabPath);
+                var updatedEdge = FindEdge(updated, styledFromId, styledToId);
+                var updatedActive = updatedEdge.transform.Find("Active").GetComponent<UILineRenderer>();
+                var updatedVisual = layout.FindEdge(changedEdge.fromKey, changedEdge.toKey);
+                if (updatedEdge.color != Color.magenta || updatedActive.color != Color.cyan ||
+                    Mathf.Abs(updatedEdge.LineThickness - 13f) > 0.01f ||
+                    Mathf.Abs(updatedActive.LineThickness - 19f) > 0.01f ||
+                    updatedActive.gameObject.activeSelf ||
+                    Vector2.Distance(updatedEdge.Points[0] - Vector2.one * 0.5f,
+                        layout.FindNode(changedEdge.fromKey).position) > 0.01f ||
+                    Vector2.Distance(updatedActive.Points[1] - updatedActive.Points[0],
+                        updatedVisual.fromHandle) > 0.01f)
                     throw new InvalidOperationException("重导出未保留 Prefab 样式或未更新编辑器曲线坐标。");
-                var instance = UnityEngine.Object.Instantiate(updated.gameObject);
+                var instance = UnityEngine.Object.Instantiate(updated);
                 try
                 {
-                    var instanceData = instance.GetComponent<TalentTreeData>();
-                    if (!instanceData.SetEdgeActive(updatedEdge.fromId, updatedEdge.toId, true) ||
-                        !instanceData.TryGetEdge(updatedEdge.fromId, updatedEdge.toId, out var instanceEdge) ||
-                        !instanceEdge.activeView.gameObject.activeSelf)
+                    var instanceEdge = FindEdge(instance, styledFromId, styledToId);
+                    var active = instanceEdge.transform.Find("Active").gameObject;
+                    active.SetActive(true);
+                    if (!active.activeSelf)
                         throw new InvalidOperationException("程序无法打开连线 Active 状态。");
                 }
                 finally { UnityEngine.Object.DestroyImmediate(instance); }
@@ -385,6 +381,36 @@ namespace Dragon.UI.TalentTree.Editor
         {
             float u = 1f - t;
             return u * u * u * p0 + 3f * u * u * t * p1 + 3f * u * t * t * p2 + t * t * t * p3;
+        }
+
+        private static UILineRenderer FindEdge(GameObject prefab, int fromId, int toId)
+        {
+            var view = prefab.transform.Find("Content/Connections/Edge " + fromId + " to " + toId);
+            return view != null ? view.GetComponent<UILineRenderer>() : null;
+        }
+
+        private static void AssertPatchSafe(GameObject prefab, ExportSummary json)
+        {
+            if (prefab.GetComponent<ScrollRect>() == null || prefab.GetComponent<RectMask2D>() == null ||
+                prefab.GetComponent<TalentTreeData>() != null ||
+                prefab.GetComponentsInChildren<UILineRenderer>(true).Length != json.edges.Length * 2 ||
+                prefab.GetComponentsInChildren<Graphic>(true).Any(graphic => graphic.GetComponent<CanvasRenderer>() == null) ||
+                prefab.GetComponentsInChildren<MonoBehaviour>(true).Any(component =>
+                    component == null || !(component is Image || component is RectMask2D ||
+                        component is ScrollRect || component is UILineRenderer)))
+                throw new InvalidOperationException("Prefab 仍引用未随包体发布的脚本或缺少必要 UGUI 组件。");
+            foreach (var edge in json.edges)
+            {
+                var view = FindEdge(prefab, edge.fromId, edge.toId);
+                var active = view != null ? view.transform.Find("Active") : null;
+                var activeLine = active != null ? active.GetComponent<UILineRenderer>() : null;
+                if (view == null || activeLine == null || active.gameObject.activeSelf ||
+                    view.Points == null || view.Points.Length != 4 ||
+                    activeLine.Points == null || activeLine.Points.Length != 4 ||
+                    view.BezierMode != UILineRenderer.BezierType.Basic ||
+                    activeLine.BezierMode != UILineRenderer.BezierType.Basic)
+                    throw new InvalidOperationException("连线缺少独立贝塞尔曲线或隐藏的 Active 状态：" + edge.fromId + " to " + edge.toId);
+            }
         }
 
         private static void AddNode(TalentTreeDefinition definition, TalentTreeLayout layout, int id, TalentNodeType type, Vector2 position)
