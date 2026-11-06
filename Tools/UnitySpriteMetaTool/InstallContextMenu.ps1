@@ -96,76 +96,49 @@ Set-Item -Path $shellKey -Value $MenuName
 Set-ItemProperty -Path $shellKey -Name "Icon" -Value "powershell.exe"
 Set-Item -Path $commandKey -Value $command
 
-foreach ($extension in @('.png', '.jpg', '.jpeg')) {
-    $imageShellKey = "HKCU:\Software\Classes\SystemFileAssociations\$extension\shell\UnitySpriteBorderEditor"
-    $imageCommandKey = Join-Path $imageShellKey 'command'
-    $choiceKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\$extension\UserChoice"
-    $progId = if (Test-Path -LiteralPath $choiceKey) { (Get-ItemProperty -LiteralPath $choiceKey).ProgId } else { $null }
-    if ([string]::IsNullOrWhiteSpace($progId)) {
-        $extensionKey = "HKCU:\Software\Classes\$extension"
-        if (Test-Path -LiteralPath $extensionKey) { $progId = (Get-Item -LiteralPath $extensionKey).GetValue('') }
-    }
-    if ([string]::IsNullOrWhiteSpace($progId)) {
-        $extensionKey = "Registry::HKEY_CLASSES_ROOT\$extension"
-        if (Test-Path -LiteralPath $extensionKey) { $progId = (Get-Item -LiteralPath $extensionKey).GetValue('') }
-    }
-    if ([string]::IsNullOrWhiteSpace($progId) -or $progId -notmatch '^[A-Za-z0-9_.-]+$') {
-        Write-Warning "No safe ProgID for $extension; using SystemFileAssociations and Send To."
-        $progId = $null
-    }
-    $oldProgId = $null
-    $oldRegistration = $null
-    if (Test-Path -LiteralPath $imageShellKey) {
-        $oldRegistration = Get-ItemProperty -LiteralPath $imageShellKey
-        if ($oldRegistration.PSObject.Properties.Name -contains 'DragonSpriteMetaProgId') {
-            $oldProgId = $oldRegistration.DragonSpriteMetaProgId
-        }
-    }
-    if (-not [string]::IsNullOrWhiteSpace($oldProgId) -and $oldProgId -ne $progId) {
-        $oldProgKey = "HKCU:\Software\Classes\$oldProgId\shell\UnitySpriteBorderEditor"
-        if (Test-Path -LiteralPath $oldProgKey) { Remove-Item -LiteralPath $oldProgKey -Recurse -Force }
-    }
-    New-Item -Path $imageShellKey -Force | Out-Null
-    New-Item -Path $imageCommandKey -Force | Out-Null
-    Set-Item -Path $imageShellKey -Value '设置 Unity Sprite 九宫'
-    Set-ItemProperty -Path $imageShellKey -Name 'Icon' -Value 'powershell.exe'
-    $imageCommand = "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$borderEditorPath`" -ImagePath `"%1`" -ConfigPath `"$ConfigPath`""
-    Set-Item -Path $imageCommandKey -Value $imageCommand
-    if ($null -ne $progId) {
-        Set-ItemProperty -Path $imageShellKey -Name 'DragonSpriteMetaProgId' -Value $progId
-
-        # The selected image application's ProgID takes priority in Explorer's association array.
-        $progShellKey = "HKCU:\Software\Classes\$progId\shell\UnitySpriteBorderEditor"
-        $progCommandKey = Join-Path $progShellKey 'command'
-        New-Item -Path $progShellKey -Force | Out-Null
-        New-Item -Path $progCommandKey -Force | Out-Null
-        Set-Item -Path $progShellKey -Value '设置 Unity Sprite 九宫'
-        Set-ItemProperty -Path $progShellKey -Name 'Icon' -Value 'powershell.exe'
-        Set-Item -Path $progCommandKey -Value $imageCommand
-    } elseif ($oldRegistration -and $oldRegistration.PSObject.Properties.Name -contains 'DragonSpriteMetaProgId') {
-        Remove-ItemProperty -LiteralPath $imageShellKey -Name 'DragonSpriteMetaProgId'
-    }
-}
-
-# Explorer may keep file association verbs cached for the lifetime of the process.
-$directKey = 'HKCU:\Software\Classes\*\shell\Dragon.SpriteBorder'
-if ($AllUsers) { $directKey = 'HKLM:\Software\Classes\*\shell\Dragon.SpriteBorder' }
+# Use one verb in the normal file-command group. The X prefix sorts after
+# VSCode and WeType without forcing the command above Open or below Delete.
+$directKey = 'HKCU:\Software\Classes\*\shell\X.DragonSpriteBorder'
+if ($AllUsers) { $directKey = 'HKLM:\Software\Classes\*\shell\X.DragonSpriteBorder' }
 $directCommand = Join-Path $directKey 'command'
 $powershellPath = Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe'
 New-Item -Path $directCommand -Force | Out-Null
 Set-Item -LiteralPath $directKey -Value '设置 Unity Sprite 九宫'
 Set-ItemProperty -LiteralPath $directKey -Name 'MUIVerb' -Value '设置 Unity Sprite 九宫'
 Set-ItemProperty -LiteralPath $directKey -Name 'Icon' -Value $powershellPath
-# Keep an explicit first-level position without displacing the Open command.
-foreach ($orderingKey in @($directKey, 'HKCU:\Software\Classes\*\shell\Dragon.SpriteBorder') | Select-Object -Unique) {
-    if (Test-Path -LiteralPath $orderingKey) {
-        Set-ItemProperty -LiteralPath $orderingKey -Name 'Position' -Value 'Bottom'
-    }
+if ((Get-Item -LiteralPath $directKey).GetValueNames() -contains 'Position') {
+    Remove-ItemProperty -LiteralPath $directKey -Name 'Position'
 }
 Set-ItemProperty -LiteralPath $directKey -Name 'MultiSelectModel' -Value 'Single'
 Set-ItemProperty -LiteralPath $directKey -Name 'AppliesTo' -Value 'System.FileExtension:=".png" OR System.FileExtension:=".jpg" OR System.FileExtension:=".jpeg"'
 Set-Item -LiteralPath $directCommand -Value "`"$powershellPath`" -NoProfile -STA -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$borderEditorPath`" -ImagePath `"%1`" -ConfigPath `"$ConfigPath`""
 
+# Migrate only this tool's old registrations; duplicate association verbs can
+# interfere with visibility and must not be recreated on reinstall.
+$obsoleteKeys = @('HKCU:\Software\Classes\*\shell\Dragon.SpriteBorder')
+if ($AllUsers) {
+    $obsoleteKeys += 'HKLM:\Software\Classes\*\shell\Dragon.SpriteBorder'
+    $obsoleteKeys += 'HKCU:\Software\Classes\*\shell\X.DragonSpriteBorder'
+}
+foreach ($extension in @('.png', '.jpg', '.jpeg')) {
+    $associationKey = "HKCU:\Software\Classes\SystemFileAssociations\$extension\shell\UnitySpriteBorderEditor"
+    $progIds = @()
+    if (Test-Path -LiteralPath $associationKey) {
+        $progIds += (Get-Item -LiteralPath $associationKey).GetValue('DragonSpriteMetaProgId')
+    }
+    $choiceKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\$extension\UserChoice"
+    if (Test-Path -LiteralPath $choiceKey) { $progIds += (Get-Item -LiteralPath $choiceKey).GetValue('ProgId') }
+    foreach ($extensionKey in @("HKCU:\Software\Classes\$extension", "Registry::HKEY_CLASSES_ROOT\$extension")) {
+        if (Test-Path -LiteralPath $extensionKey) { $progIds += (Get-Item -LiteralPath $extensionKey).GetValue('') }
+    }
+    foreach ($progId in ($progIds | Select-Object -Unique)) {
+        if ($progId -match '^[A-Za-z0-9_.-]+$') { $obsoleteKeys += "HKCU:\Software\Classes\$progId\shell\UnitySpriteBorderEditor" }
+    }
+    $obsoleteKeys += $associationKey
+}
+foreach ($obsoleteKey in ($obsoleteKeys | Select-Object -Unique)) {
+    if (Test-Path -LiteralPath $obsoleteKey) { Remove-Item -LiteralPath $obsoleteKey -Recurse -Force }
+}
 Add-Type -TypeDefinition @'
 using System;
 using System.Runtime.InteropServices;

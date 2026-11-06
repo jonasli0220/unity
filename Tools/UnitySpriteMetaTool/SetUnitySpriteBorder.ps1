@@ -77,6 +77,7 @@ if (Test-Path -LiteralPath $metaPath -PathType Leaf) {
 }
 
 $form = New-Object System.Windows.Forms.Form
+$form.SuspendLayout()
 $form.AutoScaleDimensions = New-Object System.Drawing.SizeF(96, 96)
 $form.AutoScaleMode = [System.Windows.Forms.AutoScaleMode]::Dpi
 $form.Text = '设置 Unity Sprite 九宫'
@@ -91,6 +92,7 @@ $title.Text = [System.IO.Path]::GetFileName($ImagePath)
 $title.Location = New-Object System.Drawing.Point(20, 15)
 $title.Size = New-Object System.Drawing.Size(875, 25)
 $title.Font = New-Object System.Drawing.Font('Microsoft YaHei UI', 11, [System.Drawing.FontStyle]::Bold)
+$title.UseMnemonic = $false
 $form.Controls.Add($title)
 
 $sizeLabel = New-Object System.Windows.Forms.Label
@@ -246,6 +248,38 @@ $cancel.Size = New-Object System.Drawing.Size(195, 35)
 $cancel.Add_Click({ $form.Close() })
 $form.Controls.Add($cancel)
 $form.CancelButton = $cancel
+
+# Measure text after DPI scaling; fixed label heights can clip Chinese text or
+# overlap the next row when Windows text size differs from the layout scale.
+$layoutState = @{ Busy = $false }
+function Update-TextLayout {
+    if ($layoutState.Busy) { return }
+    $layoutState.Busy = $true
+    try {
+        $gap = [Math]::Max(6, [int](8 * $form.DeviceDpi / 96.0))
+        $textWidth = $panel.Right - $title.Left
+        $title.Size = New-Object System.Drawing.Size($textWidth, ($title.GetPreferredSize((New-Object System.Drawing.Size($textWidth, 0))).Height))
+        $sizeLabel.Top = $title.Bottom + $gap
+        $sizeLabel.Size = New-Object System.Drawing.Size($textWidth, ($sizeLabel.GetPreferredSize((New-Object System.Drawing.Size($textWidth, 0))).Height))
+        $contentTop = $sizeLabel.Bottom + $gap
+        $picture.Top = $contentTop
+        $panel.Top = $contentTop
+        $hint.Top = $panel.Bottom + 2 * $gap
+        $hint.Size = New-Object System.Drawing.Size($panel.Width, ($hint.GetPreferredSize((New-Object System.Drawing.Size($panel.Width, 0))).Height))
+        $save.Top = $hint.Bottom + 2 * $gap
+        $cancel.Top = $save.Bottom + $gap
+        $picture.Height = [Math]::Max($picture.Height, $cancel.Bottom - $contentTop)
+        $requiredHeight = [Math]::Max($picture.Bottom, $cancel.Bottom) + 2 * $gap
+        if ($form.ClientSize.Height -lt $requiredHeight) {
+            $form.ClientSize = New-Object System.Drawing.Size($form.ClientSize.Width, $requiredHeight)
+        }
+    } finally {
+        $layoutState.Busy = $false
+    }
+}
+$form.Add_Shown({ Update-TextLayout })
+$form.Add_DpiChanged({ $form.BeginInvoke([System.Action]{ Update-TextLayout }) | Out-Null })
+$form.ResumeLayout($true)
 
 $form.Add_FormClosed({ $picture.Image = $null; $previewImage.Dispose() })
 try {

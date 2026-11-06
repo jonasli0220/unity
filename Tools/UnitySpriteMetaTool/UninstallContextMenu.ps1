@@ -5,18 +5,21 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 # A normal uninstall also removes a previous system-wide installation via UAC.
-if (-not $AllUsers -and (Test-Path -LiteralPath 'HKLM:\Software\Classes\*\shell\Dragon.SpriteBorder')) {
+if (-not $AllUsers -and ((Test-Path -LiteralPath 'HKLM:\Software\Classes\*\shell\Dragon.SpriteBorder') -or
+    (Test-Path -LiteralPath 'HKLM:\Software\Classes\*\shell\X.DragonSpriteBorder'))) {
     $scriptPath = $MyInvocation.MyCommand.Path
     $process = Start-Process -FilePath powershell.exe -Verb RunAs -WindowStyle Hidden -Wait -PassThru -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$scriptPath`" -AllUsers"
     if ($process.ExitCode -ne 0) { throw 'System menu uninstall did not complete.' }
     return
 }
 
-$directKey = 'HKCU:\Software\Classes\*\shell\Dragon.SpriteBorder'
-if (Test-Path -LiteralPath $directKey) { Remove-Item -LiteralPath $directKey -Recurse -Force }
-if ($AllUsers) {
-    $machineKey = 'HKLM:\Software\Classes\*\shell\Dragon.SpriteBorder'
-    if (Test-Path -LiteralPath $machineKey) { Remove-Item -LiteralPath $machineKey -Recurse -Force }
+foreach ($verb in @('Dragon.SpriteBorder', 'X.DragonSpriteBorder')) {
+    $directKey = "HKCU:\Software\Classes\*\shell\$verb"
+    if (Test-Path -LiteralPath $directKey) { Remove-Item -LiteralPath $directKey -Recurse -Force }
+    if ($AllUsers) {
+        $machineKey = "HKLM:\Software\Classes\*\shell\$verb"
+        if (Test-Path -LiteralPath $machineKey) { Remove-Item -LiteralPath $machineKey -Recurse -Force }
+    }
 }
 
 $shellKey = "HKCU:\Software\Classes\Directory\Background\shell\UnitySpriteMetaGenerator"
