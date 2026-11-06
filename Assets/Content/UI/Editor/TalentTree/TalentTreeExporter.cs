@@ -13,11 +13,10 @@ namespace Dragon.UI.TalentTree.Editor
     internal static class TalentTreeExporter
     {
         private const string OutputFolder = "Assets/Content/UI/Prefab/talent_tree";
-        private const int CurvesPerGraphic = 256;
 
         [Serializable] private sealed class ExportDocument
         {
-            public int version = 3;
+            public int version = 4;
             public string sourceGuid;
             public string layoutGuid;
             public string name;
@@ -66,7 +65,7 @@ namespace Dragon.UI.TalentTree.Editor
             if (!CheckExistingOutputs(prefabPath, jsonPath, sourceGuid, out message)) return false;
 
             TalentTreeContentBounds bounds;
-            try { bounds = TalentTreeBoundsUtility.Calculate(definition, layout); }
+            try { bounds = TalentTreeBoundsUtility.CalculateOriginCentered(definition, layout); }
             catch (Exception exception) { message = "无法计算导出范围：" + exception.Message; return false; }
 
             var orderedNodes = definition.nodes.OrderBy(node => node.id).ToArray();
@@ -83,9 +82,8 @@ namespace Dragon.UI.TalentTree.Editor
                 var visual = layout.FindNode(node.key);
                 int[] prerequisites = orderedEdges.Where(edge => edge.toKey == node.key)
                     .Select(edge => nodeByKey[edge.fromKey].id).OrderBy(id => id).ToArray();
-                Vector2 centeredPosition = visual.position - bounds.Center;
-                runtimeNodes[i] = new TalentTreeNodeRecord { id = node.id, type = node.type, position = centeredPosition, prerequisiteIds = prerequisites, icon = visual.icon };
-                exportNodes[i] = new ExportNode { id = node.id, type = node.type.ToString(), position = centeredPosition,
+                runtimeNodes[i] = new TalentTreeNodeRecord { id = node.id, type = node.type, position = visual.position, prerequisiteIds = prerequisites, icon = visual.icon };
+                exportNodes[i] = new ExportNode { id = node.id, type = node.type.ToString(), position = visual.position,
                     iconAssetPath = visual.icon != null ? AssetDatabase.GetAssetPath(visual.icon) : string.Empty,
                     prerequisiteIds = prerequisites };
             }
@@ -163,7 +161,7 @@ namespace Dragon.UI.TalentTree.Editor
             TalentTreeAuthorNode[] orderedNodes,
             TalentTreeAuthorEdge[] orderedEdges, TalentTreeNodeRecord[] runtimeNodes, TalentTreeEdgeRecord[] runtimeEdges)
         {
-            var positions = orderedNodes.ToDictionary(node => node.key, node => layout.FindNode(node.key).position - bounds.Center);
+            var positions = orderedNodes.ToDictionary(node => node.key, node => layout.FindNode(node.key).position);
             var root = new GameObject(name, typeof(RectTransform), typeof(CanvasRenderer), typeof(Image), typeof(RectMask2D), typeof(TalentTreePanZoom), typeof(TalentTreeData));
             var viewport = (RectTransform)root.transform;
             viewport.anchorMin = Vector2.zero;
@@ -173,26 +171,18 @@ namespace Dragon.UI.TalentTree.Editor
             root.GetComponent<Image>().color = new Color(0f, 0f, 0f, 0f);
             var content = NewRect("Content", viewport, bounds.Size);
             root.GetComponent<TalentTreePanZoom>().SetContent(content);
-            var sectors = NewStretchRect("Six Sectors", content);
-            sectors.gameObject.AddComponent<CanvasRenderer>();
-            var sectorGraphic = sectors.gameObject.AddComponent<TalentTreeSectorGraphic>();
-            sectorGraphic.raycastTarget = false;
-            sectorGraphic.SetOrigin(-bounds.Center);
             var edgeLayer = NewStretchRect("Connections", content);
-            for (int offset = 0; offset < orderedEdges.Length; offset += CurvesPerGraphic)
+            for (int i = 0; i < orderedEdges.Length; i++)
             {
-                int count = Mathf.Min(CurvesPerGraphic, orderedEdges.Length - offset);
-                var curves = new TalentTreeCurve[count];
-                for (int i = 0; i < count; i++)
-                {
-                    var edge = orderedEdges[offset + i];
-                    var visual = layout.FindEdge(edge.fromKey, edge.toKey);
-                    curves[i] = new TalentTreeCurve { start = positions[edge.fromKey], end = positions[edge.toKey],
-                        fromHandle = visual.fromHandle, toHandle = visual.toHandle };
-                }
-                var chunk = NewStretchRect("Curves " + (offset / CurvesPerGraphic + 1), edgeLayer);
-                chunk.gameObject.AddComponent<CanvasRenderer>();
-                chunk.gameObject.AddComponent<TalentTreeCurveGraphic>().SetCurves(curves, layout.lineWidth, layout.lineColor);
+                var edge = orderedEdges[i];
+                var visual = layout.FindEdge(edge.fromKey, edge.toKey);
+                var curve = new TalentTreeCurve { start = positions[edge.fromKey], end = positions[edge.toKey],
+                    fromHandle = visual.fromHandle, toHandle = visual.toHandle };
+                var edgeView = NewStretchRect("Edge " + runtimeEdges[i].fromId + " to " + runtimeEdges[i].toId, edgeLayer);
+                edgeView.gameObject.AddComponent<CanvasRenderer>();
+                var graphic = edgeView.gameObject.AddComponent<TalentTreeCurveGraphic>();
+                graphic.SetCurves(new[] { curve }, layout.lineWidth, layout.lineColor);
+                runtimeEdges[i].view = graphic;
             }
             var nodeLayer = NewStretchRect("Nodes", content);
             for (int i = 0; i < orderedNodes.Length; i++)
@@ -312,6 +302,18 @@ namespace Dragon.UI.TalentTree.Editor
                 throw new InvalidOperationException("节点或曲线坐标过大，无法生成有效的 UGUI 画布。");
             return new TalentTreeContentBounds(new Vector2((float)centerX, (float)centerY),
                 new Vector2((float)width, (float)height));
+        }
+
+        public static TalentTreeContentBounds CalculateOriginCentered(TalentTreeDefinition definition, TalentTreeLayout layout)
+        {
+            TalentTreeContentBounds tight = Calculate(definition, layout);
+            double halfWidth = Math.Abs((double)tight.Center.x) + tight.Size.x * 0.5d;
+            double halfHeight = Math.Abs((double)tight.Center.y) + tight.Size.y * 0.5d;
+            double width = Math.Max(MinimumSide, halfWidth * 2d);
+            double height = Math.Max(MinimumSide, halfHeight * 2d);
+            if (!IsFiniteFloat(width) || !IsFiniteFloat(height))
+                throw new InvalidOperationException("节点或曲线坐标过大，无法生成有效的 UGUI 画布。");
+            return new TalentTreeContentBounds(Vector2.zero, new Vector2((float)width, (float)height));
         }
 
         private static Vector2 NodePosition(TalentTreeAuthorNode node, TalentTreeLayout layout)

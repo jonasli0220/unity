@@ -15,6 +15,13 @@ namespace Dragon.UI.TalentTree.Editor
             public int version;
             public Vector2 contentSize;
             public Vector2 contentCenter;
+            public ExportNodeSummary[] nodes;
+        }
+
+        [Serializable] private sealed class ExportNodeSummary
+        {
+            public int id;
+            public Vector2 position;
         }
 
         private const string PathToDefinition = "Assets/Content/UI/Editor/TalentTree/Definitions/ExampleTalentTree.asset";
@@ -77,21 +84,27 @@ namespace Dragon.UI.TalentTree.Editor
                 throw new InvalidOperationException("Example prefab graph is incomplete.");
             if (!data.TryGetNode(14, out var merge) || !merge.prerequisiteIds.SequenceEqual(new[] { 8, 9 }))
                 throw new InvalidOperationException("Merge-node AND prerequisites were exported incorrectly.");
-            var bounds = TalentTreeBoundsUtility.Calculate(definition, layout);
-            if (Vector2.Distance(merge.position, layout.FindNode("example-14").position - bounds.Center) > 0.01f)
+            var bounds = TalentTreeBoundsUtility.CalculateOriginCentered(definition, layout);
+            if (Vector2.Distance(merge.position, layout.FindNode("example-14").position) > 0.01f)
                 throw new InvalidOperationException("Example layout position was not merged into the prefab.");
             var content = prefab.transform.Find("Content") as RectTransform;
             if (content == null || Vector2.Distance(content.sizeDelta, bounds.Size) > 0.01f ||
                 Vector2.Distance(data.ContentSize, bounds.Size) > 0.01f ||
-                Vector2.Distance(data.ContentCenter, bounds.Center) > 0.01f)
-                throw new InvalidOperationException("Example prefab did not crop and center the authored graph.");
+                data.ContentCenter != Vector2.zero || content.anchoredPosition != Vector2.zero ||
+                content.pivot != new Vector2(0.5f, 0.5f))
+                throw new InvalidOperationException("Example prefab did not keep the authored origin centered.");
+            if (prefab.GetComponentInChildren<TalentTreeSectorGraphic>(true) != null ||
+                prefab.GetComponentsInChildren<TalentTreeCurveGraphic>(true).Length != data.Edges.Count ||
+                data.Edges.Any(edge => edge.view == null || edge.view.name != "Edge " + edge.fromId + " to " + edge.toId))
+                throw new InvalidOperationException("Example prefab must have one independent Graphic per edge and no sector guide.");
             var missingRenderer = prefab.GetComponentsInChildren<Graphic>(true)
                 .FirstOrDefault(graphic => graphic.GetComponent<CanvasRenderer>() == null);
             if (missingRenderer != null) throw new InvalidOperationException("Missing CanvasRenderer: " + missingRenderer.gameObject.name);
             if (!File.Exists(Path.GetFullPath(PathToJson))) throw new InvalidOperationException("Example JSON is missing.");
             var json = JsonUtility.FromJson<ExportSummary>(File.ReadAllText(Path.GetFullPath(PathToJson)));
-            if (json == null || json.version != 3 || Vector2.Distance(json.contentSize, bounds.Size) > 0.01f ||
-                Vector2.Distance(json.contentCenter, bounds.Center) > 0.01f)
+            if (json == null || json.version != 4 || Vector2.Distance(json.contentSize, bounds.Size) > 0.01f ||
+                json.contentCenter != Vector2.zero || json.nodes == null ||
+                Vector2.Distance(json.nodes.First(node => node.id == 14).position, layout.FindNode("example-14").position) > 0.01f)
                 throw new InvalidOperationException("Example JSON crop metadata is incomplete.");
             Debug.Log("Talent Tree example validated: 14 nodes, 14 edges, merged UI layout, all Graphics have CanvasRenderer. " + message);
         }
@@ -191,10 +204,12 @@ namespace Dragon.UI.TalentTree.Editor
                 var prefab = AssetDatabase.LoadAssetAtPath<GameObject>(prefabPath);
                 var data = prefab != null ? prefab.GetComponent<TalentTreeData>() : null;
                 int chunks = prefab != null ? prefab.GetComponentsInChildren<TalentTreeCurveGraphic>(true).Length : 0;
-                if (data == null || data.Nodes.Count != 1000 || data.Edges.Count != 999 || chunks != 4)
-                    throw new InvalidOperationException("Stress-check prefab graph or curve chunks are incomplete.");
+                if (data == null || data.Nodes.Count != 1000 || data.Edges.Count != 999 || chunks != 999 ||
+                    data.Edges.Any(edge => edge.view == null) ||
+                    prefab.GetComponentInChildren<TalentTreeSectorGraphic>(true) != null)
+                    throw new InvalidOperationException("Stress-check prefab graph or individual curves are incomplete.");
                 timer.Stop();
-                Debug.Log("Talent Tree 1000-node stress check passed: 1000 nodes, 999 edges, 4 curve chunks, " + timer.ElapsedMilliseconds + " ms.");
+                Debug.Log("Talent Tree 1000-node stress check passed: 1000 nodes, 999 independent edges, " + timer.ElapsedMilliseconds + " ms.");
             }
             finally
             {
@@ -286,10 +301,23 @@ namespace Dragon.UI.TalentTree.Editor
                 var data = prefab != null ? prefab.GetComponent<TalentTreeData>() : null;
                 if (data == null || data.Nodes.Count != 4 || data.Edges.Count != 4 ||
                     data.ContentSize.x < 256f || data.ContentSize.y < 256f ||
+                    data.ContentCenter != Vector2.zero ||
+                    data.Edges.Any(edge => edge.view == null) ||
+                    prefab.GetComponentsInChildren<TalentTreeCurveGraphic>(true).Length != data.Edges.Count ||
+                    prefab.GetComponentInChildren<TalentTreeSectorGraphic>(true) != null ||
                     prefab.GetComponentsInChildren<Graphic>(true).Any(graphic => graphic.GetComponent<CanvasRenderer>() == null))
                     throw new InvalidOperationException("临时树导出的 Prefab 数据或画布不正确。");
+                foreach (var node in data.Nodes)
+                {
+                    Vector2 authored = layout.FindNode("example-" + node.id).position;
+                    if (Vector2.Distance(node.position, authored) > 0.01f ||
+                        Vector2.Distance(node.view.anchoredPosition, authored) > 0.01f)
+                        throw new InvalidOperationException("Prefab 节点坐标与编辑器不一致：" + node.id);
+                }
                 var json = JsonUtility.FromJson<ExportSummary>(File.ReadAllText(Path.GetFullPath(jsonPath)));
-                if (json == null || json.version != 3 || Vector2.Distance(json.contentSize, data.ContentSize) > 0.01f)
+                if (json == null || json.version != 4 || Vector2.Distance(json.contentSize, data.ContentSize) > 0.01f ||
+                    json.contentCenter != Vector2.zero || json.nodes == null ||
+                    json.nodes.Any(node => Vector2.Distance(node.position, layout.FindNode("example-" + node.id).position) > 0.01f))
                     throw new InvalidOperationException("临时树 JSON 画布数据不正确。");
                 Directory.CreateDirectory(Path.GetDirectoryName(resultPath));
                 File.WriteAllText(resultPath, "PASS: split geometry, directed bypass, duplicate avoidance, layout recovery, cropped prefab and JSON");

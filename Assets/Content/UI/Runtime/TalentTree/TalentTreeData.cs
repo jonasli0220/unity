@@ -24,6 +24,7 @@ namespace Dragon.UI.TalentTree
         public int toId;
         public Vector2 fromHandle;
         public Vector2 toHandle;
+        public TalentTreeCurveGraphic view;
     }
 
     [DisallowMultipleComponent]
@@ -52,6 +53,18 @@ namespace Dragon.UI.TalentTree
                 return true;
             }
             node = null;
+            return false;
+        }
+
+        public bool TryGetEdge(int fromId, int toId, out TalentTreeEdgeRecord edge)
+        {
+            foreach (var candidate in edges)
+            {
+                if (candidate.fromId != fromId || candidate.toId != toId) continue;
+                edge = candidate;
+                return true;
+            }
+            edge = null;
             return false;
         }
 
