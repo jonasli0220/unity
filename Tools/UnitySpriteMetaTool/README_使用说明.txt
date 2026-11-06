@@ -11,6 +11,7 @@ Unity Sprite Meta Tool 使用说明
 5. 在 Assets/Content/UI 内任意文件夹空白处右键，点击“生成 Unity Sprite Meta”。
 6. 要设置九宫时，右键单张 PNG/JPG/JPEG 图片，点击“设置 Unity Sprite 九宫”。在窗口内输入左、上、右、下边距并保存。
    Windows 11 请先点“显示更多选项”，或选中图片后按 Shift+F10。文件夹空白处只有批量生成命令。
+   如果经典菜单里没有九宫命令，可用“发送到 → 设置 Unity Sprite 九宫”。
 
 卸载：
 双击 uninstall.bat。

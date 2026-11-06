@@ -98,13 +98,75 @@ Set-Item -Path $commandKey -Value $command
 foreach ($extension in @('.png', '.jpg', '.jpeg')) {
     $imageShellKey = "HKCU:\Software\Classes\SystemFileAssociations\$extension\shell\UnitySpriteBorderEditor"
     $imageCommandKey = Join-Path $imageShellKey 'command'
+    $choiceKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\$extension\UserChoice"
+    $progId = if (Test-Path -LiteralPath $choiceKey) { (Get-ItemProperty -LiteralPath $choiceKey).ProgId } else { $null }
+    if ([string]::IsNullOrWhiteSpace($progId)) {
+        $extensionKey = "HKCU:\Software\Classes\$extension"
+        if (Test-Path -LiteralPath $extensionKey) { $progId = (Get-Item -LiteralPath $extensionKey).GetValue('') }
+    }
+    if ([string]::IsNullOrWhiteSpace($progId)) {
+        $extensionKey = "Registry::HKEY_CLASSES_ROOT\$extension"
+        if (Test-Path -LiteralPath $extensionKey) { $progId = (Get-Item -LiteralPath $extensionKey).GetValue('') }
+    }
+    if ([string]::IsNullOrWhiteSpace($progId) -or $progId -notmatch '^[A-Za-z0-9_.-]+$') {
+        Write-Warning "No safe ProgID for $extension; using SystemFileAssociations and Send To."
+        $progId = $null
+    }
+    $oldProgId = $null
+    $oldRegistration = $null
+    if (Test-Path -LiteralPath $imageShellKey) {
+        $oldRegistration = Get-ItemProperty -LiteralPath $imageShellKey
+        if ($oldRegistration.PSObject.Properties.Name -contains 'DragonSpriteMetaProgId') {
+            $oldProgId = $oldRegistration.DragonSpriteMetaProgId
+        }
+    }
+    if (-not [string]::IsNullOrWhiteSpace($oldProgId) -and $oldProgId -ne $progId) {
+        $oldProgKey = "HKCU:\Software\Classes\$oldProgId\shell\UnitySpriteBorderEditor"
+        if (Test-Path -LiteralPath $oldProgKey) { Remove-Item -LiteralPath $oldProgKey -Recurse -Force }
+    }
     New-Item -Path $imageShellKey -Force | Out-Null
     New-Item -Path $imageCommandKey -Force | Out-Null
     Set-Item -Path $imageShellKey -Value '设置 Unity Sprite 九宫'
     Set-ItemProperty -Path $imageShellKey -Name 'Icon' -Value 'powershell.exe'
     $imageCommand = "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$borderEditorPath`" -ImagePath `"%1`" -ConfigPath `"$ConfigPath`""
     Set-Item -Path $imageCommandKey -Value $imageCommand
+    if ($null -ne $progId) {
+        Set-ItemProperty -Path $imageShellKey -Name 'DragonSpriteMetaProgId' -Value $progId
+
+        # The selected image application's ProgID takes priority in Explorer's association array.
+        $progShellKey = "HKCU:\Software\Classes\$progId\shell\UnitySpriteBorderEditor"
+        $progCommandKey = Join-Path $progShellKey 'command'
+        New-Item -Path $progShellKey -Force | Out-Null
+        New-Item -Path $progCommandKey -Force | Out-Null
+        Set-Item -Path $progShellKey -Value '设置 Unity Sprite 九宫'
+        Set-ItemProperty -Path $progShellKey -Name 'Icon' -Value 'powershell.exe'
+        Set-Item -Path $progCommandKey -Value $imageCommand
+    } elseif ($oldRegistration -and $oldRegistration.PSObject.Properties.Name -contains 'DragonSpriteMetaProgId') {
+        Remove-ItemProperty -LiteralPath $imageShellKey -Name 'DragonSpriteMetaProgId'
+    }
 }
+
+# Explorer may keep file association verbs cached for the lifetime of the process.
+Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class UnitySpriteMetaShellNotify {
+    [DllImport("shell32.dll")]
+    public static extern void SHChangeNotify(uint eventId, uint flags, IntPtr item1, IntPtr item2);
+}
+'@
+[UnitySpriteMetaShellNotify]::SHChangeNotify(0x08000000, 0x1000, [IntPtr]::Zero, [IntPtr]::Zero)
+
+$sendToFolder = [Environment]::GetFolderPath([Environment+SpecialFolder]::SendTo)
+$sendToLink = Join-Path $sendToFolder '设置 Unity Sprite 九宫.lnk'
+$shortcutShell = New-Object -ComObject WScript.Shell
+$shortcut = $shortcutShell.CreateShortcut($sendToLink)
+$shortcut.TargetPath = Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe'
+$shortcut.Arguments = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$borderEditorPath`" -ImagePath"
+$shortcut.WorkingDirectory = $scriptRoot
+$shortcut.IconLocation = "$($shortcut.TargetPath),0"
+$shortcut.Description = 'UnitySpriteMetaTool: set Sprite border and generate meta'
+$shortcut.Save()
 
 Write-Host "Context menu installed: $MenuName"
 Write-Host "Location: folder background right-click"
@@ -113,4 +175,5 @@ Write-Host "UI root: $uiRoot"
 Write-Host "Config: $ConfigPath"
 Write-Host "Command: $command"
 Write-Host "Image context menu installed: Set Unity Sprite border (.png, .jpg, .jpeg)"
+Write-Host "Send To fallback installed: $sendToLink"
 Write-Host "Windows 11: right-click an image, then choose Show more options (or press Shift+F10) to find the border editor."
