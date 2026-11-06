@@ -58,7 +58,7 @@ namespace Dragon.UI.TalentTree.Editor
                 layout.nodes.Add(new TalentTreeNodeLayout
                 {
                     key = node.key,
-                    position = copyLegacy ? node.position : SuggestPosition(node.id, layout.boardSize),
+                    position = copyLegacy ? node.position : SuggestPosition(node.id),
                     icon = copyLegacy ? node.icon : null
                 });
                 added++;
@@ -90,11 +90,11 @@ namespace Dragon.UI.TalentTree.Editor
             return added;
         }
 
-        public static Vector2 SuggestPosition(int id, float boardSize)
+        public static Vector2 SuggestPosition(int id)
         {
             if (id <= 1) return Vector2.zero;
             float angle = (id - 2) * 2.39996323f;
-            float radius = Mathf.Min(boardSize * 0.5f - 100f, 180f + Mathf.Sqrt(id - 2) * 110f);
+            float radius = 180f + Mathf.Sqrt(id - 2) * 110f;
             return new Vector2(Mathf.Sin(angle), Mathf.Cos(angle)) * radius;
         }
 

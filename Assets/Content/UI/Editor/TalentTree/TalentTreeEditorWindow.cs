@@ -11,7 +11,7 @@ namespace Dragon.UI.TalentTree.Editor
         private const float ToolbarHeight = 52f;
         private const float LeftWidth = 230f;
         private const float RightWidth = 280f;
-        private const float MinZoom = 0.15f;
+        private const float MinZoom = 0.001f;
         private const float MaxZoom = 2.5f;
         private TalentTreeDefinition definition;
         private TalentTreeLayout layout;
@@ -33,6 +33,7 @@ namespace Dragon.UI.TalentTree.Editor
         private bool rightPanning;
         private bool draggingNode;
         private int draggingHandle;
+        private int dragUndoGroup = -1;
         private string layoutPalettePressKey;
         private Vector2 layoutPalettePressPosition;
         private string status = "选择或新建天赋树配置";
@@ -65,6 +66,7 @@ namespace Dragon.UI.TalentTree.Editor
                 layout = TalentTreeLayoutUtility.Find(selected);
                 ClearSelection();
                 iconCache.Clear();
+                FitContent();
                 return true;
             }
             if (Selection.activeObject is TalentTreeLayout selectedLayout && selectedLayout != layout)
@@ -73,17 +75,53 @@ namespace Dragon.UI.TalentTree.Editor
                 definition = selectedLayout.definition;
                 ClearSelection();
                 iconCache.Clear();
+                FitContent();
                 return true;
             }
             return false;
         }
 
-        private void OnDisable() => Undo.undoRedoPerformed -= OnUndoRedo;
+        private void OnDisable()
+        {
+            FinishDragUndo();
+            Undo.undoRedoPerformed -= OnUndoRedo;
+        }
         private void OnUndoRedo()
         {
+            if (definition != null && (layout == null || layout.definition != definition))
+                layout = TalentTreeLayoutUtility.Find(definition);
             selectedNodeKeys.RemoveWhere(key => definition == null || definition.FindNode(key) == null);
+            if (definition == null || selectedEdge >= definition.edges.Count) selectedEdge = -1;
             UpdatePrimarySelection();
             Repaint();
+        }
+
+        private static int BeginUndoGroup(string name)
+        {
+            Undo.IncrementCurrentGroup();
+            int group = Undo.GetCurrentGroup();
+            Undo.SetCurrentGroupName(name);
+            return group;
+        }
+
+        private static void EndUndoGroup(int group)
+        {
+            Undo.FlushUndoRecordObjects();
+            Undo.CollapseUndoOperations(group);
+        }
+
+        private void StartDragUndo(string name)
+        {
+            if (dragUndoGroup >= 0) return;
+            dragUndoGroup = BeginUndoGroup(name);
+            Undo.RegisterCompleteObjectUndo(layout, name);
+        }
+
+        private void FinishDragUndo()
+        {
+            if (dragUndoGroup < 0) return;
+            EndUndoGroup(dragUndoGroup);
+            dragUndoGroup = -1;
         }
 
         private void OnGUI()
@@ -118,6 +156,7 @@ namespace Dragon.UI.TalentTree.Editor
                         definition = next;
                         layout = TalentTreeLayoutUtility.Find(next);
                         ClearSelection(); iconCache.Clear();
+                        FitContent();
                     }
                     GUILayout.Label("表现数据", EditorStyles.miniLabel, GUILayout.Width(48));
                     var nextLayout = (TalentTreeLayout)EditorGUILayout.ObjectField(layout, typeof(TalentTreeLayout), false, GUILayout.Width(205));
@@ -126,6 +165,7 @@ namespace Dragon.UI.TalentTree.Editor
                         layout = nextLayout;
                         if (layout != null) definition = layout.definition;
                         ClearSelection(); iconCache.Clear();
+                        FitContent();
                     }
                     using (new EditorGUI.DisabledScope(definition == null))
                     {
@@ -145,7 +185,7 @@ namespace Dragon.UI.TalentTree.Editor
                         if (GUILayout.Button("保存", EditorStyles.toolbarButton, GUILayout.Width(55))) AssetDatabase.SaveAssets();
                         if (GUILayout.Button("检查", EditorStyles.toolbarButton, GUILayout.Width(55))) ShowValidation();
                         if (GUILayout.Button("生成 Prefab + JSON", EditorStyles.toolbarButton, GUILayout.Width(140))) Export();
-                        if (GUILayout.Button("居中", EditorStyles.toolbarButton, GUILayout.Width(55))) { pan = Vector2.zero; zoom = 0.36f; }
+                        if (GUILayout.Button("适应内容", EditorStyles.toolbarButton, GUILayout.Width(75))) FitContent();
                     }
                     GUILayout.FlexibleSpace();
                 }
@@ -214,7 +254,7 @@ namespace Dragon.UI.TalentTree.Editor
             }
             else if (e.type == EventType.MouseUp && e.button == 0 && layoutPalettePressKey == node.key)
             {
-                PlaceNodeLayout(node.key, TalentTreeLayoutUtility.SuggestPosition(node.id, BoardSize));
+                PlaceNodeLayout(node.key, TalentTreeLayoutUtility.SuggestPosition(node.id));
                 layoutPalettePressKey = null;
                 e.Use();
             }
@@ -241,10 +281,12 @@ namespace Dragon.UI.TalentTree.Editor
             var type = (TalentNodeType)EditorGUILayout.EnumPopup("类型", node.type);
             if (id != node.id || type != node.type)
             {
+                int group = BeginUndoGroup("编辑天赋节点逻辑");
                 Undo.RecordObject(definition, "编辑天赋节点逻辑");
                 node.id = id;
                 node.type = type;
                 EditorUtility.SetDirty(definition);
+                EndUndoGroup(group);
                 Repaint();
             }
             int previousCount = 0;
@@ -262,10 +304,12 @@ namespace Dragon.UI.TalentTree.Editor
                 Vector2 location = EditorGUILayout.Vector2Field("画布位置", visual.position);
                 if (icon != visual.icon || location != visual.position)
                 {
+                    int group = BeginUndoGroup("编辑天赋节点表现");
                     Undo.RecordObject(layout, "编辑天赋节点表现");
                     visual.icon = icon;
-                    visual.position = ClampToBoard(location, node.type);
+                    visual.position = location;
                     EditorUtility.SetDirty(layout);
+                    EndUndoGroup(group);
                     Repaint();
                 }
             }
@@ -289,27 +333,29 @@ namespace Dragon.UI.TalentTree.Editor
             GUILayout.Label((from != null ? from.id.ToString() : "?") + " → " + (to != null ? to.id.ToString() : "?"));
             var visual = layout != null ? layout.FindEdge(edge.fromKey, edge.toKey) : null;
             if (visual == null)
-            {
-                EditorGUILayout.HelpBox("这条连线还没有 UI 曲线配置。请同步新增连线。", MessageType.Info);
-            }
+                EditorGUILayout.HelpBox("拖动黄色控制柄会自动创建这条连线的曲线配置。", MessageType.Info);
             else
             {
                 Vector2 fromHandle = EditorGUILayout.Vector2Field("起点控制柄", visual.fromHandle);
                 Vector2 toHandle = EditorGUILayout.Vector2Field("终点控制柄", visual.toHandle);
                 if (fromHandle != visual.fromHandle || toHandle != visual.toHandle)
                 {
+                    int group = BeginUndoGroup("调整天赋曲线");
                     Undo.RecordObject(layout, "调整天赋曲线");
                     visual.fromHandle = fromHandle;
                     visual.toHandle = toHandle;
                     EditorUtility.SetDirty(layout);
+                    EndUndoGroup(group);
                 }
                 if (GUILayout.Button("重置为直线") && from != null && to != null)
                 {
+                    int group = BeginUndoGroup("重置天赋曲线");
                     Undo.RecordObject(layout, "重置天赋曲线");
                     Vector2 delta = NodePosition(to) - NodePosition(from);
                     visual.fromHandle = delta / 3f;
                     visual.toHandle = -delta / 3f;
                     EditorUtility.SetDirty(layout);
+                    EndUndoGroup(group);
                 }
             }
             GUILayout.Space(8);
@@ -326,7 +372,6 @@ namespace Dragon.UI.TalentTree.Editor
                 return;
             }
             GUILayout.Label("画布样式", EditorStyles.boldLabel);
-            float boardSize = EditorGUILayout.FloatField("画布直径", layout.boardSize);
             float smallSize = EditorGUILayout.FloatField("小节点尺寸", layout.smallNodeSize);
             float coreSize = EditorGUILayout.FloatField("核心节点尺寸", layout.coreNodeSize);
             float lineWidth = EditorGUILayout.FloatField("线宽", layout.lineWidth);
@@ -336,12 +381,12 @@ namespace Dragon.UI.TalentTree.Editor
             Color rimColor = EditorGUILayout.ColorField("节点边框", layout.nodeRimColor);
             Sprite smallFrame = (Sprite)EditorGUILayout.ObjectField("小节点外框", layout.smallFrame, typeof(Sprite), false);
             Sprite coreFrame = (Sprite)EditorGUILayout.ObjectField("核心节点外框", layout.coreFrame, typeof(Sprite), false);
-            if (boardSize != layout.boardSize || smallSize != layout.smallNodeSize || coreSize != layout.coreNodeSize ||
+            if (smallSize != layout.smallNodeSize || coreSize != layout.coreNodeSize ||
                 lineWidth != layout.lineWidth || lineColor != layout.lineColor || smallColor != layout.smallFillColor ||
                 coreColor != layout.coreFillColor || rimColor != layout.nodeRimColor || smallFrame != layout.smallFrame || coreFrame != layout.coreFrame)
             {
+                int group = BeginUndoGroup("编辑天赋树表现样式");
                 Undo.RecordObject(layout, "编辑天赋树表现样式");
-                layout.boardSize = Mathf.Max(1024f, boardSize);
                 layout.smallNodeSize = Mathf.Max(24f, smallSize);
                 layout.coreNodeSize = Mathf.Max(32f, coreSize);
                 layout.lineWidth = Mathf.Max(1f, lineWidth);
@@ -352,6 +397,7 @@ namespace Dragon.UI.TalentTree.Editor
                 layout.smallFrame = smallFrame;
                 layout.coreFrame = coreFrame;
                 EditorUtility.SetDirty(layout);
+                EndUndoGroup(group);
             }
         }
 
@@ -375,7 +421,7 @@ namespace Dragon.UI.TalentTree.Editor
                 if (source != null)
                 {
                     Handles.color = Color.yellow;
-                    Handles.DrawDottedLine(BoardToCanvas(source.position, local), Event.current.mousePosition, 4f);
+                    Handles.DrawDottedLine(BoardToCanvas(NodePosition(source), local), Event.current.mousePosition, 4f);
                 }
             }
             Handles.EndGUI();
@@ -385,7 +431,7 @@ namespace Dragon.UI.TalentTree.Editor
         private void DrawSectors(Rect canvas)
         {
             Vector2 center = BoardToCanvas(Vector2.zero, canvas);
-            float radius = BoardSize * 0.5f * zoom;
+            float radius = (canvas.size.magnitude + Vector2.Distance(center, canvas.center)) * 2f;
             for (int sector = 0; sector < 6; sector++)
             {
                 Handles.color = sector % 2 == 0 ? new Color(0.16f, 0.24f, 0.34f, 0.28f) : new Color(0.22f, 0.26f, 0.32f, 0.28f);
@@ -400,8 +446,6 @@ namespace Dragon.UI.TalentTree.Editor
                 Handles.color = new Color(0.58f, 0.55f, 0.44f, 0.35f);
                 Handles.DrawLine(center, points[1]);
             }
-            Handles.color = new Color(0.58f, 0.55f, 0.44f, 0.45f);
-            Handles.DrawWireDisc(center, Vector3.forward, radius);
         }
 
         private void DrawEdges(Rect canvas)
@@ -486,7 +530,7 @@ namespace Dragon.UI.TalentTree.Editor
                         DragAndDrop.AcceptDrag();
                         var node = definition.FindNode(key);
                         Vector2 point = CanvasToBoard(e.mousePosition - rect.position, new Rect(0, 0, rect.width, rect.height));
-                        PlaceNodeLayout(key, ClampToBoard(point, node.type));
+                        PlaceNodeLayout(key, point);
                     }
                     e.Use();
                 }
@@ -534,12 +578,12 @@ namespace Dragon.UI.TalentTree.Editor
                     var edge = definition.edges[selectedEdge];
                     var from = definition.FindNode(edge.fromKey);
                     var to = definition.FindNode(edge.toKey);
-                    var visual = layout.FindEdge(edge.fromKey, edge.toKey);
-                    if (from != null && to != null && visual != null)
+                    if (from != null && to != null)
                     {
-                        if (Vector2.Distance(local, BoardToCanvas(NodePosition(from) + visual.fromHandle, localRect)) < 10f) draggingHandle = 1;
-                        else if (Vector2.Distance(local, BoardToCanvas(NodePosition(to) + visual.toHandle, localRect)) < 10f) draggingHandle = 2;
-                        if (draggingHandle != 0) { Undo.RecordObject(layout, "调整天赋曲线"); e.Use(); return; }
+                        EdgeHandles(edge, out var fromHandle, out var toHandle);
+                        if (Vector2.Distance(local, BoardToCanvas(NodePosition(from) + fromHandle, localRect)) < 12f) draggingHandle = 1;
+                        else if (Vector2.Distance(local, BoardToCanvas(NodePosition(to) + toHandle, localRect)) < 12f) draggingHandle = 2;
+                        if (draggingHandle != 0) { e.Use(); return; }
                     }
                 }
                 var node = HitNode(local, localRect);
@@ -561,15 +605,8 @@ namespace Dragon.UI.TalentTree.Editor
                     nodeDragStartBoard = CanvasToBoard(local, localRect);
                     nodeDragStartPositions.Clear();
                     foreach (var selectedNode in definition.nodes)
-                        if (selectedNodeKeys.Contains(selectedNode.key) && layout.FindNode(selectedNode.key) is TalentTreeNodeLayout visual)
-                            nodeDragStartPositions.Add(selectedNode.key, visual.position);
-                    if (nodeDragStartPositions.Count != selectedNodeKeys.Count)
-                    {
-                        draggingNode = false;
-                        status = "先同步新增节点布局，再移动选中节点";
-                        e.Use(); Repaint(); return;
-                    }
-                    Undo.RecordObject(layout, selectedNodeKeys.Count > 1 ? "移动天赋节点组" : "移动天赋节点");
+                        if (selectedNodeKeys.Contains(selectedNode.key))
+                            nodeDragStartPositions.Add(selectedNode.key, NodePosition(selectedNode));
                     e.Use(); Repaint(); return;
                 }
                 selectedEdge = HitEdge(local, localRect);
@@ -611,9 +648,20 @@ namespace Dragon.UI.TalentTree.Editor
                     Vector2 world = CanvasToBoard(e.mousePosition - rect.position, localRect);
                     if (draggingNode)
                     {
-                        Vector2 delta = ClampGroupDelta(world - nodeDragStartBoard);
+                        Vector2 delta = world - nodeDragStartBoard;
+                        if (delta.sqrMagnitude < 0.0001f) { e.Use(); return; }
+                        StartDragUndo(selectedNodeKeys.Count > 1 ? "移动天赋节点组" : "移动天赋节点");
                         foreach (var selectedNode in definition.nodes)
-                            if (nodeDragStartPositions.TryGetValue(selectedNode.key, out var start)) layout.FindNode(selectedNode.key).position = start + delta;
+                        {
+                            if (!nodeDragStartPositions.TryGetValue(selectedNode.key, out var start)) continue;
+                            var visual = layout.FindNode(selectedNode.key);
+                            if (visual == null)
+                            {
+                                visual = new TalentTreeNodeLayout { key = selectedNode.key, position = start };
+                                layout.nodes.Add(visual);
+                            }
+                            visual.position = start + delta;
+                        }
                     }
                     else if (selectedEdge >= 0 && selectedEdge < definition.edges.Count)
                     {
@@ -621,9 +669,16 @@ namespace Dragon.UI.TalentTree.Editor
                         var endpoint = definition.FindNode(draggingHandle == 1 ? edge.fromKey : edge.toKey);
                         if (endpoint != null)
                         {
-                            var visual = layout.FindEdge(edge.fromKey, edge.toKey);
-                            if (draggingHandle == 1) visual.fromHandle = world - NodePosition(endpoint);
-                            else visual.toHandle = world - NodePosition(endpoint);
+                            EdgeHandles(edge, out var fromHandle, out var toHandle);
+                            Vector2 handle = world - NodePosition(endpoint);
+                            Vector2 current = draggingHandle == 1 ? fromHandle : toHandle;
+                            if ((handle - current).sqrMagnitude >= 0.0001f)
+                            {
+                                StartDragUndo("调整天赋曲线");
+                                var visual = TalentTreeGraphEdit.EnsureEdgeLayout(definition, layout, edge);
+                                if (draggingHandle == 1) visual.fromHandle = handle;
+                                else visual.toHandle = handle;
+                            }
                         }
                     }
                     EditorUtility.SetDirty(layout); e.Use(); Repaint(); return;
@@ -636,7 +691,10 @@ namespace Dragon.UI.TalentTree.Editor
                     if (!rightPanning && rect.Contains(e.mousePosition))
                     {
                         var localRect = new Rect(0, 0, rect.width, rect.height);
-                        ShowContextMenu(HitNode(e.mousePosition - rect.position, localRect), CanvasToBoard(e.mousePosition - rect.position, localRect));
+                        Vector2 local = e.mousePosition - rect.position;
+                        var node = HitNode(local, localRect);
+                        ShowContextMenu(node, node == null ? HitEdge(local, localRect) : -1,
+                            CanvasToBoard(local, localRect));
                     }
                     rightDown = Vector2.zero; rightPanning = false; e.Use(); return;
                 }
@@ -651,6 +709,7 @@ namespace Dragon.UI.TalentTree.Editor
                 }
                 if (e.button == 0 && (draggingNode || draggingHandle != 0))
                 {
+                    FinishDragUndo();
                     draggingNode = false; draggingHandle = 0; nodeDragStartPositions.Clear(); e.Use(); return;
                 }
             }
@@ -671,32 +730,6 @@ namespace Dragon.UI.TalentTree.Editor
             foreach (var node in definition.nodes)
                 if (marquee.Contains(BoardToCanvas(NodePosition(node), canvas))) selectedNodeKeys.Add(node.key);
             UpdatePrimarySelection();
-        }
-
-        private Vector2 ClampGroupDelta(Vector2 delta)
-        {
-            if (CanTranslateSelection(delta)) return delta;
-            float low = 0f;
-            float high = 1f;
-            for (int i = 0; i < 16; i++)
-            {
-                float middle = (low + high) * 0.5f;
-                if (CanTranslateSelection(delta * middle)) low = middle;
-                else high = middle;
-            }
-            return delta * low;
-        }
-
-        private bool CanTranslateSelection(Vector2 delta)
-        {
-            foreach (var node in definition.nodes)
-            {
-                if (!nodeDragStartPositions.TryGetValue(node.key, out var start)) continue;
-                float nodeRadius = NodeSize(node.type) * 0.5f;
-                float limit = Mathf.Max(1f, BoardSize * 0.5f - nodeRadius);
-                if ((start + delta).sqrMagnitude > limit * limit) return false;
-            }
-            return true;
         }
 
         private void SelectSingleNode(string key)
@@ -723,14 +756,14 @@ namespace Dragon.UI.TalentTree.Editor
             }
         }
 
-        private void ShowContextMenu(TalentTreeAuthorNode node, Vector2 world)
+        private void ShowContextMenu(TalentTreeAuthorNode node, int clickedEdge, Vector2 world)
         {
             var menu = new GenericMenu();
             if (node != null)
             {
                 menu.AddItem(new GUIContent("从此节点连接至..."), false, () => { pendingSourceKey = node.key; status = "点击目标节点完成连接，Esc 取消"; Repaint(); });
                 if (layout != null && layout.FindNode(node.key) == null)
-                    menu.AddItem(new GUIContent("摆放此节点"), false, () => PlaceNodeLayout(node.key, ClampToBoard(world, node.type)));
+                    menu.AddItem(new GUIContent("摆放此节点"), false, () => PlaceNodeLayout(node.key, world));
                 bool deleteGroup = selectedNodeKeys.Count > 1 && selectedNodeKeys.Contains(node.key);
                 menu.AddItem(new GUIContent(deleteGroup ? "删除选中节点" : "删除节点"), false, () =>
                 {
@@ -740,22 +773,47 @@ namespace Dragon.UI.TalentTree.Editor
             }
             else
             {
-                menu.AddItem(new GUIContent("添加小节点"), false, () => AddNode(TalentNodeType.Small));
-                menu.AddItem(new GUIContent("添加核心节点"), false, () => AddNode(TalentNodeType.Core));
+                int edgeToSplit = clickedEdge >= 0 ? clickedEdge : selectedEdge;
+                if (edgeToSplit >= 0 && edgeToSplit < definition.edges.Count)
+                {
+                    selectedEdge = edgeToSplit;
+                    selectedNodeKeys.Clear();
+                    selectedNodeKey = null;
+                    menu.AddItem(new GUIContent("在连线中点插入小节点"), false,
+                        () => InsertNodeOnEdge(edgeToSplit, TalentNodeType.Small));
+                    menu.AddItem(new GUIContent("在连线中点插入核心节点"), false,
+                        () => InsertNodeOnEdge(edgeToSplit, TalentNodeType.Core));
+                    menu.AddSeparator("");
+                }
+                menu.AddItem(new GUIContent("添加小节点"), false, () => AddNode(TalentNodeType.Small, world));
+                menu.AddItem(new GUIContent("添加核心节点"), false, () => AddNode(TalentNodeType.Core, world));
             }
             if (layout != null) menu.AddItem(new GUIContent("同步新增节点/连线"), false, SyncLayout);
             menu.ShowAsContext();
         }
 
-        private void AddNode(TalentNodeType type)
+        private void AddNode(TalentNodeType type, Vector2? position = null)
         {
             if (definition == null) return;
-            Undo.RecordObject(definition, "添加天赋逻辑节点");
+            if (layout == null)
+            {
+                CreateLayout();
+                if (layout == null) return;
+            }
+            const string undoName = "添加天赋节点";
+            int group = BeginUndoGroup(undoName);
+            Undo.RegisterCompleteObjectUndo(definition, undoName);
+            Undo.RegisterCompleteObjectUndo(layout, undoName);
             var node = new TalentTreeAuthorNode { key = Guid.NewGuid().ToString("N"), id = definition.NextId(), type = type };
             definition.nodes.Add(node);
+            Vector2 visualPosition = position ?? TalentTreeLayoutUtility.SuggestPosition(node.id);
+            layout.nodes.Add(new TalentTreeNodeLayout { key = node.key, position = visualPosition });
             SelectSingleNode(node.key);
-            status = "已添加节点，可从左侧拖入画布或同步摆位";
-            EditorUtility.SetDirty(definition); Repaint();
+            status = "已添加节点，可直接拖动";
+            EditorUtility.SetDirty(definition);
+            EditorUtility.SetDirty(layout);
+            EndUndoGroup(group);
+            Repaint();
         }
 
         private void AddEdge(string fromKey, string toKey)
@@ -765,38 +823,81 @@ namespace Dragon.UI.TalentTree.Editor
             var to = definition.FindNode(toKey);
             if (from == null || to == null || from == to) { status = "请选择另一个节点作为目标"; return; }
             if (definition.edges.Exists(edge => edge.fromKey == fromKey && edge.toKey == toKey)) { status = "这条连线已存在"; return; }
+            int group = BeginUndoGroup("连接天赋节点");
             Undo.RecordObject(definition, "连接天赋节点");
-            definition.edges.Add(new TalentTreeAuthorEdge { fromKey = fromKey, toKey = toKey });
+            if (layout != null) Undo.RecordObject(layout, "连接天赋节点");
+            var edge = new TalentTreeAuthorEdge { fromKey = fromKey, toKey = toKey };
+            definition.edges.Add(edge);
             var errors = TalentTreeValidator.Validate(definition);
             if (errors.Exists(error => error.Contains("存在环")))
             {
                 definition.edges.RemoveAt(definition.edges.Count - 1);
                 status = "已阻止成环连接";
             }
-            else { selectedEdge = definition.edges.Count - 1; selectedNodeKeys.Clear(); selectedNodeKey = null; status = "已连接 " + from.id + " → " + to.id + "，可调整曲线"; }
-            EditorUtility.SetDirty(definition); Repaint();
+            else
+            {
+                if (layout != null)
+                {
+                    TalentTreeGraphEdit.EnsureEdgeLayout(definition, layout, edge);
+                    EditorUtility.SetDirty(layout);
+                }
+                selectedEdge = definition.edges.Count - 1;
+                selectedNodeKeys.Clear(); selectedNodeKey = null;
+                status = "已连接 " + from.id + " → " + to.id + "，可调整曲线";
+            }
+            EditorUtility.SetDirty(definition);
+            EndUndoGroup(group);
+            Repaint();
+        }
+
+        private void InsertNodeOnEdge(int edgeIndex, TalentNodeType type)
+        {
+            if (definition == null || edgeIndex < 0 || edgeIndex >= definition.edges.Count) return;
+            if (layout == null)
+            {
+                CreateLayout();
+                if (layout == null) return;
+            }
+            const string undoName = "在连线中插入天赋节点";
+            int group = BeginUndoGroup(undoName);
+            Undo.RegisterCompleteObjectUndo(definition, undoName);
+            Undo.RegisterCompleteObjectUndo(layout, undoName);
+            var node = TalentTreeGraphEdit.InsertNode(definition, layout, edgeIndex, type);
+            EditorUtility.SetDirty(definition);
+            EditorUtility.SetDirty(layout);
+            EndUndoGroup(group);
+            SelectSingleNode(node.key);
+            status = "已在连线中点插入节点 " + node.id;
+            Repaint();
         }
 
         private void DeleteSelection()
         {
             if (definition == null) return;
+            if (selectedNodeKeys.Count == 0 && (selectedEdge < 0 || selectedEdge >= definition.edges.Count)) return;
+            int group = BeginUndoGroup(selectedNodeKeys.Count > 1 ? "删除天赋节点组" : "删除天赋节点或连线");
             if (selectedNodeKeys.Count > 0)
             {
                 Undo.RecordObject(definition, selectedNodeKeys.Count > 1 ? "删除天赋节点组" : "删除天赋节点");
-                definition.nodes.RemoveAll(node => selectedNodeKeys.Contains(node.key));
-                definition.edges.RemoveAll(edge => selectedNodeKeys.Contains(edge.fromKey) || selectedNodeKeys.Contains(edge.toKey));
+                if (layout != null) Undo.RecordObject(layout, "删除天赋节点与曲线");
+                int removed = TalentTreeGraphEdit.DeleteNodes(definition, layout, selectedNodeKeys);
                 if (selectedNodeKeys.Contains(pendingSourceKey)) pendingSourceKey = null;
                 selectedNodeKeys.Clear();
                 selectedNodeKey = null;
+                selectedEdge = -1;
+                status = "已删除 " + removed + " 个节点，并连接其前后节点";
             }
             else if (selectedEdge >= 0 && selectedEdge < definition.edges.Count)
             {
                 Undo.RecordObject(definition, "删除天赋连线");
-                definition.edges.RemoveAt(selectedEdge);
+                if (layout != null) Undo.RecordObject(layout, "删除天赋曲线");
+                TalentTreeGraphEdit.DeleteEdge(definition, layout, selectedEdge);
                 selectedEdge = -1;
             }
-            else return;
-            EditorUtility.SetDirty(definition); Repaint();
+            EditorUtility.SetDirty(definition);
+            if (layout != null) EditorUtility.SetDirty(layout);
+            EndUndoGroup(group);
+            Repaint();
         }
 
         private void ShowValidation()
@@ -827,7 +928,7 @@ namespace Dragon.UI.TalentTree.Editor
             AssetDatabase.SaveAssets();
             definition = asset;
             layout = TalentTreeLayoutUtility.Create(asset);
-            Selection.activeObject = asset; ClearSelection();
+            Selection.activeObject = asset; ClearSelection(); FitContent();
             status = "已创建天赋树，可添加节点并摆放"; Repaint();
         }
 
@@ -837,6 +938,7 @@ namespace Dragon.UI.TalentTree.Editor
             {
                 layout = TalentTreeLayoutUtility.Create(definition);
                 ClearSelection();
+                FitContent();
                 status = "已创建表现配置，旧坐标与曲线已尽可能迁移";
                 Repaint();
             }
@@ -857,9 +959,11 @@ namespace Dragon.UI.TalentTree.Editor
                 return;
             }
             if (layout.definition != definition) { status = "表现配置未关联当前逻辑配置"; return; }
+            int group = BeginUndoGroup("同步天赋表现配置");
             Undo.RecordObject(layout, "同步天赋表现配置");
             int added = TalentTreeLayoutUtility.SyncMissingEntries(definition, layout);
             if (added > 0) EditorUtility.SetDirty(layout);
+            EndUndoGroup(group);
             status = added > 0 ? "已同步 " + added + " 条新增布局记录" : "表现配置已与逻辑同步";
             Repaint();
         }
@@ -869,6 +973,7 @@ namespace Dragon.UI.TalentTree.Editor
             if (definition == null || layout == null || layout.definition != definition) return;
             var node = definition.FindNode(key);
             if (node == null) return;
+            int group = BeginUndoGroup("摆放天赋节点");
             Undo.RecordObject(layout, "摆放天赋节点");
             var visual = layout.FindNode(key);
             if (visual == null)
@@ -876,9 +981,10 @@ namespace Dragon.UI.TalentTree.Editor
                 visual = new TalentTreeNodeLayout { key = key };
                 layout.nodes.Add(visual);
             }
-            visual.position = ClampToBoard(position, node.type);
+            visual.position = position;
             TalentTreeLayoutUtility.SyncMissingEdges(definition, layout);
             EditorUtility.SetDirty(layout);
+            EndUndoGroup(group);
             SelectSingleNode(key);
             status = "已摆放节点 " + node.id;
             Repaint();
@@ -886,6 +992,7 @@ namespace Dragon.UI.TalentTree.Editor
 
         private void ClearSelection()
         {
+            FinishDragUndo();
             selectedNodeKey = null;
             selectedNodeKeys.Clear();
             selectedEdge = -1;
@@ -907,7 +1014,6 @@ namespace Dragon.UI.TalentTree.Editor
             return texture;
         }
 
-        private float BoardSize => layout != null ? layout.boardSize : definition.boardSize;
         private float LineWidth => layout != null ? layout.lineWidth : definition.lineWidth;
         private Color LineColor => layout != null ? layout.lineColor : definition.lineColor;
         private Color SmallFillColor => layout != null ? layout.smallFillColor : definition.smallFillColor;
@@ -925,7 +1031,7 @@ namespace Dragon.UI.TalentTree.Editor
             var visual = layout != null ? layout.FindNode(node.key) : null;
             if (visual != null) return visual.position;
             if (layout == null && (node.position != Vector2.zero || node.id == 1)) return node.position;
-            return TalentTreeLayoutUtility.SuggestPosition(node.id, BoardSize);
+            return TalentTreeLayoutUtility.SuggestPosition(node.id);
         }
 
         private Sprite NodeIcon(TalentTreeAuthorNode node)
@@ -954,13 +1060,6 @@ namespace Dragon.UI.TalentTree.Editor
             Vector2 delta = from != null && to != null ? NodePosition(to) - NodePosition(from) : Vector2.zero;
             fromHandle = delta / 3f;
             toHandle = -delta / 3f;
-        }
-
-        private Vector2 ClampToBoard(Vector2 point, TalentNodeType type)
-        {
-            float nodeRadius = NodeSize(type) * 0.5f;
-            float radius = Mathf.Max(1f, BoardSize * 0.5f - nodeRadius);
-            return point.magnitude <= radius ? point : point.normalized * radius;
         }
 
         private TalentTreeAuthorNode HitNode(Vector2 point, Rect canvas)
@@ -1002,6 +1101,28 @@ namespace Dragon.UI.TalentTree.Editor
         }
 
         private Vector2 BoardToCanvas(Vector2 world, Rect canvas) => canvas.center + pan + new Vector2(world.x, -world.y) * zoom;
+
+        private void FitContent()
+        {
+            if (definition == null || definition.nodes.Count == 0)
+            {
+                pan = Vector2.zero;
+                zoom = 0.36f;
+                Repaint();
+                return;
+            }
+            try
+            {
+                var bounds = TalentTreeBoundsUtility.Calculate(definition, layout);
+                float width = Mathf.Max(1f, position.width - LeftWidth - RightWidth - 48f);
+                float height = Mathf.Max(1f, position.height - ToolbarHeight - 48f);
+                zoom = Mathf.Clamp(Mathf.Min(width / bounds.Size.x, height / bounds.Size.y), MinZoom, MaxZoom);
+                pan = new Vector2(-bounds.Center.x, bounds.Center.y) * zoom;
+                Repaint();
+            }
+            catch (InvalidOperationException exception) { status = exception.Message; }
+        }
+
         private Vector2 CanvasToBoard(Vector2 point, Rect canvas)
         {
             Vector2 value = (point - canvas.center - pan) / zoom;

@@ -17,11 +17,13 @@ namespace Dragon.UI.TalentTree.Editor
 
         [Serializable] private sealed class ExportDocument
         {
-            public int version = 2;
+            public int version = 3;
             public string sourceGuid;
             public string layoutGuid;
             public string name;
             public float boardSize;
+            public Vector2 contentSize;
+            public Vector2 contentCenter;
             public ExportNode[] nodes;
             public ExportEdge[] edges;
         }
@@ -63,6 +65,10 @@ namespace Dragon.UI.TalentTree.Editor
             string jsonPath = OutputFolder + "/" + name + ".json";
             if (!CheckExistingOutputs(prefabPath, jsonPath, sourceGuid, out message)) return false;
 
+            TalentTreeContentBounds bounds;
+            try { bounds = TalentTreeBoundsUtility.Calculate(definition, layout); }
+            catch (Exception exception) { message = "无法计算导出范围：" + exception.Message; return false; }
+
             var orderedNodes = definition.nodes.OrderBy(node => node.id).ToArray();
             var nodeByKey = orderedNodes.ToDictionary(node => node.key);
             var orderedEdges = definition.edges.OrderBy(edge => nodeByKey[edge.fromKey].id).ThenBy(edge => nodeByKey[edge.toKey].id).ToArray();
@@ -77,8 +83,9 @@ namespace Dragon.UI.TalentTree.Editor
                 var visual = layout.FindNode(node.key);
                 int[] prerequisites = orderedEdges.Where(edge => edge.toKey == node.key)
                     .Select(edge => nodeByKey[edge.fromKey].id).OrderBy(id => id).ToArray();
-                runtimeNodes[i] = new TalentTreeNodeRecord { id = node.id, type = node.type, position = visual.position, prerequisiteIds = prerequisites, icon = visual.icon };
-                exportNodes[i] = new ExportNode { id = node.id, type = node.type.ToString(), position = visual.position,
+                Vector2 centeredPosition = visual.position - bounds.Center;
+                runtimeNodes[i] = new TalentTreeNodeRecord { id = node.id, type = node.type, position = centeredPosition, prerequisiteIds = prerequisites, icon = visual.icon };
+                exportNodes[i] = new ExportNode { id = node.id, type = node.type.ToString(), position = centeredPosition,
                     iconAssetPath = visual.icon != null ? AssetDatabase.GetAssetPath(visual.icon) : string.Empty,
                     prerequisiteIds = prerequisites };
             }
@@ -92,13 +99,14 @@ namespace Dragon.UI.TalentTree.Editor
                 exportEdges[i] = new ExportEdge { fromId = fromId, toId = toId, fromHandle = visual.fromHandle, toHandle = visual.toHandle };
             }
             var document = new ExportDocument { sourceGuid = sourceGuid, layoutGuid = layoutGuid, name = name,
-                boardSize = layout.boardSize, nodes = exportNodes, edges = exportEdges };
+                boardSize = Mathf.Max(bounds.Size.x, bounds.Size.y), contentSize = bounds.Size,
+                contentCenter = bounds.Center, nodes = exportNodes, edges = exportEdges };
             string json = JsonUtility.ToJson(document, true) + "\n";
 
             GameObject root = null;
             try
             {
-                root = BuildPrefab(name, sourceGuid, layout, orderedNodes, orderedEdges, runtimeNodes, runtimeEdges);
+                root = BuildPrefab(name, sourceGuid, layout, bounds, orderedNodes, orderedEdges, runtimeNodes, runtimeEdges);
                 var missingRenderer = root.GetComponentsInChildren<Graphic>(true)
                     .FirstOrDefault(graphic => graphic.GetComponent<CanvasRenderer>() == null);
                 if (missingRenderer != null)
@@ -151,11 +159,11 @@ namespace Dragon.UI.TalentTree.Editor
             return true;
         }
 
-        private static GameObject BuildPrefab(string name, string sourceGuid, TalentTreeLayout layout,
+        private static GameObject BuildPrefab(string name, string sourceGuid, TalentTreeLayout layout, TalentTreeContentBounds bounds,
             TalentTreeAuthorNode[] orderedNodes,
             TalentTreeAuthorEdge[] orderedEdges, TalentTreeNodeRecord[] runtimeNodes, TalentTreeEdgeRecord[] runtimeEdges)
         {
-            var positions = orderedNodes.ToDictionary(node => node.key, node => layout.FindNode(node.key).position);
+            var positions = orderedNodes.ToDictionary(node => node.key, node => layout.FindNode(node.key).position - bounds.Center);
             var root = new GameObject(name, typeof(RectTransform), typeof(CanvasRenderer), typeof(Image), typeof(RectMask2D), typeof(TalentTreePanZoom), typeof(TalentTreeData));
             var viewport = (RectTransform)root.transform;
             viewport.anchorMin = Vector2.zero;
@@ -163,11 +171,13 @@ namespace Dragon.UI.TalentTree.Editor
             viewport.offsetMin = Vector2.zero;
             viewport.offsetMax = Vector2.zero;
             root.GetComponent<Image>().color = new Color(0f, 0f, 0f, 0f);
-            var content = NewRect("Content", viewport, layout.boardSize);
+            var content = NewRect("Content", viewport, bounds.Size);
             root.GetComponent<TalentTreePanZoom>().SetContent(content);
             var sectors = NewStretchRect("Six Sectors", content);
             sectors.gameObject.AddComponent<CanvasRenderer>();
-            sectors.gameObject.AddComponent<TalentTreeSectorGraphic>().raycastTarget = false;
+            var sectorGraphic = sectors.gameObject.AddComponent<TalentTreeSectorGraphic>();
+            sectorGraphic.raycastTarget = false;
+            sectorGraphic.SetOrigin(-bounds.Center);
             var edgeLayer = NewStretchRect("Connections", content);
             for (int offset = 0; offset < orderedEdges.Length; offset += CurvesPerGraphic)
             {
@@ -199,16 +209,21 @@ namespace Dragon.UI.TalentTree.Editor
                 if (runtimeNodes[i].icon != null) AddImage("Icon", view, runtimeNodes[i].icon, 0.62f);
                 runtimeNodes[i].view = view;
             }
-            root.GetComponent<TalentTreeData>().SetGeneratedData(sourceGuid, layout.boardSize, runtimeNodes, runtimeEdges);
+            root.GetComponent<TalentTreeData>().SetGeneratedData(sourceGuid, bounds.Size, bounds.Center, runtimeNodes, runtimeEdges);
             return root;
         }
 
         private static RectTransform NewRect(string name, RectTransform parent, float size)
         {
+            return NewRect(name, parent, new Vector2(size, size));
+        }
+
+        private static RectTransform NewRect(string name, RectTransform parent, Vector2 size)
+        {
             var rect = (RectTransform)new GameObject(name, typeof(RectTransform)).transform;
             rect.SetParent(parent, false);
             rect.anchorMin = rect.anchorMax = rect.pivot = new Vector2(0.5f, 0.5f);
-            rect.sizeDelta = new Vector2(size, size);
+            rect.sizeDelta = size;
             rect.anchoredPosition = Vector2.zero;
             return rect;
         }
@@ -233,5 +248,116 @@ namespace Dragon.UI.TalentTree.Editor
             image.preserveAspect = true;
             image.raycastTarget = false;
         }
+    }
+
+    internal readonly struct TalentTreeContentBounds
+    {
+        public readonly Vector2 Center;
+        public readonly Vector2 Size;
+
+        public TalentTreeContentBounds(Vector2 center, Vector2 size)
+        {
+            Center = center;
+            Size = size;
+        }
+    }
+
+    internal static class TalentTreeBoundsUtility
+    {
+        private const double Padding = 80d;
+        private const double MinimumSide = 256d;
+
+        public static TalentTreeContentBounds Calculate(TalentTreeDefinition definition, TalentTreeLayout layout)
+        {
+            double minX = double.PositiveInfinity;
+            double minY = double.PositiveInfinity;
+            double maxX = double.NegativeInfinity;
+            double maxY = double.NegativeInfinity;
+            float lineWidth = layout != null ? layout.lineWidth : definition.lineWidth;
+
+            foreach (var node in definition.nodes)
+            {
+                Vector2 position = NodePosition(node, layout);
+                float size = node.type == TalentNodeType.Core
+                    ? (layout != null ? layout.coreNodeSize : definition.coreNodeSize)
+                    : (layout != null ? layout.smallNodeSize : definition.smallNodeSize);
+                double radius = size * 0.5d;
+                Include(position.x - radius, ref minX, ref maxX);
+                Include(position.x + radius, ref minX, ref maxX);
+                Include(position.y - radius, ref minY, ref maxY);
+                Include(position.y + radius, ref minY, ref maxY);
+            }
+
+            foreach (var edge in definition.edges)
+            {
+                var from = definition.FindNode(edge.fromKey);
+                var to = definition.FindNode(edge.toKey);
+                if (from == null || to == null) continue;
+                Vector2 start = NodePosition(from, layout);
+                Vector2 end = NodePosition(to, layout);
+                var visual = layout != null ? layout.FindEdge(edge.fromKey, edge.toKey) : null;
+                Vector2 fromHandle = visual != null ? visual.fromHandle : (end - start) / 3f;
+                Vector2 toHandle = visual != null ? visual.toHandle : (start - end) / 3f;
+                ExpandCubic(start.x, start.x + fromHandle.x, end.x + toHandle.x, end.x, ref minX, ref maxX);
+                ExpandCubic(start.y, start.y + fromHandle.y, end.y + toHandle.y, end.y, ref minY, ref maxY);
+            }
+
+            if (double.IsPositiveInfinity(minX)) return new TalentTreeContentBounds(Vector2.zero, new Vector2(512f, 512f));
+            double margin = Padding + lineWidth * 0.5d + 12d;
+            double centerX = (minX + maxX) * 0.5d;
+            double centerY = (minY + maxY) * 0.5d;
+            double width = Math.Max(MinimumSide, maxX - minX + margin * 2d);
+            double height = Math.Max(MinimumSide, maxY - minY + margin * 2d);
+            if (!IsFiniteFloat(centerX) || !IsFiniteFloat(centerY) || !IsFiniteFloat(width) || !IsFiniteFloat(height))
+                throw new InvalidOperationException("节点或曲线坐标过大，无法生成有效的 UGUI 画布。");
+            return new TalentTreeContentBounds(new Vector2((float)centerX, (float)centerY),
+                new Vector2((float)width, (float)height));
+        }
+
+        private static Vector2 NodePosition(TalentTreeAuthorNode node, TalentTreeLayout layout)
+        {
+            var visual = layout != null ? layout.FindNode(node.key) : null;
+            if (visual != null) return visual.position;
+            if (layout == null && (node.position != Vector2.zero || node.id == 1)) return node.position;
+            return TalentTreeLayoutUtility.SuggestPosition(node.id);
+        }
+
+        private static void Include(double value, ref double minimum, ref double maximum)
+        {
+            minimum = Math.Min(minimum, value);
+            maximum = Math.Max(maximum, value);
+        }
+
+        private static void ExpandCubic(double p0, double p1, double p2, double p3,
+            ref double minimum, ref double maximum)
+        {
+            Include(p0, ref minimum, ref maximum);
+            Include(p3, ref minimum, ref maximum);
+            double a = -p0 + 3d * p1 - 3d * p2 + p3;
+            double b = 3d * p0 - 6d * p1 + 3d * p2;
+            double c = -3d * p0 + 3d * p1;
+            if (Math.Abs(a) < 1e-9d)
+            {
+                if (Math.Abs(b) >= 1e-9d) IncludeCubicAt(-c / (2d * b), p0, p1, p2, p3, ref minimum, ref maximum);
+                return;
+            }
+            double discriminant = b * b - 3d * a * c;
+            if (discriminant < 0d) return;
+            double root = Math.Sqrt(discriminant);
+            IncludeCubicAt((-b + root) / (3d * a), p0, p1, p2, p3, ref minimum, ref maximum);
+            IncludeCubicAt((-b - root) / (3d * a), p0, p1, p2, p3, ref minimum, ref maximum);
+        }
+
+        private static void IncludeCubicAt(double t, double p0, double p1, double p2, double p3,
+            ref double minimum, ref double maximum)
+        {
+            if (t <= 0d || t >= 1d) return;
+            double u = 1d - t;
+            double value = u * u * u * p0 + 3d * u * u * t * p1 + 3d * u * t * t * p2 + t * t * t * p3;
+            Include(value, ref minimum, ref maximum);
+        }
+
+        private static bool IsFiniteFloat(double value) =>
+            !double.IsNaN(value) && !double.IsInfinity(value) && value >= -float.MaxValue && value <= float.MaxValue;
     }
 }

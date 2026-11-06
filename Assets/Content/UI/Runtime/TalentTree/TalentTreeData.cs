@@ -31,11 +31,15 @@ namespace Dragon.UI.TalentTree
     {
         [SerializeField] private string sourceGuid;
         [SerializeField] private float boardSize = 4096f;
+        [SerializeField] private Vector2 contentSize = new Vector2(4096f, 4096f);
+        [SerializeField] private Vector2 contentCenter;
         [SerializeField] private TalentTreeNodeRecord[] nodes = Array.Empty<TalentTreeNodeRecord>();
         [SerializeField] private TalentTreeEdgeRecord[] edges = Array.Empty<TalentTreeEdgeRecord>();
 
         public string SourceGuid => sourceGuid;
         public float BoardSize => boardSize;
+        public Vector2 ContentSize => contentSize;
+        public Vector2 ContentCenter => contentCenter;
         public IReadOnlyList<TalentTreeNodeRecord> Nodes => nodes;
         public IReadOnlyList<TalentTreeEdgeRecord> Edges => edges;
 
@@ -53,8 +57,16 @@ namespace Dragon.UI.TalentTree
 
         public void SetGeneratedData(string guid, float size, TalentTreeNodeRecord[] nodeData, TalentTreeEdgeRecord[] edgeData)
         {
+            SetGeneratedData(guid, new Vector2(size, size), Vector2.zero, nodeData, edgeData);
+        }
+
+        public void SetGeneratedData(string guid, Vector2 size, Vector2 center,
+            TalentTreeNodeRecord[] nodeData, TalentTreeEdgeRecord[] edgeData)
+        {
             sourceGuid = guid;
-            boardSize = size;
+            boardSize = Mathf.Max(size.x, size.y);
+            contentSize = size;
+            contentCenter = center;
             nodes = nodeData ?? Array.Empty<TalentTreeNodeRecord>();
             edges = edgeData ?? Array.Empty<TalentTreeEdgeRecord>();
         }

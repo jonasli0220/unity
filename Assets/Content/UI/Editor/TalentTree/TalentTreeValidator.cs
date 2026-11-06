@@ -70,7 +70,6 @@ namespace Dragon.UI.TalentTree.Editor
                 errors.Add("表现配置缺少节点或连线布局列表。");
                 return errors;
             }
-            if (!IsFinite(layout.boardSize) || layout.boardSize < 1024f) errors.Add("画布尺寸必须不小于 1024 且为有效数值。");
             if (!IsFinite(layout.smallNodeSize) || !IsFinite(layout.coreNodeSize) || !IsFinite(layout.lineWidth) ||
                 layout.smallNodeSize < 24f || layout.coreNodeSize < 32f || layout.lineWidth < 1f)
                 errors.Add("节点尺寸或线宽无效或低于允许值。");
@@ -89,10 +88,7 @@ namespace Dragon.UI.TalentTree.Editor
             foreach (var node in definition.nodes)
             {
                 if (!byKey.TryGetValue(node.key, out var visual)) { missingNodes.Add(node.id); continue; }
-                float nodeRadius = (node.type == TalentNodeType.Core ? layout.coreNodeSize : layout.smallNodeSize) * 0.5f;
-                float limit = layout.boardSize * 0.5f - nodeRadius;
-                if (!IsFinite(visual.position) || limit < 0f || visual.position.sqrMagnitude > limit * limit + 0.01f)
-                    errors.Add("节点 " + node.id + " 超出了六区画布或坐标无效。");
+                if (!IsFinite(visual.position)) errors.Add("节点 " + node.id + " 的坐标无效。");
             }
             if (missingNodes.Count > 0)
                 errors.Add("表现配置缺少 " + missingNodes.Count + " 个节点布局（例如 ID " + missingNodes[0] + "），请点击“同步新增节点/连线”。");
@@ -103,6 +99,8 @@ namespace Dragon.UI.TalentTree.Editor
                 if (edge == null || string.IsNullOrEmpty(edge.fromKey) || string.IsNullOrEmpty(edge.toKey) ||
                     !edgeKeys.Add(EdgeKey(edge.fromKey, edge.toKey)))
                     errors.Add("表现配置存在重复或缺失的连线键。");
+                else if (!IsFinite(edge.fromHandle) || !IsFinite(edge.toHandle))
+                    errors.Add("连线 " + edge.fromKey + "→" + edge.toKey + " 的贝塞尔控制点无效。");
             }
             int missingEdges = definition.edges.Count(edge => !edgeKeys.Contains(EdgeKey(edge.fromKey, edge.toKey)));
             if (missingEdges > 0)

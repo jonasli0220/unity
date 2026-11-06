@@ -24,7 +24,7 @@ namespace Dragon.UI.TalentTree.Editor
     public sealed class TalentTreeLayout : ScriptableObject
     {
         public TalentTreeDefinition definition;
-        [Min(1024f)] public float boardSize = 4096f;
+        [HideInInspector] public float boardSize = 4096f; // Legacy migration value; export sizes itself from content.
         [Min(24f)] public float smallNodeSize = 72f;
         [Min(32f)] public float coreNodeSize = 124f;
         [Min(1f)] public float lineWidth = 5f;
