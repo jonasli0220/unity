@@ -37,14 +37,9 @@ if (-not (Test-Path -LiteralPath $ImagePath -PathType Leaf)) {
 if (@('.png', '.jpg', '.jpeg') -notcontains [System.IO.Path]::GetExtension($ImagePath).ToLowerInvariant()) {
     throw '九宫设置支持 PNG、JPG、JPEG 图片。'
 }
-if (-not (Test-Path -LiteralPath $ConfigPath -PathType Leaf)) {
-    throw "请先运行 install.bat 配置工具：$ConfigPath"
-}
-$config = Get-Content -Raw -Encoding UTF8 -LiteralPath $ConfigPath | ConvertFrom-Json
-$uiRoot = [System.IO.Path]::GetFullPath([string]$config.uiRoot).TrimEnd('\', '/')
-if (-not ($ImagePath.StartsWith($uiRoot + '\', [System.StringComparison]::OrdinalIgnoreCase))) {
-    throw "图片必须位于 UI 目录内：$uiRoot"
-}
+. (Join-Path $scriptRoot 'UnityAssetPath.ps1')
+$assetContext = Resolve-UnityAssetPath -Path $ImagePath
+$ImagePath = $assetContext.TargetPath
 
 $loaded = [System.Drawing.Image]::FromFile($ImagePath)
 try {

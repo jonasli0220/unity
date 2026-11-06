@@ -1,4 +1,4 @@
-[CmdletBinding(SupportsShouldProcess = $true)]
+﻿[CmdletBinding(SupportsShouldProcess = $true)]
 param(
     [Parameter(Position = 0)]
     [string] $Path = ".",
@@ -321,47 +321,16 @@ function Save-SpriteBorderMeta {
 
 $config = Read-ToolConfig -Path $ConfigPath
 
-if ([string]::IsNullOrWhiteSpace($ProjectRoot)) {
-    if ($null -ne $config -and $config.PSObject.Properties.Name -contains "projectRoot" -and -not [string]::IsNullOrWhiteSpace($config.projectRoot)) {
-        $ProjectRoot = $config.projectRoot
-    } else {
-        $ProjectRoot = "G:\Dragon\trunk\dragon"
-    }
-}
-
-if ([string]::IsNullOrWhiteSpace($UiRoot)) {
-    if ($null -ne $config -and $config.PSObject.Properties.Name -contains "uiRoot" -and -not [string]::IsNullOrWhiteSpace($config.uiRoot)) {
-        $UiRoot = $config.uiRoot
-    } else {
-        $UiRoot = Join-Path $ProjectRoot "Assets\Content\UI"
-    }
-}
-
+# Legacy ProjectRoot/UiRoot arguments and config values no longer constrain the
+# selected asset. Always resolve its own project so branch paths remain correct.
+. (Join-Path $scriptRoot 'UnityAssetPath.ps1')
+$assetContext = Resolve-UnityAssetPath -Path $Path
+$projectRootFull = $assetContext.ProjectRoot
+$assetsRootFull = $assetContext.AssetsRoot
+$targetFull = $assetContext.TargetPath
 if ($null -ne $config -and $config.PSObject.Properties.Name -contains "logRoot" -and -not [string]::IsNullOrWhiteSpace($config.logRoot)) {
     $logRoot = $config.logRoot
 }
-
-$projectRootFull = Get-FullNormalizedPath $ProjectRoot
-$uiRootFull = Get-FullNormalizedPath $UiRoot
-$targetFull = Get-FullNormalizedPath $Path
-
-if (-not (Test-Path -LiteralPath $targetFull)) {
-    throw "Target does not exist: $targetFull"
-}
-
-if (-not (Test-Path -LiteralPath $projectRootFull -PathType Container)) {
-    throw "Project root does not exist: $projectRootFull"
-}
-
-if (-not (Test-Path -LiteralPath $uiRootFull -PathType Container)) {
-    throw "UI root does not exist: $uiRootFull"
-}
-
-$comparison = [System.StringComparison]::OrdinalIgnoreCase
-if (-not ($targetFull.Equals($uiRootFull, $comparison) -or $targetFull.StartsWith($uiRootFull + [System.IO.Path]::DirectorySeparatorChar, $comparison))) {
-    throw "Blocked: this tool only runs under the UI root: $uiRootFull"
-}
-
 if (Test-Path -LiteralPath $targetFull -PathType Leaf) {
     if (@('.png', '.jpg', '.jpeg') -notcontains [System.IO.Path]::GetExtension($targetFull).ToLowerInvariant()) {
         throw "Border editing supports PNG and JPEG images: $targetFull"
@@ -381,9 +350,23 @@ $createdFolders = New-Object System.Collections.Generic.List[string]
 $createdImages = New-Object System.Collections.Generic.List[string]
 $skippedImages = 0
 
-$directories = @(Get-Item -LiteralPath $targetFull)
-$directories += Get-ChildItem -LiteralPath $targetFull -Directory -Recurse -Force
-
+# Walk explicitly without following directory links into another asset tree.
+$directories = New-Object System.Collections.Generic.List[System.IO.DirectoryInfo]
+$images = New-Object System.Collections.Generic.List[System.IO.FileInfo]
+$pending = New-Object System.Collections.Generic.Stack[System.IO.DirectoryInfo]
+$pending.Push((Get-Item -LiteralPath $targetFull))
+while ($pending.Count -gt 0) {
+    $directory = $pending.Pop()
+    if ($directory.FullName -ine $assetsRootFull) { $directories.Add($directory) }
+    foreach ($child in (Get-ChildItem -LiteralPath $directory.FullName -Force)) {
+        if (($child.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+            Write-Warning "Skipping linked asset: $($child.FullName)"
+            continue
+        }
+        if ($child.PSIsContainer) { $pending.Push($child) }
+        elseif ($imageExtensions -contains $child.Extension.ToLowerInvariant()) { $images.Add($child) }
+    }
+}
 foreach ($directory in $directories) {
     $metaPath = "$($directory.FullName).meta"
     if (Test-Path -LiteralPath $metaPath) {
@@ -397,9 +380,6 @@ foreach ($directory in $directories) {
     $createdFolders.Add($unityPath)
 }
 
-$images = Get-ChildItem -LiteralPath $targetFull -File -Recurse -Force | Where-Object {
-    $imageExtensions -contains $_.Extension.ToLowerInvariant()
-}
 
 foreach ($image in $images) {
     $metaPath = "$($image.FullName).meta"
@@ -423,6 +403,7 @@ $targetUnityPath = Convert-ToUnityPath -FullPath $targetFull -ProjectRootPath $p
 $lines = New-Object System.Collections.Generic.List[string]
 $lines.Add("Unity Sprite Meta generation log")
 $lines.Add("Mode: $modeText")
+$lines.Add("Project root: $projectRootFull")
 $lines.Add("Scan folder: $targetUnityPath")
 $lines.Add("Created image meta: $($createdImages.Count)")
 $lines.Add("Created folder meta: $($createdFolders.Count)")

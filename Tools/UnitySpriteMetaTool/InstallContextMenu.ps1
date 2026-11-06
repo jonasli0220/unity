@@ -29,58 +29,18 @@ if (-not (Test-Path -LiteralPath $borderEditorPath -PathType Leaf)) {
     throw "Border editor script not found: $borderEditorPath"
 }
 
-$defaultProjectRoot = "G:\Dragon\trunk\dragon"
+# Installation is project-independent; the selected Assets path identifies the
+# project at runtime. Keep ProjectRoot/NoPrompt accepted for older launchers.
 $defaultLogRoot = "C:\tmp\UnityMetaGenerator"
-$config = $null
-
 if (Test-Path -LiteralPath $ConfigPath -PathType Leaf) {
     $config = Get-Content -Raw -Encoding UTF8 -LiteralPath $ConfigPath | ConvertFrom-Json
-    if ($config.PSObject.Properties.Name -contains "menuName" -and -not [string]::IsNullOrWhiteSpace($config.menuName)) {
-        $MenuName = $config.menuName
-    }
-    if ($config.PSObject.Properties.Name -contains "projectRoot" -and -not [string]::IsNullOrWhiteSpace($config.projectRoot)) {
-        $defaultProjectRoot = $config.projectRoot
-    }
-    if ($config.PSObject.Properties.Name -contains "logRoot" -and -not [string]::IsNullOrWhiteSpace($config.logRoot)) {
-        $defaultLogRoot = $config.logRoot
-    }
+    if ($config.PSObject.Properties.Name -contains 'menuName' -and -not [string]::IsNullOrWhiteSpace($config.menuName)) { $MenuName = $config.menuName }
+    if ($config.PSObject.Properties.Name -contains 'logRoot' -and -not [string]::IsNullOrWhiteSpace($config.logRoot)) { $defaultLogRoot = $config.logRoot }
 }
-
-if ([string]::IsNullOrWhiteSpace($ProjectRoot)) {
-    $ProjectRoot = $defaultProjectRoot
-    if (-not $NoPrompt) {
-        Write-Host ""
-        Write-Host "Unity project root path:"
-        Write-Host "Default: $defaultProjectRoot"
-        $inputPath = Read-Host "Press Enter to use default, or paste another project root"
-        if (-not [string]::IsNullOrWhiteSpace($inputPath)) {
-            $ProjectRoot = $inputPath.Trim('"')
-        }
-    }
+if (-not (Test-Path -LiteralPath (Join-Path $scriptRoot 'UnityAssetPath.ps1') -PathType Leaf)) {
+    throw 'UnityAssetPath.ps1 is missing. Extract the complete tool package before installing.'
 }
-
-$ProjectRoot = [System.IO.Path]::GetFullPath($ProjectRoot).TrimEnd("\", "/")
-$uiRoot = Join-Path $ProjectRoot "Assets\Content\UI"
-
-if (-not (Test-Path -LiteralPath $ProjectRoot -PathType Container)) {
-    throw "Project root does not exist: $ProjectRoot"
-}
-
-if (-not (Test-Path -LiteralPath (Join-Path $ProjectRoot "Assets") -PathType Container)) {
-    throw "Assets folder not found under project root: $ProjectRoot"
-}
-
-if (-not (Test-Path -LiteralPath $uiRoot -PathType Container)) {
-    throw "UI root not found: $uiRoot"
-}
-
-$newConfig = [ordered]@{
-    projectRoot = $ProjectRoot
-    uiRoot = $uiRoot
-    menuName = $MenuName
-    logRoot = $defaultLogRoot
-}
-
+$newConfig = [ordered]@{ menuName = $MenuName; logRoot = $defaultLogRoot }
 $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 $configJson = ($newConfig | ConvertTo-Json -Depth 4)
 [System.IO.File]::WriteAllText($ConfigPath, $configJson + [Environment]::NewLine, $utf8NoBom)
@@ -162,8 +122,8 @@ $shortcut.Save()
 
 Write-Host "Context menu installed: $MenuName"
 Write-Host "Location: folder background right-click"
-Write-Host "Project root: $ProjectRoot"
-Write-Host "UI root: $uiRoot"
+Write-Host "Scope: Assets folders in any Unity project (detected automatically)."
+
 Write-Host "Config: $ConfigPath"
 Write-Host "Command: $command"
 Write-Host "Image context menu installed: Set Unity Sprite border (.png, .jpg, .jpeg)"

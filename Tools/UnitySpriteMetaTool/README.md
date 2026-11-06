@@ -1,11 +1,12 @@
 # Unity UI Sprite Meta Generator
 
-用于在不打开 Unity 编辑器的情况下，为 `Assets/Content/UI` 下新增图片补齐 `.meta` 文件，并设置单张 Sprite 的九宫边距。
+用于在不打开 Unity 编辑器的情况下，为任意 Unity 工程 `Assets` 下新增图片补齐 `.meta` 文件，并设置单张 Sprite 的九宫边距。
 
 ## 文件
 
 - `GenerateUnitySpriteMeta.ps1`：扫描当前目录及子目录，生成缺失的图片和文件夹 `.meta`。
 - `SetUnitySpriteBorder.ps1`：显示图片及九宫切线，设置左、上、右、下边距。
+- `UnityAssetPath.ps1`：两个功能共用的 Unity 工程路径识别。
 - `InstallContextMenu.ps1`：安装文件夹空白处和图片文件的右键菜单。
 - `UninstallContextMenu.ps1`：卸载右键菜单。
 
@@ -23,13 +24,9 @@ powershell -ExecutionPolicy Bypass -File ".\InstallContextMenu.ps1"
 install.bat
 ```
 
-安装时会提示输入 Unity 工程根目录。直接按回车会使用默认路径（首次安装用内置路径，之后用 `config.json`）；如果同事本机工程路径不同，粘贴自己的工程根目录即可，例如：
+安装无需填写工程路径。运行时自动从所选路径向上识别 Unity 工程：`Assets` 与 `ProjectSettings` 同级。trunk、分支及其他工程都能使用，无需切换配置。
 
-```text
-G:\Dragon\trunk\dragon
-```
-
-安装后，在 `G:\Dragon\trunk\dragon\Assets\Content\UI` 内任意文件夹空白处右键，点击“生成 Unity Sprite Meta”，可批量生成缺失的 `.meta`。
+安装后，在任意 Unity 工程的 `Assets` 文件夹或子文件夹空白处右键，点击“生成 Unity Sprite Meta”，可批量生成缺失的 `.meta`。
 
 设置九宫时，右键单张 PNG/JPG/JPEG 图片，点击“设置 Unity Sprite 九宫”。窗口会读取现有边距并显示绿色切线；输入左、上、右、下像素值后保存。
 
@@ -53,10 +50,11 @@ powershell -ExecutionPolicy Bypass -File ".\SetUnitySpriteBorder.ps1" -ImagePath
 
 ## 生成规则
 
-- 只允许扫描安装时配置的 `Assets\Content\UI` 及其子目录。
+- 支持任意 Unity 工程的 `Assets` 根目录及其子目录；工程根目录、Packages、Assets 外的路径不执行。
 - 递归处理当前文件夹和子文件夹。
 - 已存在 `.meta` 的图片会跳过，不会覆盖。
-- 缺失 `.meta` 的文件夹会自动补齐。
+- 缺失 `.meta` 的子文件夹会自动补齐；不生成 `Assets.meta`。
+- 跳过符号链接和目录联接，避免写入所选资源树以外的内容。
 - 支持 `.png`、`.jpg`、`.jpeg`、`.tga`、`.psd`。
 - 图片 `.meta` 默认写入 Unity `TextureImporter`，`textureType: 8`，`spriteMode: 1`。
 - 九宫功能支持 PNG/JPG/JPEG 单张 Sprite。已有 `.meta` 只修改 `spriteBorder`，保留 GUID 和其他设置；没有 `.meta` 时按原模板创建。
@@ -64,6 +62,8 @@ powershell -ExecutionPolicy Bypass -File ".\SetUnitySpriteBorder.ps1" -ImagePath
 - Unity `.meta` 的 `spriteBorder` 字段顺序为 `x=左、y=下、z=右、w=上`。Sprite Mode 为 Multiple 的资源暂不支持编辑。
 
 ## 日志
+
+旧 `config.json` 中的 `projectRoot`、`uiRoot` 和旧命令行同名参数保留兼容，但不再限制路径。配置仅使用菜单名称和日志目录。
 
 运行后终端会停留并展示：
 
