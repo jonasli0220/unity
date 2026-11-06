@@ -156,10 +156,10 @@ New-Item -Path $directCommand -Force | Out-Null
 Set-Item -LiteralPath $directKey -Value '设置 Unity Sprite 九宫'
 Set-ItemProperty -LiteralPath $directKey -Name 'MUIVerb' -Value '设置 Unity Sprite 九宫'
 Set-ItemProperty -LiteralPath $directKey -Name 'Icon' -Value $powershellPath
-# Use normal shell ordering rather than putting this tool above Open.
+# Keep an explicit first-level position without displacing the Open command.
 foreach ($orderingKey in @($directKey, 'HKCU:\Software\Classes\*\shell\Dragon.SpriteBorder') | Select-Object -Unique) {
-    if ((Test-Path -LiteralPath $orderingKey) -and (Get-Item -LiteralPath $orderingKey).GetValueNames() -contains 'Position') {
-        Remove-ItemProperty -LiteralPath $orderingKey -Name 'Position'
+    if (Test-Path -LiteralPath $orderingKey) {
+        Set-ItemProperty -LiteralPath $orderingKey -Name 'Position' -Value 'Bottom'
     }
 }
 Set-ItemProperty -LiteralPath $directKey -Name 'MultiSelectModel' -Value 'Single'
