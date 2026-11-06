@@ -399,6 +399,14 @@ namespace Dragon.UI.TalentTree.Editor
                     component == null || !(component is Image || component is RectMask2D ||
                         component is ScrollRect || component is UILineRenderer)))
                 throw new InvalidOperationException("Prefab 仍引用未随包体发布的脚本或缺少必要 UGUI 组件。");
+            foreach (var node in json.nodes)
+            {
+                var anchor = prefab.transform.Find("Content/Nodes/Node " + node.id) as RectTransform;
+                if (anchor == null || anchor.sizeDelta != Vector2.zero || anchor.childCount != 0 ||
+                    anchor.GetComponents<Component>().Length != 1 ||
+                    Vector2.Distance(anchor.anchoredPosition, node.position) > 0.01f)
+                    throw new InvalidOperationException("节点必须是只含坐标的空 RectTransform：" + node.id);
+            }
             foreach (var edge in json.edges)
             {
                 var view = FindEdge(prefab, edge.fromId, edge.toId);

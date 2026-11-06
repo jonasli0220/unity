@@ -211,25 +211,11 @@ namespace Dragon.UI.TalentTree.Editor
                 activeRect.gameObject.SetActive(false);
             }
             var nodeLayer = NewStretchRect("Nodes", content);
-            var circle = AssetDatabase.GetBuiltinExtraResource<Sprite>("UI/Skin/Knob.psd");
-            if (circle == null) throw new InvalidOperationException("Unity 内置圆形 UI Sprite 不可用：UI/Skin/Knob.psd");
             for (int i = 0; i < orderedNodes.Length; i++)
             {
                 var node = orderedNodes[i];
-                float size = node.type == TalentNodeType.Core ? layout.coreNodeSize : layout.smallNodeSize;
-                var view = NewRect("Node " + node.id, nodeLayer, size);
+                var view = NewRect("Node " + node.id, nodeLayer, Vector2.zero);
                 view.anchoredPosition = positions[node.key];
-                view.gameObject.AddComponent<CanvasRenderer>();
-                var rim = view.gameObject.AddComponent<Image>();
-                rim.sprite = circle;
-                rim.color = layout.nodeRimColor;
-                rim.raycastTarget = false;
-                AddImage("Fill", view, circle, 0.86f,
-                    node.type == TalentNodeType.Core ? layout.coreFillColor : layout.smallFillColor);
-                Sprite frame = node.type == TalentNodeType.Core ? layout.coreFrame : layout.smallFrame;
-                if (frame != null) AddImage("Frame", view, frame, 1f);
-                var icon = layout.FindNode(node.key).icon;
-                if (icon != null) AddImage("Icon", view, icon, 0.62f);
             }
             return root;
         }
@@ -274,11 +260,6 @@ namespace Dragon.UI.TalentTree.Editor
             target.BezierSegmentsPerCurve = legacy.MaxSegments;
         }
 
-        private static RectTransform NewRect(string name, RectTransform parent, float size)
-        {
-            return NewRect(name, parent, new Vector2(size, size));
-        }
-
         private static RectTransform NewRect(string name, RectTransform parent, Vector2 size)
         {
             var rect = (RectTransform)new GameObject(name, typeof(RectTransform)).transform;
@@ -300,16 +281,6 @@ namespace Dragon.UI.TalentTree.Editor
             return rect;
         }
 
-        private static void AddImage(string name, RectTransform parent, Sprite sprite, float scale, Color? tint = null)
-        {
-            var rect = NewRect(name, parent, parent.sizeDelta.x * scale);
-            rect.gameObject.AddComponent<CanvasRenderer>();
-            var image = rect.gameObject.AddComponent<Image>();
-            image.sprite = sprite;
-            if (tint.HasValue) image.color = tint.Value;
-            image.preserveAspect = true;
-            image.raycastTarget = false;
-        }
     }
 
     internal readonly struct TalentTreeContentBounds
