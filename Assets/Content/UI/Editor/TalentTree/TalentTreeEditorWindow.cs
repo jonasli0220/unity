@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using Dragon.UI.TalentTree;
 using UnityEditor;
+using UnityEditor.Callbacks;
 using UnityEngine;
 
 namespace Dragon.UI.TalentTree.Editor
@@ -13,6 +14,8 @@ namespace Dragon.UI.TalentTree.Editor
         private const float RightWidth = 280f;
         private const float MinZoom = 0.001f;
         private const float MaxZoom = 2.5f;
+        private const int DefinitionPickerId = 0x54414C54;
+        private static string LastDefinitionGuidKey => "Dragon.TalentTree.LastDefinitionGuid." + Application.dataPath;
         private TalentTreeDefinition definition;
         private TalentTreeLayout layout;
         private string selectedNodeKey;
@@ -36,7 +39,7 @@ namespace Dragon.UI.TalentTree.Editor
         private int dragUndoGroup = -1;
         private string layoutPalettePressKey;
         private Vector2 layoutPalettePressPosition;
-        private string status = "选择或新建天赋树配置";
+        private string status = "新建天赋树，或打开已保存的天赋树";
         private readonly Dictionary<Sprite, Texture> iconCache = new Dictionary<Sprite, Texture>();
 
         [MenuItem("Tools/UI/Talent Tree/Open", false, 2330)]
@@ -45,12 +48,33 @@ namespace Dragon.UI.TalentTree.Editor
             var window = GetWindow<TalentTreeEditorWindow>("Talent Tree");
             window.minSize = new Vector2(1120f, 600f);
             window.Show();
+            if (!window.LoadSelectedAsset() && window.definition == null) window.RestoreLastDefinition();
+            window.Focus();
+        }
+
+        [OnOpenAsset(0)]
+        private static bool OnOpenTalentTreeAsset(int instanceId, int line)
+        {
+            var asset = EditorUtility.InstanceIDToObject(instanceId);
+            if (!(asset is TalentTreeDefinition) && !(asset is TalentTreeLayout)) return false;
+            OpenAsset(asset);
+            return true;
+        }
+
+        public static void OpenAsset(UnityEngine.Object asset)
+        {
+            var window = GetWindow<TalentTreeEditorWindow>("Talent Tree");
+            window.minSize = new Vector2(1120f, 600f);
+            if (asset is TalentTreeDefinition selected) window.ShowDefinition(selected);
+            else if (asset is TalentTreeLayout selectedLayout) window.ShowLayout(selectedLayout);
+            window.Show();
+            window.Focus();
         }
 
         private void OnEnable()
         {
             Undo.undoRedoPerformed += OnUndoRedo;
-            LoadSelectedAsset();
+            if (!LoadSelectedAsset() && definition == null) RestoreLastDefinition();
         }
 
         private void OnSelectionChange()
@@ -60,25 +84,70 @@ namespace Dragon.UI.TalentTree.Editor
 
         private bool LoadSelectedAsset()
         {
-            if (Selection.activeObject is TalentTreeDefinition selected && selected != definition)
+            if (Selection.activeObject is TalentTreeDefinition selected &&
+                (selected != definition || layout == null))
             {
-                definition = selected;
-                layout = TalentTreeLayoutUtility.Find(selected);
-                ClearSelection();
-                iconCache.Clear();
-                FitContent();
+                ShowDefinition(selected);
                 return true;
             }
-            if (Selection.activeObject is TalentTreeLayout selectedLayout && selectedLayout != layout)
+            if (Selection.activeObject is TalentTreeLayout selectedLayout &&
+                (selectedLayout != layout || definition != selectedLayout.definition))
             {
-                layout = selectedLayout;
-                definition = selectedLayout.definition;
-                ClearSelection();
-                iconCache.Clear();
-                FitContent();
+                ShowLayout(selectedLayout);
                 return true;
+            }
+            if (Selection.activeObject is GameObject selectedPrefab &&
+                !string.IsNullOrEmpty(AssetDatabase.GetAssetPath(selectedPrefab)))
+            {
+                var data = selectedPrefab.GetComponent<TalentTreeData>();
+                if (data != null && !string.IsNullOrEmpty(data.SourceGuid))
+                {
+                    string sourcePath = AssetDatabase.GUIDToAssetPath(data.SourceGuid);
+                    var source = AssetDatabase.LoadAssetAtPath<TalentTreeDefinition>(sourcePath);
+                    if (source != null && source != definition) { ShowDefinition(source); return true; }
+                }
             }
             return false;
+        }
+
+        private void ShowDefinition(TalentTreeDefinition selected)
+        {
+            definition = selected;
+            layout = TalentTreeLayoutUtility.Find(selected);
+            ClearSelection();
+            iconCache.Clear();
+            if (selected != null)
+            {
+                string path = AssetDatabase.GetAssetPath(selected);
+                string guid = AssetDatabase.AssetPathToGUID(path);
+                if (!string.IsNullOrEmpty(guid)) EditorPrefs.SetString(LastDefinitionGuidKey, guid);
+            }
+            status = selected == null ? "新建天赋树，或打开已保存的天赋树" :
+                layout == null ? "已打开 " + selected.name + "，请创建表现配置" : "已打开 " + selected.name;
+            FitContent();
+            Repaint();
+        }
+
+        private void ShowLayout(TalentTreeLayout selected)
+        {
+            if (selected == null || selected.definition == null)
+            {
+                status = "这份表现配置没有关联天赋树逻辑文件";
+                Repaint();
+                return;
+            }
+            ShowDefinition(selected.definition);
+            layout = selected;
+            FitContent();
+        }
+
+        private void RestoreLastDefinition()
+        {
+            string guid = EditorPrefs.GetString(LastDefinitionGuidKey, string.Empty);
+            if (string.IsNullOrEmpty(guid)) return;
+            var saved = AssetDatabase.LoadAssetAtPath<TalentTreeDefinition>(AssetDatabase.GUIDToAssetPath(guid));
+            if (saved != null) ShowDefinition(saved);
+            else EditorPrefs.DeleteKey(LastDefinitionGuidKey);
         }
 
         private void OnDisable()
@@ -126,6 +195,14 @@ namespace Dragon.UI.TalentTree.Editor
 
         private void OnGUI()
         {
+            if (Event.current.type == EventType.ExecuteCommand &&
+                Event.current.commandName == "ObjectSelectorClosed" &&
+                EditorGUIUtility.GetObjectPickerControlID() == DefinitionPickerId)
+            {
+                var picked = EditorGUIUtility.GetObjectPickerObject() as TalentTreeDefinition;
+                if (picked != null) ShowDefinition(picked);
+                Event.current.Use();
+            }
             DrawToolbar();
             float height = position.height - ToolbarHeight;
             Rect left = new Rect(0, ToolbarHeight, LeftWidth, height);
@@ -149,23 +226,20 @@ namespace Dragon.UI.TalentTree.Editor
                 using (new GUILayout.HorizontalScope())
                 {
                     if (GUILayout.Button("新建天赋树", EditorStyles.toolbarButton, GUILayout.Width(82))) CreateDefinition();
+                    if (GUILayout.Button("打开已有", EditorStyles.toolbarButton, GUILayout.Width(70)))
+                        EditorGUIUtility.ShowObjectPicker<TalentTreeDefinition>(definition, false, string.Empty, DefinitionPickerId);
                     GUILayout.Label("逻辑数据", EditorStyles.miniLabel, GUILayout.Width(48));
                     var next = (TalentTreeDefinition)EditorGUILayout.ObjectField(definition, typeof(TalentTreeDefinition), false, GUILayout.Width(205));
                     if (next != definition)
                     {
-                        definition = next;
-                        layout = TalentTreeLayoutUtility.Find(next);
-                        ClearSelection(); iconCache.Clear();
-                        FitContent();
+                        ShowDefinition(next);
                     }
                     GUILayout.Label("表现数据", EditorStyles.miniLabel, GUILayout.Width(48));
                     var nextLayout = (TalentTreeLayout)EditorGUILayout.ObjectField(layout, typeof(TalentTreeLayout), false, GUILayout.Width(205));
                     if (nextLayout != layout)
                     {
-                        layout = nextLayout;
-                        if (layout != null) definition = layout.definition;
-                        ClearSelection(); iconCache.Clear();
-                        FitContent();
+                        if (nextLayout != null) ShowLayout(nextLayout);
+                        else { layout = null; ClearSelection(); FitContent(); }
                     }
                     using (new EditorGUI.DisabledScope(definition == null))
                     {
@@ -929,9 +1003,9 @@ namespace Dragon.UI.TalentTree.Editor
             var asset = CreateInstance<TalentTreeDefinition>();
             AssetDatabase.CreateAsset(asset, path);
             AssetDatabase.SaveAssets();
-            definition = asset;
             layout = TalentTreeLayoutUtility.Create(asset);
-            Selection.activeObject = asset; ClearSelection(); FitContent();
+            ShowDefinition(asset);
+            Selection.activeObject = asset;
             status = "已创建天赋树，可添加节点并摆放"; Repaint();
         }
 
