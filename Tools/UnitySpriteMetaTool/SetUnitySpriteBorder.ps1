@@ -7,6 +7,16 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
+# Set awareness before creating any HWND so Windows does not bitmap-scale the UI.
+Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class SpriteBorderDpi {
+    [DllImport("user32.dll")]
+    public static extern IntPtr SetThreadDpiAwarenessContext(IntPtr context);
+}
+'@
+[void][SpriteBorderDpi]::SetThreadDpiAwarenessContext([IntPtr](-4))
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
@@ -67,6 +77,8 @@ if (Test-Path -LiteralPath $metaPath -PathType Leaf) {
 }
 
 $form = New-Object System.Windows.Forms.Form
+$form.AutoScaleDimensions = New-Object System.Drawing.SizeF(96, 96)
+$form.AutoScaleMode = [System.Windows.Forms.AutoScaleMode]::Dpi
 $form.Text = '设置 Unity Sprite 九宫'
 $form.ClientSize = New-Object System.Drawing.Size(920, 650)
 $form.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::FixedDialog
@@ -82,7 +94,7 @@ $title.Font = New-Object System.Drawing.Font('Microsoft YaHei UI', 11, [System.D
 $form.Controls.Add($title)
 
 $sizeLabel = New-Object System.Windows.Forms.Label
-$sizeLabel.Text = "图片尺寸：${imageWidth} × ${imageHeight} px    绿色线条是九宫切线"
+$sizeLabel.Text = "图片尺寸：${imageWidth} × ${imageHeight} px    拖动绿线调整边距，也可以输入数字"
 $sizeLabel.Location = New-Object System.Drawing.Point(20, 43)
 $sizeLabel.Size = New-Object System.Drawing.Size(875, 25)
 $form.Controls.Add($sizeLabel)
@@ -93,7 +105,7 @@ $picture.Size = New-Object System.Drawing.Size(670, 500)
 $picture.BackColor = [System.Drawing.Color]::FromArgb(45, 45, 45)
 $picture.BorderStyle = [System.Windows.Forms.BorderStyle]::FixedSingle
 $picture.SizeMode = [System.Windows.Forms.PictureBoxSizeMode]::Zoom
-$picture.Image = $previewImage
+$picture.Image = $null
 $form.Controls.Add($picture)
 
 $panel = New-Object System.Windows.Forms.GroupBox
@@ -127,14 +139,62 @@ foreach ($item in $items) {
     $controls[$item.Key] = $number
 }
 
-$picture.Add_Paint({
+function Get-PreviewGeometry {
     $box = $picture.ClientRectangle
     $scale = [Math]::Min($box.Width / [double]$imageWidth, $box.Height / [double]$imageHeight)
     $width = $imageWidth * $scale
     $height = $imageHeight * $scale
     $x = ($box.Width - $width) / 2
     $y = ($box.Height - $height) / 2
-    $pen = New-Object System.Drawing.Pen([System.Drawing.Color]::Lime, 1.5)
+    return @{ X=$x; Y=$y; Width=$width; Height=$height; Scale=$scale }
+}
+$dragState = @{ Edge = $null }
+function Get-HitEdge($point) {
+    $g = Get-PreviewGeometry
+    $tolerance = 10 * $picture.DeviceDpi / 96.0
+    if ($point.X -lt $g.X-$tolerance -or $point.X -gt $g.X+$g.Width+$tolerance -or
+        $point.Y -lt $g.Y-$tolerance -or $point.Y -gt $g.Y+$g.Height+$tolerance) { return $null }
+    $distances = @{
+        Left = [Math]::Abs($point.X - ($g.X + [double]$controls.Left.Value*$g.Scale))
+        Right = [Math]::Abs($point.X - ($g.X + ($imageWidth-[double]$controls.Right.Value)*$g.Scale))
+        Top = [Math]::Abs($point.Y - ($g.Y + [double]$controls.Top.Value*$g.Scale))
+        Bottom = [Math]::Abs($point.Y - ($g.Y + ($imageHeight-[double]$controls.Bottom.Value)*$g.Scale))
+    }
+    $hit = $distances.GetEnumerator() | Sort-Object Value | Select-Object -First 1
+    if ($hit.Value -le $tolerance) { return $hit.Key }
+    return $null
+}
+$picture.Add_MouseDown({
+    if ($_.Button -ne [System.Windows.Forms.MouseButtons]::Left) { return }
+    $dragState.Edge = Get-HitEdge $_.Location
+    if ($null -ne $dragState.Edge) { $picture.Capture = $true }
+})
+$picture.Add_MouseMove({
+    if ($null -ne $dragState.Edge) {
+        $g = Get-PreviewGeometry
+        $px = [Math]::Round(($_.X-$g.X)/$g.Scale)
+        $py = [Math]::Round(($_.Y-$g.Y)/$g.Scale)
+        switch ($dragState.Edge) {
+            Left { $value=$px; $max=$imageWidth-1-[int]$controls.Right.Value }
+            Right { $value=$imageWidth-$px; $max=$imageWidth-1-[int]$controls.Left.Value }
+            Top { $value=$py; $max=$imageHeight-1-[int]$controls.Bottom.Value }
+            Bottom { $value=$imageHeight-$py; $max=$imageHeight-1-[int]$controls.Top.Value }
+        }
+        $controls[$dragState.Edge].Value = [Math]::Max(0,[Math]::Min($max,$value))
+    }
+    $edge = if ($null -ne $dragState.Edge) { $dragState.Edge } else { Get-HitEdge $_.Location }
+    $picture.Cursor = if ($edge -in @('Left','Right')) { [System.Windows.Forms.Cursors]::SizeWE } elseif ($edge -in @('Top','Bottom')) { [System.Windows.Forms.Cursors]::SizeNS } else { [System.Windows.Forms.Cursors]::Default }
+})
+$picture.Add_MouseUp({ $dragState.Edge=$null; $picture.Capture=$false })
+$picture.Add_MouseCaptureChanged({ if (-not $picture.Capture) { $dragState.Edge=$null } })
+$picture.Add_Paint({
+    $g = Get-PreviewGeometry
+    $x=$g.X; $y=$g.Y; $width=$g.Width; $height=$g.Height; $scale=$g.Scale
+    $_.Graphics.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::NearestNeighbor
+    $_.Graphics.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::Half
+    $rect = New-Object System.Drawing.RectangleF([float]$x,[float]$y,[float]$width,[float]$height)
+    $_.Graphics.DrawImage($previewImage,$rect)
+    $pen = New-Object System.Drawing.Pen([System.Drawing.Color]::Lime, ([single](1.5*$picture.DeviceDpi/96.0)))
     try {
         $leftX = $x + [double]$controls.Left.Value * $scale
         $rightX = $x + ($imageWidth - [double]$controls.Right.Value) * $scale
@@ -150,7 +210,7 @@ $picture.Add_Paint({
 })
 
 $hint = New-Object System.Windows.Forms.Label
-$hint.Text = '左 + 右须小于图片宽度；上 + 下须小于图片高度。保存后会创建或更新同名 .meta。'
+$hint.Text = "拖动绿线或输入像素值。`r`n保存后更新图片旁的 .meta。"
 $hint.Location = New-Object System.Drawing.Point(705, 380)
 $hint.Size = New-Object System.Drawing.Size(190, 85)
 $form.Controls.Add($hint)

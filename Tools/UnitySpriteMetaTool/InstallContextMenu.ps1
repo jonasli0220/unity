@@ -4,7 +4,8 @@ param(
     [string] $GeneratorPath = "",
     [string] $ConfigPath = "",
     [string] $ProjectRoot = "",
-    [switch] $NoPrompt
+    [switch] $NoPrompt,
+    [switch] $AllUsers
 )
 
 Set-StrictMode -Version Latest
@@ -147,6 +148,24 @@ foreach ($extension in @('.png', '.jpg', '.jpeg')) {
 }
 
 # Explorer may keep file association verbs cached for the lifetime of the process.
+$directKey = 'HKCU:\Software\Classes\*\shell\Dragon.SpriteBorder'
+if ($AllUsers) { $directKey = 'HKLM:\Software\Classes\*\shell\Dragon.SpriteBorder' }
+$directCommand = Join-Path $directKey 'command'
+$powershellPath = Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe'
+New-Item -Path $directCommand -Force | Out-Null
+Set-Item -LiteralPath $directKey -Value '设置 Unity Sprite 九宫'
+Set-ItemProperty -LiteralPath $directKey -Name 'MUIVerb' -Value '设置 Unity Sprite 九宫'
+Set-ItemProperty -LiteralPath $directKey -Name 'Icon' -Value $powershellPath
+# Use normal shell ordering rather than putting this tool above Open.
+foreach ($orderingKey in @($directKey, 'HKCU:\Software\Classes\*\shell\Dragon.SpriteBorder') | Select-Object -Unique) {
+    if ((Test-Path -LiteralPath $orderingKey) -and (Get-Item -LiteralPath $orderingKey).GetValueNames() -contains 'Position') {
+        Remove-ItemProperty -LiteralPath $orderingKey -Name 'Position'
+    }
+}
+Set-ItemProperty -LiteralPath $directKey -Name 'MultiSelectModel' -Value 'Single'
+Set-ItemProperty -LiteralPath $directKey -Name 'AppliesTo' -Value 'System.FileExtension:=".png" OR System.FileExtension:=".jpg" OR System.FileExtension:=".jpeg"'
+Set-Item -LiteralPath $directCommand -Value "`"$powershellPath`" -NoProfile -STA -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$borderEditorPath`" -ImagePath `"%1`" -ConfigPath `"$ConfigPath`""
+
 Add-Type -TypeDefinition @'
 using System;
 using System.Runtime.InteropServices;
