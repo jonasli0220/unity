@@ -94,9 +94,11 @@ namespace Dragon.UI.TalentTree.Editor
                 content.pivot != new Vector2(0.5f, 0.5f))
                 throw new InvalidOperationException("Example prefab did not keep the authored origin centered.");
             if (prefab.GetComponentInChildren<TalentTreeSectorGraphic>(true) != null ||
-                prefab.GetComponentsInChildren<TalentTreeCurveGraphic>(true).Length != data.Edges.Count ||
-                data.Edges.Any(edge => edge.view == null || edge.view.name != "Edge " + edge.fromId + " to " + edge.toId))
-                throw new InvalidOperationException("Example prefab must have one independent Graphic per edge and no sector guide.");
+                prefab.GetComponentsInChildren<TalentTreeCurveGraphic>(true).Length != data.Edges.Count * 2 ||
+                data.Edges.Any(edge => edge.view == null || edge.activeView == null ||
+                    edge.view.name != "Edge " + edge.fromId + " to " + edge.toId ||
+                    edge.activeView.name != "Active" || edge.activeView.gameObject.activeSelf))
+                throw new InvalidOperationException("Example prefab must have a hidden Active curve per edge and no sector guide.");
             var missingRenderer = prefab.GetComponentsInChildren<Graphic>(true)
                 .FirstOrDefault(graphic => graphic.GetComponent<CanvasRenderer>() == null);
             if (missingRenderer != null) throw new InvalidOperationException("Missing CanvasRenderer: " + missingRenderer.gameObject.name);
@@ -204,12 +206,13 @@ namespace Dragon.UI.TalentTree.Editor
                 var prefab = AssetDatabase.LoadAssetAtPath<GameObject>(prefabPath);
                 var data = prefab != null ? prefab.GetComponent<TalentTreeData>() : null;
                 int chunks = prefab != null ? prefab.GetComponentsInChildren<TalentTreeCurveGraphic>(true).Length : 0;
-                if (data == null || data.Nodes.Count != 1000 || data.Edges.Count != 999 || chunks != 999 ||
-                    data.Edges.Any(edge => edge.view == null) ||
+                if (data == null || data.Nodes.Count != 1000 || data.Edges.Count != 999 || chunks != 1998 ||
+                    data.Edges.Any(edge => edge.view == null || edge.activeView == null ||
+                        edge.activeView.gameObject.activeSelf) ||
                     prefab.GetComponentInChildren<TalentTreeSectorGraphic>(true) != null)
                     throw new InvalidOperationException("Stress-check prefab graph or individual curves are incomplete.");
                 timer.Stop();
-                Debug.Log("Talent Tree 1000-node stress check passed: 1000 nodes, 999 independent edges, " + timer.ElapsedMilliseconds + " ms.");
+                Debug.Log("Talent Tree 1000-node stress check passed: 1000 nodes, 999 edges with hidden Active curves, " + timer.ElapsedMilliseconds + " ms.");
             }
             finally
             {
@@ -302,8 +305,10 @@ namespace Dragon.UI.TalentTree.Editor
                 if (data == null || data.Nodes.Count != 4 || data.Edges.Count != 4 ||
                     data.ContentSize.x < 256f || data.ContentSize.y < 256f ||
                     data.ContentCenter != Vector2.zero ||
-                    data.Edges.Any(edge => edge.view == null) ||
-                    prefab.GetComponentsInChildren<TalentTreeCurveGraphic>(true).Length != data.Edges.Count ||
+                    data.Edges.Any(edge => edge.view == null || edge.activeView == null ||
+                        edge.activeView.gameObject.activeSelf || edge.view.Curves.Count != 1 ||
+                        edge.activeView.Curves.Count != 1) ||
+                    prefab.GetComponentsInChildren<TalentTreeCurveGraphic>(true).Length != data.Edges.Count * 2 ||
                     prefab.GetComponentInChildren<TalentTreeSectorGraphic>(true) != null ||
                     prefab.GetComponentsInChildren<Graphic>(true).Any(graphic => graphic.GetComponent<CanvasRenderer>() == null))
                     throw new InvalidOperationException("临时树导出的 Prefab 数据或画布不正确。");
@@ -319,8 +324,52 @@ namespace Dragon.UI.TalentTree.Editor
                     json.contentCenter != Vector2.zero || json.nodes == null ||
                     json.nodes.Any(node => Vector2.Distance(node.position, layout.FindNode("example-" + node.id).position) > 0.01f))
                     throw new InvalidOperationException("临时树 JSON 画布数据不正确。");
+                int styledFromId = data.Edges[0].fromId;
+                int styledToId = data.Edges[0].toId;
+                var editable = PrefabUtility.LoadPrefabContents(prefabPath);
+                try
+                {
+                    var styledEdge = editable.GetComponent<TalentTreeData>().Edges[0];
+                    styledEdge.view.color = Color.magenta;
+                    styledEdge.activeView.color = Color.cyan;
+                    var baseStyle = new SerializedObject(styledEdge.view);
+                    baseStyle.FindProperty("lineWidth").floatValue = 13f;
+                    baseStyle.ApplyModifiedPropertiesWithoutUndo();
+                    var activeStyle = new SerializedObject(styledEdge.activeView);
+                    activeStyle.FindProperty("lineWidth").floatValue = 19f;
+                    activeStyle.ApplyModifiedPropertiesWithoutUndo();
+                    PrefabUtility.SaveAsPrefabAsset(editable, prefabPath);
+                }
+                finally { PrefabUtility.UnloadPrefabContents(editable); }
+                var changedEdge = definition.edges.Find(edge =>
+                    definition.FindNode(edge.fromKey).id == styledFromId &&
+                    definition.FindNode(edge.toKey).id == styledToId);
+                layout.FindNode(changedEdge.fromKey).position += new Vector2(41f, -17f);
+                layout.FindEdge(changedEdge.fromKey, changedEdge.toKey).fromHandle += new Vector2(10f, 20f);
+                if (!TalentTreeExporter.Export(definition, layout, out string updatedMessage))
+                    throw new InvalidOperationException(updatedMessage);
+                var updated = AssetDatabase.LoadAssetAtPath<GameObject>(prefabPath).GetComponent<TalentTreeData>();
+                if (!updated.TryGetEdge(styledFromId, styledToId, out var updatedEdge) ||
+                    updatedEdge.view.color != Color.magenta || updatedEdge.activeView.color != Color.cyan ||
+                    Mathf.Abs(updatedEdge.view.LineWidth - 13f) > 0.01f ||
+                    Mathf.Abs(updatedEdge.activeView.LineWidth - 19f) > 0.01f ||
+                    updatedEdge.activeView.gameObject.activeSelf ||
+                    Vector2.Distance(updatedEdge.view.Curves[0].start, layout.FindNode(changedEdge.fromKey).position) > 0.01f ||
+                    Vector2.Distance(updatedEdge.activeView.Curves[0].fromHandle,
+                        layout.FindEdge(changedEdge.fromKey, changedEdge.toKey).fromHandle) > 0.01f)
+                    throw new InvalidOperationException("重导出未保留 Prefab 样式或未更新编辑器曲线坐标。");
+                var instance = UnityEngine.Object.Instantiate(updated.gameObject);
+                try
+                {
+                    var instanceData = instance.GetComponent<TalentTreeData>();
+                    if (!instanceData.SetEdgeActive(updatedEdge.fromId, updatedEdge.toId, true) ||
+                        !instanceData.TryGetEdge(updatedEdge.fromId, updatedEdge.toId, out var instanceEdge) ||
+                        !instanceEdge.activeView.gameObject.activeSelf)
+                        throw new InvalidOperationException("程序无法打开连线 Active 状态。");
+                }
+                finally { UnityEngine.Object.DestroyImmediate(instance); }
                 Directory.CreateDirectory(Path.GetDirectoryName(resultPath));
-                File.WriteAllText(resultPath, "PASS: split geometry, directed bypass, duplicate avoidance, layout recovery, cropped prefab and JSON");
+                File.WriteAllText(resultPath, "PASS: graph edits, active edge views, prefab style preservation, editor-owned geometry, cropped prefab and JSON");
                 Debug.Log("Talent Tree graph edit checks passed. " + message);
             }
             finally

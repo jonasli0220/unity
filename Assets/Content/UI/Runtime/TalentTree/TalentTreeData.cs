@@ -25,6 +25,7 @@ namespace Dragon.UI.TalentTree
         public Vector2 fromHandle;
         public Vector2 toHandle;
         public TalentTreeCurveGraphic view;
+        public TalentTreeCurveGraphic activeView;
     }
 
     [DisallowMultipleComponent]
@@ -66,6 +67,13 @@ namespace Dragon.UI.TalentTree
             }
             edge = null;
             return false;
+        }
+
+        public bool SetEdgeActive(int fromId, int toId, bool active)
+        {
+            if (!TryGetEdge(fromId, toId, out var edge) || edge.activeView == null) return false;
+            edge.activeView.gameObject.SetActive(active);
+            return true;
         }
 
         public void SetGeneratedData(string guid, float size, TalentTreeNodeRecord[] nodeData, TalentTreeEdgeRecord[] edgeData)

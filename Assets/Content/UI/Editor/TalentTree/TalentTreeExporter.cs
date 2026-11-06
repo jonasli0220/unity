@@ -104,7 +104,9 @@ namespace Dragon.UI.TalentTree.Editor
             GameObject root = null;
             try
             {
-                root = BuildPrefab(name, sourceGuid, layout, bounds, orderedNodes, orderedEdges, runtimeNodes, runtimeEdges);
+                var previousPrefab = AssetDatabase.LoadAssetAtPath<GameObject>(prefabPath);
+                root = BuildPrefab(name, sourceGuid, layout, bounds, orderedNodes, orderedEdges,
+                    runtimeNodes, runtimeEdges, previousPrefab);
                 var missingRenderer = root.GetComponentsInChildren<Graphic>(true)
                     .FirstOrDefault(graphic => graphic.GetComponent<CanvasRenderer>() == null);
                 if (missingRenderer != null)
@@ -159,9 +161,15 @@ namespace Dragon.UI.TalentTree.Editor
 
         private static GameObject BuildPrefab(string name, string sourceGuid, TalentTreeLayout layout, TalentTreeContentBounds bounds,
             TalentTreeAuthorNode[] orderedNodes,
-            TalentTreeAuthorEdge[] orderedEdges, TalentTreeNodeRecord[] runtimeNodes, TalentTreeEdgeRecord[] runtimeEdges)
+            TalentTreeAuthorEdge[] orderedEdges, TalentTreeNodeRecord[] runtimeNodes, TalentTreeEdgeRecord[] runtimeEdges,
+            GameObject previousPrefab)
         {
             var positions = orderedNodes.ToDictionary(node => node.key, node => layout.FindNode(node.key).position);
+            var previousEdges = new Dictionary<long, TalentTreeEdgeRecord>();
+            var previousData = previousPrefab != null ? previousPrefab.GetComponent<TalentTreeData>() : null;
+            if (previousData != null)
+                foreach (var edge in previousData.Edges)
+                    if (edge != null) previousEdges[EdgeId(edge.fromId, edge.toId)] = edge;
             var root = new GameObject(name, typeof(RectTransform), typeof(CanvasRenderer), typeof(Image), typeof(RectMask2D), typeof(TalentTreePanZoom), typeof(TalentTreeData));
             var viewport = (RectTransform)root.transform;
             viewport.anchorMin = Vector2.zero;
@@ -182,7 +190,25 @@ namespace Dragon.UI.TalentTree.Editor
                 edgeView.gameObject.AddComponent<CanvasRenderer>();
                 var graphic = edgeView.gameObject.AddComponent<TalentTreeCurveGraphic>();
                 graphic.SetCurves(new[] { curve }, layout.lineWidth, layout.lineColor);
+                previousEdges.TryGetValue(EdgeId(runtimeEdges[i].fromId, runtimeEdges[i].toId), out var previous);
+                if (previous != null) graphic.CopyAppearanceFrom(previous.view);
                 runtimeEdges[i].view = graphic;
+                var activeRect = NewStretchRect("Active", edgeView);
+                activeRect.gameObject.AddComponent<CanvasRenderer>();
+                var activeGraphic = activeRect.gameObject.AddComponent<TalentTreeCurveGraphic>();
+                activeGraphic.SetCurves(new[] { curve }, layout.lineWidth * 1.25f, new Color(1f, 0.8f, 0.35f, 1f));
+                if (previous != null)
+                {
+                    var priorActive = previous.activeView;
+                    if (priorActive == null && previous.view != null)
+                    {
+                        var priorChild = previous.view.transform.Find("Active");
+                        if (priorChild != null) priorActive = priorChild.GetComponent<TalentTreeCurveGraphic>();
+                    }
+                    activeGraphic.CopyAppearanceFrom(priorActive);
+                }
+                runtimeEdges[i].activeView = activeGraphic;
+                activeRect.gameObject.SetActive(false);
             }
             var nodeLayer = NewStretchRect("Nodes", content);
             for (int i = 0; i < orderedNodes.Length; i++)
@@ -202,6 +228,8 @@ namespace Dragon.UI.TalentTree.Editor
             root.GetComponent<TalentTreeData>().SetGeneratedData(sourceGuid, bounds.Size, bounds.Center, runtimeNodes, runtimeEdges);
             return root;
         }
+
+        private static long EdgeId(int fromId, int toId) => ((long)fromId << 32) | (uint)toId;
 
         private static RectTransform NewRect(string name, RectTransform parent, float size)
         {
