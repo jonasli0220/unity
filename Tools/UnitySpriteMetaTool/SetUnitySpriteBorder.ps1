@@ -112,6 +112,7 @@ $panel.Size = New-Object System.Drawing.Size(195, 285)
 $form.Controls.Add($panel)
 
 $controls = @{}
+$borderLabels = @{}
 $items = @(
     @{ Key = 'Left'; Text = '左 L'; Y = 35; Max = $imageWidth },
     @{ Key = 'Top'; Text = '上 T'; Y = 90; Max = $imageHeight },
@@ -121,9 +122,11 @@ $items = @(
 foreach ($item in $items) {
     $label = New-Object System.Windows.Forms.Label
     $label.Text = $item.Text
+    $label.AutoSize = $true
     $label.Location = New-Object System.Drawing.Point(15, $item.Y)
     $label.Size = New-Object System.Drawing.Size(55, 25)
     $panel.Controls.Add($label)
+    $borderLabels[$item.Key] = $label
 
     $number = New-Object System.Windows.Forms.NumericUpDown
     $number.Location = New-Object System.Drawing.Point(75, ($item.Y - 2))
@@ -259,6 +262,27 @@ function Update-TextLayout {
         $contentTop = $sizeLabel.Bottom + $gap
         $picture.Top = $contentTop
         $panel.Top = $contentTop
+        # Reflow both columns after scaling. Labels can otherwise grow over the
+        # numeric edit area when inherited fonts and DPI scale at different times.
+        $padding = 2 * $gap
+        $labelWidth = 0
+        foreach ($borderLabel in $borderLabels.Values) {
+            $labelWidth = [Math]::Max($labelWidth, $borderLabel.PreferredSize.Width)
+        }
+        $numberLeft = $padding + $labelWidth + 2 * $gap
+        $numberWidth = $panel.ClientSize.Width - $numberLeft - $padding
+        $rowTop = $panel.Font.Height + 2 * $gap
+        $rowHeight = [Math]::Max([int](55 * $form.DeviceDpi / 96.0), $panel.Font.Height + 3 * $gap)
+        foreach ($item in $items) {
+            $number = $controls[$item.Key]
+            $borderLabel = $borderLabels[$item.Key]
+            $number.SetBounds($numberLeft, $rowTop, $numberWidth, $number.PreferredHeight)
+            $borderLabel.Location = New-Object System.Drawing.Point($padding, ($rowTop + [Math]::Max(0, [int](($number.Height - $borderLabel.Height) / 2))))
+            $number.BringToFront()
+            $number.PerformLayout()
+            $rowTop += $rowHeight
+        }
+        $panel.Height = [Math]::Max($panel.Height, $rowTop + $gap)
         $hint.Top = $panel.Bottom + 2 * $gap
         $hint.Size = New-Object System.Drawing.Size($panel.Width, ($hint.GetPreferredSize((New-Object System.Drawing.Size($panel.Width, 0))).Height))
         $save.Top = $hint.Bottom + 2 * $gap
