@@ -55,7 +55,7 @@ if (Test-Path -LiteralPath $metaPath -PathType Leaf) {
         $previewImage.Dispose()
         throw '现有 meta 不是单张 Sprite，无法安全修改九宫参数。'
     }
-    $match = [regex]::Match($metaText, '(?m)^  spriteBorder: \{x: (?<left>\d+), y: (?<bottom>\d+), z: (?<right>\d+), w: (?<top>\d+)\}$')
+    $match = [regex]::Match($metaText, '(?m)^  spriteBorder: \{x: (?<left>\d+), y: (?<bottom>\d+), z: (?<right>\d+), w: (?<top>\d+)\}(?=\r?$)')
     if (-not $match.Success) {
         $previewImage.Dispose()
         throw '无法读取现有 meta 的 spriteBorder。'

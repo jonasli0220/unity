@@ -248,7 +248,7 @@ function Set-SpriteBorderText {
         [Parameter(Mandatory = $true)][int] $Bottom
     )
 
-    $pattern = '(?m)^  spriteBorder: \{[^\r\n]*\}$'
+    $pattern = '(?m)^  spriteBorder: \{[^\r\n]*\}(?=\r?$)'
     if ([regex]::Matches($Content, $pattern).Count -ne 1) {
         throw "Expected exactly one TextureImporter spriteBorder field."
     }
