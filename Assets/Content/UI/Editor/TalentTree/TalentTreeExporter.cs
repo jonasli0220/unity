@@ -82,16 +82,25 @@ namespace Dragon.UI.TalentTree.Editor
 
             var orderedNodes = definition.nodes.OrderBy(node => node.id).ToArray();
             var nodeByKey = orderedNodes.ToDictionary(node => node.key);
+            var nodeLayoutsByKey = layout.nodes.ToDictionary(node => node.key);
+            var edgeLayoutsByKey = layout.edges.ToDictionary(edge => (edge.fromKey, edge.toKey));
             var orderedEdges = definition.edges.OrderBy(edge => nodeByKey[edge.fromKey].id).ThenBy(edge => nodeByKey[edge.toKey].id).ToArray();
             var exportNodes = new ExportNode[orderedNodes.Length];
             var exportEdges = new ExportEdge[orderedEdges.Length];
+            var prerequisitesByKey = new Dictionary<string, List<int>>();
+            foreach (var edge in orderedEdges)
+            {
+                if (!prerequisitesByKey.TryGetValue(edge.toKey, out var prerequisites))
+                    prerequisitesByKey[edge.toKey] = prerequisites = new List<int>();
+                prerequisites.Add(nodeByKey[edge.fromKey].id);
+            }
 
             for (int i = 0; i < orderedNodes.Length; i++)
             {
                 var node = orderedNodes[i];
-                var visual = layout.FindNode(node.key);
-                int[] prerequisites = orderedEdges.Where(edge => edge.toKey == node.key)
-                    .Select(edge => nodeByKey[edge.fromKey].id).OrderBy(id => id).ToArray();
+                var visual = nodeLayoutsByKey[node.key];
+                int[] prerequisites = prerequisitesByKey.TryGetValue(node.key, out var incoming)
+                    ? incoming.OrderBy(id => id).ToArray() : Array.Empty<int>();
                 exportNodes[i] = new ExportNode { id = node.id, type = node.type.ToString(), position = visual.position,
                     iconAssetPath = visual.icon != null ? AssetDatabase.GetAssetPath(visual.icon) : string.Empty,
                     prerequisiteIds = prerequisites };
@@ -99,7 +108,7 @@ namespace Dragon.UI.TalentTree.Editor
             for (int i = 0; i < orderedEdges.Length; i++)
             {
                 var edge = orderedEdges[i];
-                var visual = layout.FindEdge(edge.fromKey, edge.toKey);
+                var visual = edgeLayoutsByKey[(edge.fromKey, edge.toKey)];
                 int fromId = nodeByKey[edge.fromKey].id;
                 int toId = nodeByKey[edge.toKey].id;
                 exportEdges[i] = new ExportEdge { fromId = fromId, toId = toId, fromHandle = visual.fromHandle, toHandle = visual.toHandle };
@@ -113,7 +122,8 @@ namespace Dragon.UI.TalentTree.Editor
             try
             {
                 var previousPrefab = AssetDatabase.LoadAssetAtPath<GameObject>(prefabPath);
-                root = BuildPrefab(name, layout, bounds, orderedNodes, orderedEdges, previousPrefab);
+                root = BuildPrefab(name, layout, bounds, orderedNodes, orderedEdges, nodeByKey,
+                    nodeLayoutsByKey, edgeLayoutsByKey, previousPrefab);
                 var missingRenderer = root.GetComponentsInChildren<Graphic>(true)
                     .FirstOrDefault(graphic => graphic.GetComponent<CanvasRenderer>() == null);
                 if (missingRenderer != null)
@@ -169,9 +179,15 @@ namespace Dragon.UI.TalentTree.Editor
 
         private static GameObject BuildPrefab(string name, TalentTreeLayout layout, TalentTreeContentBounds bounds,
             TalentTreeAuthorNode[] orderedNodes,
-            TalentTreeAuthorEdge[] orderedEdges, GameObject previousPrefab)
+            TalentTreeAuthorEdge[] orderedEdges, Dictionary<string, TalentTreeAuthorNode> nodeByKey,
+            Dictionary<string, TalentTreeNodeLayout> nodeLayoutsByKey,
+            Dictionary<(string, string), TalentTreeEdgeLayout> edgeLayoutsByKey, GameObject previousPrefab)
         {
-            var positions = orderedNodes.ToDictionary(node => node.key, node => layout.FindNode(node.key).position);
+            var positions = orderedNodes.ToDictionary(node => node.key, node => nodeLayoutsByKey[node.key].position);
+            var previousEdgesByName = new Dictionary<string, Transform>();
+            var previousEdges = previousPrefab != null ? previousPrefab.transform.Find("Content/Connections") : null;
+            if (previousEdges != null)
+                foreach (Transform child in previousEdges) previousEdgesByName[child.name] = child;
             var root = new GameObject(name, typeof(RectTransform), typeof(CanvasRenderer), typeof(Image), typeof(RectMask2D), typeof(ScrollRect));
             var viewport = (RectTransform)root.transform;
             viewport.anchorMin = Vector2.zero;
@@ -191,23 +207,27 @@ namespace Dragon.UI.TalentTree.Editor
             for (int i = 0; i < orderedEdges.Length; i++)
             {
                 var edge = orderedEdges[i];
-                var visual = layout.FindEdge(edge.fromKey, edge.toKey);
-                int fromId = orderedNodes.First(node => node.key == edge.fromKey).id;
-                int toId = orderedNodes.First(node => node.key == edge.toKey).id;
+                var visual = edgeLayoutsByKey[(edge.fromKey, edge.toKey)];
+                int fromId = nodeByKey[edge.fromKey].id;
+                int toId = nodeByKey[edge.toKey].id;
                 string edgeName = "Edge " + fromId + " to " + toId;
-                var edgeView = NewStretchRect(edgeName, edgeLayer);
+                var edgeView = NewRect(edgeName, edgeLayer, Vector2.one);
                 edgeView.gameObject.AddComponent<CanvasRenderer>();
                 var graphic = edgeView.gameObject.AddComponent<UILineRenderer>();
-                SetCurve(graphic, positions[edge.fromKey], positions[edge.toKey], visual.fromHandle, visual.toHandle,
-                    layout.lineWidth, layout.lineColor);
-                var previousView = previousPrefab != null ? previousPrefab.transform.Find("Content/Connections/" + edgeName) : null;
+                SetCurveStyle(graphic, layout.lineWidth, layout.lineColor);
+                previousEdgesByName.TryGetValue(edgeName, out var previousView);
                 CopyAppearance(graphic, previousView);
                 var activeRect = NewStretchRect("Active", edgeView);
                 activeRect.gameObject.AddComponent<CanvasRenderer>();
                 var activeGraphic = activeRect.gameObject.AddComponent<UILineRenderer>();
-                SetCurve(activeGraphic, positions[edge.fromKey], positions[edge.toKey], visual.fromHandle, visual.toHandle,
-                    layout.lineWidth * 1.25f, new Color(1f, 0.8f, 0.35f, 1f));
+                SetCurveStyle(activeGraphic, layout.lineWidth * 1.25f, new Color(1f, 0.8f, 0.35f, 1f));
                 CopyAppearance(activeGraphic, previousView != null ? previousView.Find("Active") : null);
+                Vector2 start = positions[edge.fromKey];
+                Vector2 end = positions[edge.toKey];
+                Vector2 center = SetCurveRect(edgeView, start, end, visual.fromHandle, visual.toHandle,
+                    Mathf.Max(graphic.LineThickness, activeGraphic.LineThickness));
+                SetCurvePoints(graphic, start, end, visual.fromHandle, visual.toHandle, center);
+                SetCurvePoints(activeGraphic, start, end, visual.fromHandle, visual.toHandle, center);
                 activeRect.gameObject.SetActive(false);
             }
             var nodeLayer = NewStretchRect("Nodes", content);
@@ -220,21 +240,38 @@ namespace Dragon.UI.TalentTree.Editor
             return root;
         }
 
-        private static void SetCurve(UILineRenderer graphic, Vector2 start, Vector2 end,
-            Vector2 fromHandle, Vector2 toHandle, float width, Color color)
+        private static void SetCurveStyle(UILineRenderer graphic, float width, Color color)
         {
-            // This shipped renderer subtracts pivot * 1 from absolute points, so offset by half a unit.
-            Vector2 pivotOffset = new Vector2(0.5f, 0.5f);
             graphic.RelativeSize = false;
             graphic.LineList = false;
             graphic.LineCaps = true;
             graphic.BezierMode = UILineRenderer.BezierType.Basic;
-            graphic.BezierSegmentsPerCurve = 24;
-            graphic.Points = new[] { start + pivotOffset, start + fromHandle + pivotOffset,
-                end + toHandle + pivotOffset, end + pivotOffset };
+            graphic.BezierSegmentsPerCurve = 12;
             graphic.LineThickness = width;
             graphic.color = color;
             graphic.raycastTarget = false;
+        }
+
+        private static Vector2 SetCurveRect(RectTransform rect, Vector2 start, Vector2 end,
+            Vector2 fromHandle, Vector2 toHandle, float maximumWidth)
+        {
+            Vector2 control1 = start + fromHandle;
+            Vector2 control2 = end + toHandle;
+            Vector2 min = Vector2.Min(Vector2.Min(start, end), Vector2.Min(control1, control2));
+            Vector2 max = Vector2.Max(Vector2.Max(start, end), Vector2.Max(control1, control2));
+            float padding = Mathf.Max(8f, maximumWidth * 2f + 4f);
+            rect.anchoredPosition = (min + max) * 0.5f;
+            rect.sizeDelta = max - min + Vector2.one * (padding * 2f);
+            return rect.anchoredPosition;
+        }
+
+        private static void SetCurvePoints(UILineRenderer graphic, Vector2 start, Vector2 end,
+            Vector2 fromHandle, Vector2 toHandle, Vector2 center)
+        {
+            // The shipped renderer subtracts pivot * 1 from absolute points, so offset by half a unit.
+            Vector2 offset = new Vector2(0.5f, 0.5f) - center;
+            graphic.Points = new[] { start + offset, start + fromHandle + offset,
+                end + toHandle + offset, end + offset };
         }
 
         private static void CopyAppearance(UILineRenderer target, Transform previous)
