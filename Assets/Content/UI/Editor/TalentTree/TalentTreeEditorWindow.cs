@@ -43,6 +43,10 @@ namespace Dragon.UI.TalentTree.Editor
         private Vector2 layoutPalettePressPosition;
         private string status = "新建天赋树，或打开已保存的天赋树";
         private readonly Dictionary<Sprite, Texture> iconCache = new Dictionary<Sprite, Texture>();
+        private readonly Dictionary<string, TalentTreeAuthorNode> nodeLookup = new Dictionary<string, TalentTreeAuthorNode>();
+        private readonly Dictionary<string, TalentTreeNodeLayout> nodeLayoutLookup = new Dictionary<string, TalentTreeNodeLayout>();
+        private readonly Dictionary<(string, string), TalentTreeEdgeLayout> edgeLayoutLookup =
+            new Dictionary<(string, string), TalentTreeEdgeLayout>();
 
         [MenuItem("Tools/UI/Talent Tree/Open", false, 2330)]
         public static void Open()
@@ -170,7 +174,8 @@ namespace Dragon.UI.TalentTree.Editor
         {
             if (definition != null && (layout == null || layout.definition != definition))
                 layout = TalentTreeLayoutUtility.Find(definition);
-            selectedNodeKeys.RemoveWhere(key => definition == null || definition.FindNode(key) == null);
+            RebuildLookups();
+            selectedNodeKeys.RemoveWhere(key => FindNodeFast(key) == null);
             if (definition == null || selectedEdge >= definition.edges.Count) selectedEdge = -1;
             UpdatePrimarySelection();
             Repaint();
@@ -214,6 +219,7 @@ namespace Dragon.UI.TalentTree.Editor
                 if (picked != null) ShowDefinition(picked);
                 Event.current.Use();
             }
+            RebuildLookups();
             DrawToolbar();
             float height = position.height - ToolbarHeight;
             Rect left = new Rect(0, ToolbarHeight, LeftWidth, height);
@@ -229,6 +235,33 @@ namespace Dragon.UI.TalentTree.Editor
             }
             else EditorGUI.DrawRect(canvas, new Color(0.1f, 0.12f, 0.15f));
         }
+
+        private void RebuildLookups()
+        {
+            nodeLookup.Clear();
+            nodeLayoutLookup.Clear();
+            edgeLayoutLookup.Clear();
+            if (definition != null && definition.nodes != null)
+                foreach (var node in definition.nodes)
+                    if (node != null && !string.IsNullOrEmpty(node.key)) nodeLookup[node.key] = node;
+            if (layout == null || layout.definition != definition) return;
+            if (layout.nodes != null)
+                foreach (var visual in layout.nodes)
+                    if (visual != null && !string.IsNullOrEmpty(visual.key)) nodeLayoutLookup[visual.key] = visual;
+            if (layout.edges != null)
+                foreach (var visual in layout.edges)
+                    if (visual != null && visual.fromKey != null && visual.toKey != null)
+                        edgeLayoutLookup[(visual.fromKey, visual.toKey)] = visual;
+        }
+
+        private TalentTreeAuthorNode FindNodeFast(string key) =>
+            key != null && nodeLookup.TryGetValue(key, out var node) ? node : null;
+
+        private TalentTreeNodeLayout FindNodeLayoutFast(string key) =>
+            key != null && nodeLayoutLookup.TryGetValue(key, out var visual) ? visual : null;
+
+        private TalentTreeEdgeLayout FindEdgeLayoutFast(string fromKey, string toKey) =>
+            edgeLayoutLookup.TryGetValue((fromKey, toKey), out var visual) ? visual : null;
 
         private void DrawToolbar()
         {
@@ -296,7 +329,7 @@ namespace Dragon.UI.TalentTree.Editor
                 int shown = 0;
                 foreach (var node in definition.nodes)
                 {
-                    if (layout.FindNode(node.key) != null) continue;
+                    if (FindNodeLayoutFast(node.key) != null) continue;
                     if (shown++ == 0) GUILayout.Label("待摆放节点（拖入画布）", EditorStyles.miniBoldLabel);
                     if (shown <= 6) DrawUnplacedNode(node);
                 }
@@ -353,7 +386,7 @@ namespace Dragon.UI.TalentTree.Editor
             GUILayout.BeginArea(new Rect(rect.x + 10, rect.y + 10, rect.width - 20, rect.height - 20));
             if (definition == null) { GUILayout.Label("请先创建配置", EditorStyles.boldLabel); GUILayout.EndArea(); return; }
             if (selectedNodeKeys.Count > 1) { DrawMultiNodeInspector(); GUILayout.EndArea(); return; }
-            var node = selectedNodeKeys.Count == 1 ? definition.FindNode(selectedNodeKey) : null;
+            var node = selectedNodeKeys.Count == 1 ? FindNodeFast(selectedNodeKey) : null;
             if (node != null) DrawNodeInspector(node);
             else if (selectedEdge >= 0 && selectedEdge < definition.edges.Count) DrawEdgeInspector(definition.edges[selectedEdge]);
             else DrawTreeInspector();
@@ -490,6 +523,7 @@ namespace Dragon.UI.TalentTree.Editor
 
         private void DrawCanvas(Rect rect)
         {
+            if (Event.current.type != EventType.Repaint) return;
             GUI.BeginGroup(rect);
             var local = new Rect(0, 0, rect.width, rect.height);
             EditorGUI.DrawRect(local, new Color(0.075f, 0.09f, 0.12f));
@@ -504,7 +538,7 @@ namespace Dragon.UI.TalentTree.Editor
             }
             if (!string.IsNullOrEmpty(pendingSourceKey))
             {
-                var source = definition.FindNode(pendingSourceKey);
+                var source = FindNodeFast(pendingSourceKey);
                 if (source != null)
                 {
                     Handles.color = Color.yellow;
@@ -540,17 +574,27 @@ namespace Dragon.UI.TalentTree.Editor
             for (int i = 0; i < definition.edges.Count; i++)
             {
                 var edge = definition.edges[i];
-                var from = definition.FindNode(edge.fromKey);
-                var to = definition.FindNode(edge.toKey);
+                var from = FindNodeFast(edge.fromKey);
+                var to = FindNodeFast(edge.toKey);
                 if (from == null || to == null) continue;
                 EdgeHandles(edge, out var fromHandle, out var toHandle);
-                Vector2 p0 = BoardToCanvas(NodePosition(from), canvas);
-                Vector2 p1 = BoardToCanvas(NodePosition(from) + fromHandle, canvas);
-                Vector2 p2 = BoardToCanvas(NodePosition(to) + toHandle, canvas);
-                Vector2 p3 = BoardToCanvas(NodePosition(to), canvas);
+                Vector2 fromPosition = NodePosition(from);
+                Vector2 toPosition = NodePosition(to);
+                Vector2 p0 = BoardToCanvas(fromPosition, canvas);
+                Vector2 p1 = BoardToCanvas(fromPosition + fromHandle, canvas);
+                Vector2 p2 = BoardToCanvas(toPosition + toHandle, canvas);
+                Vector2 p3 = BoardToCanvas(toPosition, canvas);
                 if (!CurveVisible(canvas, p0, p1, p2, p3)) continue;
                 Color tint = i == selectedEdge ? Color.yellow : LineColor;
-                Handles.DrawBezier(p0, p3, p1, p2, tint, null, Mathf.Max(1f, LineWidth * zoom));
+                bool overview = zoom < 0.2f && i != selectedEdge;
+                if (overview && HandleUtility.DistancePointToLineSegment(p1, p0, p3) < 2f &&
+                    HandleUtility.DistancePointToLineSegment(p2, p0, p3) < 2f)
+                {
+                    Handles.color = tint;
+                    Handles.DrawLine(p0, p3);
+                }
+                else Handles.DrawBezier(p0, p3, p1, p2, tint, null, Mathf.Max(1f, LineWidth * zoom));
+                if (overview) continue;
                 Vector2 tip = Bezier(p0, p1, p2, p3, 0.84f);
                 Vector2 tangent = (Bezier(p0, p1, p2, p3, 0.86f) - Bezier(p0, p1, p2, p3, 0.82f)).normalized;
                 Vector2 normal = new Vector2(-tangent.y, tangent.x);
@@ -572,6 +616,14 @@ namespace Dragon.UI.TalentTree.Editor
                 Vector2 center = BoardToCanvas(NodePosition(node), canvas);
                 float radius = NodeSize(node.type) * zoom * 0.5f;
                 if (center.x + radius < 0 || center.y + radius < 0 || center.x - radius > canvas.width || center.y - radius > canvas.height) continue;
+                if (radius < 2.5f)
+                {
+                    float diameter = Mathf.Max(2f, radius * 2f);
+                    float offset = diameter * 0.5f;
+                    EditorGUI.DrawRect(new Rect(center.x - offset, center.y - offset, diameter, diameter),
+                        selectedNodeKeys.Contains(node.key) ? Color.yellow : NodeRimColor);
+                    continue;
+                }
                 Handles.color = node.type == TalentNodeType.Core ? CoreFillColor : SmallFillColor;
                 Handles.DrawSolidDisc(center, Vector3.forward, radius);
                 Handles.color = NodeRimColor;
@@ -741,11 +793,12 @@ namespace Dragon.UI.TalentTree.Editor
                         foreach (var selectedNode in definition.nodes)
                         {
                             if (!nodeDragStartPositions.TryGetValue(selectedNode.key, out var start)) continue;
-                            var visual = layout.FindNode(selectedNode.key);
+                            var visual = FindNodeLayoutFast(selectedNode.key);
                             if (visual == null)
                             {
                                 visual = new TalentTreeNodeLayout { key = selectedNode.key, position = start };
                                 layout.nodes.Add(visual);
+                                nodeLayoutLookup[selectedNode.key] = visual;
                             }
                             visual.position = start + delta;
                         }
@@ -1061,18 +1114,11 @@ namespace Dragon.UI.TalentTree.Editor
             if (definition == null || layout == null || layout.definition != definition) return false;
             if (definition.nodes == null || definition.edges == null || layout.nodes == null || layout.edges == null)
                 return false;
-            var nodeKeys = new HashSet<string>();
-            foreach (var node in layout.nodes)
-                if (node != null && !string.IsNullOrEmpty(node.key)) nodeKeys.Add(node.key);
             foreach (var node in definition.nodes)
-                if (node != null && !nodeKeys.Contains(node.key)) return true;
-            var edgeKeys = new HashSet<string>();
-            foreach (var edge in layout.edges)
-                if (edge != null && edge.fromKey != null && edge.toKey != null)
-                    edgeKeys.Add(edge.fromKey.Length + ":" + edge.fromKey + edge.toKey);
+                if (node != null && FindNodeLayoutFast(node.key) == null) return true;
             foreach (var edge in definition.edges)
                 if (edge != null && edge.fromKey != null && edge.toKey != null &&
-                    !edgeKeys.Contains(edge.fromKey.Length + ":" + edge.fromKey + edge.toKey)) return true;
+                    FindEdgeLayoutFast(edge.fromKey, edge.toKey) == null) return true;
             return false;
         }
 
@@ -1136,7 +1182,7 @@ namespace Dragon.UI.TalentTree.Editor
 
         private Vector2 NodePosition(TalentTreeAuthorNode node)
         {
-            var visual = layout != null ? layout.FindNode(node.key) : null;
+            var visual = FindNodeLayoutFast(node.key);
             if (visual != null) return visual.position;
             if (layout == null && (node.position != Vector2.zero || node.id == 1)) return node.position;
             return TalentTreeLayoutUtility.SuggestPosition(node.id);
@@ -1144,13 +1190,13 @@ namespace Dragon.UI.TalentTree.Editor
 
         private Sprite NodeIcon(TalentTreeAuthorNode node)
         {
-            var visual = layout != null ? layout.FindNode(node.key) : null;
+            var visual = FindNodeLayoutFast(node.key);
             return visual != null ? visual.icon : layout == null ? node.icon : null;
         }
 
         private void EdgeHandles(TalentTreeAuthorEdge edge, out Vector2 fromHandle, out Vector2 toHandle)
         {
-            var visual = layout != null ? layout.FindEdge(edge.fromKey, edge.toKey) : null;
+            var visual = FindEdgeLayoutFast(edge.fromKey, edge.toKey);
             if (visual != null)
             {
                 fromHandle = visual.fromHandle;
@@ -1163,8 +1209,8 @@ namespace Dragon.UI.TalentTree.Editor
                 toHandle = edge.toHandle;
                 return;
             }
-            var from = definition.FindNode(edge.fromKey);
-            var to = definition.FindNode(edge.toKey);
+            var from = FindNodeFast(edge.fromKey);
+            var to = FindNodeFast(edge.toKey);
             Vector2 delta = from != null && to != null ? NodePosition(to) - NodePosition(from) : Vector2.zero;
             fromHandle = delta / 3f;
             toHandle = -delta / 3f;
@@ -1188,14 +1234,17 @@ namespace Dragon.UI.TalentTree.Editor
             for (int i = 0; i < definition.edges.Count; i++)
             {
                 var edge = definition.edges[i];
-                var from = definition.FindNode(edge.fromKey);
-                var to = definition.FindNode(edge.toKey);
+                var from = FindNodeFast(edge.fromKey);
+                var to = FindNodeFast(edge.toKey);
                 if (from == null || to == null) continue;
                 EdgeHandles(edge, out var fromHandle, out var toHandle);
-                Vector2 p0 = BoardToCanvas(NodePosition(from), canvas);
-                Vector2 p1 = BoardToCanvas(NodePosition(from) + fromHandle, canvas);
-                Vector2 p2 = BoardToCanvas(NodePosition(to) + toHandle, canvas);
-                Vector2 p3 = BoardToCanvas(NodePosition(to), canvas);
+                Vector2 fromPosition = NodePosition(from);
+                Vector2 toPosition = NodePosition(to);
+                Vector2 p0 = BoardToCanvas(fromPosition, canvas);
+                Vector2 p1 = BoardToCanvas(fromPosition + fromHandle, canvas);
+                Vector2 p2 = BoardToCanvas(toPosition + toHandle, canvas);
+                Vector2 p3 = BoardToCanvas(toPosition, canvas);
+                if (!CurveNearPoint(point, best, p0, p1, p2, p3)) continue;
                 Vector2 previous = p0;
                 for (int step = 1; step <= 20; step++)
                 {
@@ -1206,6 +1255,16 @@ namespace Dragon.UI.TalentTree.Editor
                 }
             }
             return result;
+        }
+
+        private static bool CurveNearPoint(Vector2 point, float margin, Vector2 p0, Vector2 p1, Vector2 p2, Vector2 p3)
+        {
+            float minX = Mathf.Min(p0.x, Mathf.Min(p1.x, Mathf.Min(p2.x, p3.x)));
+            float maxX = Mathf.Max(p0.x, Mathf.Max(p1.x, Mathf.Max(p2.x, p3.x)));
+            float minY = Mathf.Min(p0.y, Mathf.Min(p1.y, Mathf.Min(p2.y, p3.y)));
+            float maxY = Mathf.Max(p0.y, Mathf.Max(p1.y, Mathf.Max(p2.y, p3.y)));
+            return point.x >= minX - margin && point.x <= maxX + margin &&
+                   point.y >= minY - margin && point.y <= maxY + margin;
         }
 
         private Vector2 BoardToCanvas(Vector2 world, Rect canvas) => canvas.center + pan + new Vector2(world.x, -world.y) * zoom;

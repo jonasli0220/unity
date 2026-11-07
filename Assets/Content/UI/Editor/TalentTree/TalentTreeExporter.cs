@@ -307,10 +307,23 @@ namespace Dragon.UI.TalentTree.Editor
             double maxX = double.NegativeInfinity;
             double maxY = double.NegativeInfinity;
             float lineWidth = layout != null ? layout.lineWidth : definition.lineWidth;
+            var nodesByKey = new Dictionary<string, TalentTreeAuthorNode>(definition.nodes.Count);
+            foreach (var node in definition.nodes)
+                if (node != null && !string.IsNullOrEmpty(node.key)) nodesByKey[node.key] = node;
+            var nodeLayoutsByKey = new Dictionary<string, TalentTreeNodeLayout>(layout != null ? layout.nodes.Count : 0);
+            var edgeLayoutsByKey = new Dictionary<(string, string), TalentTreeEdgeLayout>(layout != null ? layout.edges.Count : 0);
+            if (layout != null)
+            {
+                foreach (var visual in layout.nodes)
+                    if (visual != null && !string.IsNullOrEmpty(visual.key)) nodeLayoutsByKey[visual.key] = visual;
+                foreach (var visual in layout.edges)
+                    if (visual != null && visual.fromKey != null && visual.toKey != null)
+                        edgeLayoutsByKey[(visual.fromKey, visual.toKey)] = visual;
+            }
 
             foreach (var node in definition.nodes)
             {
-                Vector2 position = NodePosition(node, layout);
+                Vector2 position = NodePosition(node, layout, nodeLayoutsByKey);
                 float size = node.type == TalentNodeType.Core
                     ? (layout != null ? layout.coreNodeSize : definition.coreNodeSize)
                     : (layout != null ? layout.smallNodeSize : definition.smallNodeSize);
@@ -323,12 +336,13 @@ namespace Dragon.UI.TalentTree.Editor
 
             foreach (var edge in definition.edges)
             {
-                var from = definition.FindNode(edge.fromKey);
-                var to = definition.FindNode(edge.toKey);
+                if (edge == null || edge.fromKey == null || edge.toKey == null) continue;
+                nodesByKey.TryGetValue(edge.fromKey, out var from);
+                nodesByKey.TryGetValue(edge.toKey, out var to);
                 if (from == null || to == null) continue;
-                Vector2 start = NodePosition(from, layout);
-                Vector2 end = NodePosition(to, layout);
-                var visual = layout != null ? layout.FindEdge(edge.fromKey, edge.toKey) : null;
+                Vector2 start = NodePosition(from, layout, nodeLayoutsByKey);
+                Vector2 end = NodePosition(to, layout, nodeLayoutsByKey);
+                edgeLayoutsByKey.TryGetValue((edge.fromKey, edge.toKey), out var visual);
                 Vector2 fromHandle = visual != null ? visual.fromHandle : (end - start) / 3f;
                 Vector2 toHandle = visual != null ? visual.toHandle : (start - end) / 3f;
                 ExpandCubic(start.x, start.x + fromHandle.x, end.x + toHandle.x, end.x, ref minX, ref maxX);
@@ -359,9 +373,11 @@ namespace Dragon.UI.TalentTree.Editor
             return new TalentTreeContentBounds(Vector2.zero, new Vector2((float)width, (float)height));
         }
 
-        private static Vector2 NodePosition(TalentTreeAuthorNode node, TalentTreeLayout layout)
+        private static Vector2 NodePosition(TalentTreeAuthorNode node, TalentTreeLayout layout,
+            Dictionary<string, TalentTreeNodeLayout> nodeLayoutsByKey)
         {
-            var visual = layout != null ? layout.FindNode(node.key) : null;
+            TalentTreeNodeLayout visual = null;
+            if (node.key != null) nodeLayoutsByKey.TryGetValue(node.key, out visual);
             if (visual != null) return visual.position;
             if (layout == null && (node.position != Vector2.zero || node.id == 1)) return node.position;
             return TalentTreeLayoutUtility.SuggestPosition(node.id);
