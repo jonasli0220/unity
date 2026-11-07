@@ -16,7 +16,7 @@ namespace Dragon.UI.TalentTree.Editor
 
         [Serializable] private sealed class ExportDocument
         {
-            public int version = 4;
+            public int version = 5;
             public string sourceGuid;
             public string layoutGuid;
             public string name;
@@ -25,6 +25,8 @@ namespace Dragon.UI.TalentTree.Editor
             public Vector2 contentCenter;
             public ExportNode[] nodes;
             public ExportEdge[] edges;
+            public ExportTile[] inactiveTiles;
+            public string[] generatedAssets;
         }
 
         [Serializable] private sealed class ExportNode
@@ -42,6 +44,20 @@ namespace Dragon.UI.TalentTree.Editor
             public int toId;
             public Vector2 fromHandle;
             public Vector2 toHandle;
+            public Vector2 activePosition;
+            public Vector2 activeSize;
+            public string activeAtlasPath;
+            public string activeSpriteName;
+            public float activePixelsPerUnit;
+        }
+
+        [Serializable] private sealed class ExportTile
+        {
+            public int x;
+            public int y;
+            public Vector2 position;
+            public Vector2 size;
+            public string assetPath;
         }
 
         [MenuItem("Tools/UI/Talent Tree/Export Selected Tree", false, 2336)]
@@ -74,7 +90,8 @@ namespace Dragon.UI.TalentTree.Editor
                 AssetDatabase.CreateFolder("Assets/Content/UI/Prefab", "talent_tree");
             string prefabPath = OutputFolder + "/" + name + ".prefab";
             string jsonPath = OutputFolder + "/" + name + ".json";
-            if (!CheckExistingOutputs(prefabPath, jsonPath, sourceGuid, out message)) return false;
+            if (!CheckExistingOutputs(prefabPath, jsonPath, sourceGuid, out ExportDocument previous,
+                out message)) return false;
 
             TalentTreeContentBounds bounds;
             try { bounds = TalentTreeBoundsUtility.CalculateOriginCentered(definition, layout); }
@@ -87,6 +104,7 @@ namespace Dragon.UI.TalentTree.Editor
             var orderedEdges = definition.edges.OrderBy(edge => nodeByKey[edge.fromKey].id).ThenBy(edge => nodeByKey[edge.toKey].id).ToArray();
             var exportNodes = new ExportNode[orderedNodes.Length];
             var exportEdges = new ExportEdge[orderedEdges.Length];
+            var bakeCurves = new TalentTreeBakeCurve[orderedEdges.Length];
             var prerequisitesByKey = new Dictionary<string, List<int>>();
             foreach (var edge in orderedEdges)
             {
@@ -112,27 +130,46 @@ namespace Dragon.UI.TalentTree.Editor
                 int fromId = nodeByKey[edge.fromKey].id;
                 int toId = nodeByKey[edge.toKey].id;
                 exportEdges[i] = new ExportEdge { fromId = fromId, toId = toId, fromHandle = visual.fromHandle, toHandle = visual.toHandle };
+                bakeCurves[i] = new TalentTreeBakeCurve(fromId, toId,
+                    nodeLayoutsByKey[edge.fromKey].position, nodeLayoutsByKey[edge.toKey].position,
+                    visual.fromHandle, visual.toHandle);
             }
-            var document = new ExportDocument { sourceGuid = sourceGuid, layoutGuid = layoutGuid, name = name,
-                boardSize = Mathf.Max(bounds.Size.x, bounds.Size.y), contentSize = bounds.Size,
-                contentCenter = bounds.Center, nodes = exportNodes, edges = exportEdges };
-            string json = JsonUtility.ToJson(document, true) + "\n";
 
             GameObject root = null;
             try
             {
-                var previousPrefab = AssetDatabase.LoadAssetAtPath<GameObject>(prefabPath);
-                root = BuildPrefab(name, layout, bounds, orderedNodes, orderedEdges, nodeByKey,
-                    nodeLayoutsByKey, edgeLayoutsByKey, previousPrefab);
+                string assetFolder = OutputFolder + "/" + name + "_Sprites";
+                var baked = TalentTreeSpriteBaker.Bake(bakeCurves, layout, assetFolder);
+                var bakedEdges = baked.edges.ToDictionary(edge => (edge.fromId, edge.toId));
+                foreach (var edge in exportEdges)
+                {
+                    var image = bakedEdges[(edge.fromId, edge.toId)];
+                    edge.activePosition = image.position;
+                    edge.activeSize = image.size;
+                    edge.activeAtlasPath = image.atlasPath;
+                    edge.activeSpriteName = image.spriteName;
+                    edge.activePixelsPerUnit = image.pixelsPerUnit;
+                }
+                var document = new ExportDocument { sourceGuid = sourceGuid, layoutGuid = layoutGuid,
+                    name = name, boardSize = Mathf.Max(bounds.Size.x, bounds.Size.y),
+                    contentSize = bounds.Size, contentCenter = bounds.Center,
+                    nodes = exportNodes, edges = exportEdges,
+                    inactiveTiles = baked.tiles.Select(tile => new ExportTile { x = tile.x, y = tile.y,
+                        position = tile.position, size = tile.size, assetPath = tile.assetPath }).ToArray(),
+                    generatedAssets = baked.generatedAssets.ToArray() };
+                root = BuildPrefab(name, bounds, orderedNodes, nodeLayoutsByKey, baked);
                 var missingRenderer = root.GetComponentsInChildren<Graphic>(true)
                     .FirstOrDefault(graphic => graphic.GetComponent<CanvasRenderer>() == null);
                 if (missingRenderer != null)
                     throw new InvalidOperationException("UI 图形缺少 CanvasRenderer：" + missingRenderer.gameObject.name);
                 if (PrefabUtility.SaveAsPrefabAsset(root, prefabPath) == null) throw new InvalidOperationException("Prefab 保存失败。");
-                File.WriteAllText(Path.GetFullPath(jsonPath), json, new UTF8Encoding(false));
+                File.WriteAllText(Path.GetFullPath(jsonPath), JsonUtility.ToJson(document, true) + "\n",
+                    new UTF8Encoding(false));
                 AssetDatabase.ImportAsset(jsonPath);
+                CleanupObsoleteAssets(previous, document, assetFolder);
                 AssetDatabase.SaveAssets();
-                message = "已生成 " + prefabPath + " 和 " + jsonPath;
+                message = "已生成 " + prefabPath + "、" + jsonPath + " 和 " +
+                    document.inactiveTiles.Length + " 张未激活底图、" + baked.generatedAssets.Count + " 个图片资源。";
                 return true;
             }
             catch (Exception exception)
@@ -147,8 +184,10 @@ namespace Dragon.UI.TalentTree.Editor
             }
         }
 
-        private static bool CheckExistingOutputs(string prefabPath, string jsonPath, string sourceGuid, out string message)
+        private static bool CheckExistingOutputs(string prefabPath, string jsonPath, string sourceGuid,
+            out ExportDocument previous, out string message)
         {
+            previous = null;
             var prefab = AssetDatabase.LoadAssetAtPath<GameObject>(prefabPath);
             bool jsonExists = File.Exists(Path.GetFullPath(jsonPath));
             if (prefab != null)
@@ -164,8 +203,8 @@ namespace Dragon.UI.TalentTree.Editor
             {
                 try
                 {
-                    var existing = JsonUtility.FromJson<ExportDocument>(File.ReadAllText(Path.GetFullPath(jsonPath)));
-                    if (existing == null || existing.sourceGuid != sourceGuid) throw new InvalidDataException();
+                    previous = JsonUtility.FromJson<ExportDocument>(File.ReadAllText(Path.GetFullPath(jsonPath)));
+                    if (previous == null || previous.sourceGuid != sourceGuid) throw new InvalidDataException();
                 }
                 catch
                 {
@@ -177,17 +216,27 @@ namespace Dragon.UI.TalentTree.Editor
             return true;
         }
 
-        private static GameObject BuildPrefab(string name, TalentTreeLayout layout, TalentTreeContentBounds bounds,
+        private static void CleanupObsoleteAssets(ExportDocument previous, ExportDocument current,
+            string assetFolder)
+        {
+            if (previous == null || previous.generatedAssets == null) return;
+            var keep = new HashSet<string>(current.generatedAssets, StringComparer.Ordinal);
+            foreach (string oldPath in previous.generatedAssets)
+            {
+                if (string.IsNullOrEmpty(oldPath) || !oldPath.StartsWith(assetFolder + "/",
+                    StringComparison.Ordinal) || keep.Contains(oldPath) ||
+                    Path.GetExtension(oldPath) != ".png") continue;
+                if (!AssetDatabase.DeleteAsset(oldPath))
+                    Debug.LogWarning("天赋树旧图片未能清理：" + oldPath);
+            }
+        }
+
+        private static GameObject BuildPrefab(string name, TalentTreeContentBounds bounds,
             TalentTreeAuthorNode[] orderedNodes,
-            TalentTreeAuthorEdge[] orderedEdges, Dictionary<string, TalentTreeAuthorNode> nodeByKey,
             Dictionary<string, TalentTreeNodeLayout> nodeLayoutsByKey,
-            Dictionary<(string, string), TalentTreeEdgeLayout> edgeLayoutsByKey, GameObject previousPrefab)
+            TalentTreeSpriteBakeResult baked)
         {
             var positions = orderedNodes.ToDictionary(node => node.key, node => nodeLayoutsByKey[node.key].position);
-            var previousEdgesByName = new Dictionary<string, Transform>();
-            var previousEdges = previousPrefab != null ? previousPrefab.transform.Find("Content/Connections") : null;
-            if (previousEdges != null)
-                foreach (Transform child in previousEdges) previousEdgesByName[child.name] = child;
             var root = new GameObject(name, typeof(RectTransform), typeof(CanvasRenderer), typeof(Image), typeof(RectMask2D), typeof(ScrollRect));
             var viewport = (RectTransform)root.transform;
             viewport.anchorMin = Vector2.zero;
@@ -203,32 +252,22 @@ namespace Dragon.UI.TalentTree.Editor
             scroll.inertia = false;
             scroll.movementType = ScrollRect.MovementType.Unrestricted;
             scroll.scrollSensitivity = 0f;
-            var edgeLayer = NewStretchRect("Connections", content);
-            for (int i = 0; i < orderedEdges.Length; i++)
+            var tileLayer = NewStretchRect("InactiveTiles", content);
+            foreach (var tile in baked.tiles)
             {
-                var edge = orderedEdges[i];
-                var visual = edgeLayoutsByKey[(edge.fromKey, edge.toKey)];
-                int fromId = nodeByKey[edge.fromKey].id;
-                int toId = nodeByKey[edge.toKey].id;
-                string edgeName = "Edge " + fromId + " to " + toId;
-                var edgeView = NewRect(edgeName, edgeLayer, Vector2.one);
-                edgeView.gameObject.AddComponent<CanvasRenderer>();
-                var graphic = edgeView.gameObject.AddComponent<UILineRenderer>();
-                SetCurveStyle(graphic, layout.lineWidth, layout.lineColor);
-                previousEdgesByName.TryGetValue(edgeName, out var previousView);
-                CopyAppearance(graphic, previousView);
-                var activeRect = NewStretchRect("Active", edgeView);
-                activeRect.gameObject.AddComponent<CanvasRenderer>();
-                var activeGraphic = activeRect.gameObject.AddComponent<UILineRenderer>();
-                SetCurveStyle(activeGraphic, layout.lineWidth * 1.25f, new Color(1f, 0.8f, 0.35f, 1f));
-                CopyAppearance(activeGraphic, previousView != null ? previousView.Find("Active") : null);
-                Vector2 start = positions[edge.fromKey];
-                Vector2 end = positions[edge.toKey];
-                Vector2 center = SetCurveRect(edgeView, start, end, visual.fromHandle, visual.toHandle,
-                    Mathf.Max(graphic.LineThickness, activeGraphic.LineThickness));
-                SetCurvePoints(graphic, start, end, visual.fromHandle, visual.toHandle, center);
-                SetCurvePoints(activeGraphic, start, end, visual.fromHandle, visual.toHandle, center);
-                activeRect.gameObject.SetActive(false);
+                var view = NewRect("Tile " + tile.x + "," + tile.y, tileLayer, tile.size);
+                view.anchoredPosition = tile.position;
+                view.gameObject.AddComponent<CanvasRenderer>();
+                var image = view.gameObject.AddComponent<Image>();
+                image.sprite = tile.sprite;
+                image.raycastTarget = false;
+            }
+            var edgeLayer = NewStretchRect("ActiveEdges", content);
+            foreach (var edge in baked.edges)
+            {
+                var view = NewRect("Edge " + edge.fromId + " to " + edge.toId,
+                    edgeLayer, edge.size);
+                view.anchoredPosition = edge.position;
             }
             var nodeLayer = NewStretchRect("Nodes", content);
             for (int i = 0; i < orderedNodes.Length; i++)
@@ -238,63 +277,6 @@ namespace Dragon.UI.TalentTree.Editor
                 view.anchoredPosition = positions[node.key];
             }
             return root;
-        }
-
-        private static void SetCurveStyle(UILineRenderer graphic, float width, Color color)
-        {
-            graphic.RelativeSize = false;
-            graphic.LineList = false;
-            graphic.LineCaps = true;
-            graphic.BezierMode = UILineRenderer.BezierType.Basic;
-            graphic.BezierSegmentsPerCurve = 12;
-            graphic.LineThickness = width;
-            graphic.color = color;
-            graphic.raycastTarget = false;
-        }
-
-        private static Vector2 SetCurveRect(RectTransform rect, Vector2 start, Vector2 end,
-            Vector2 fromHandle, Vector2 toHandle, float maximumWidth)
-        {
-            Vector2 control1 = start + fromHandle;
-            Vector2 control2 = end + toHandle;
-            Vector2 min = Vector2.Min(Vector2.Min(start, end), Vector2.Min(control1, control2));
-            Vector2 max = Vector2.Max(Vector2.Max(start, end), Vector2.Max(control1, control2));
-            float padding = Mathf.Max(8f, maximumWidth * 2f + 4f);
-            rect.anchoredPosition = (min + max) * 0.5f;
-            rect.sizeDelta = max - min + Vector2.one * (padding * 2f);
-            return rect.anchoredPosition;
-        }
-
-        private static void SetCurvePoints(UILineRenderer graphic, Vector2 start, Vector2 end,
-            Vector2 fromHandle, Vector2 toHandle, Vector2 center)
-        {
-            // The shipped renderer subtracts pivot * 1 from absolute points, so offset by half a unit.
-            Vector2 offset = new Vector2(0.5f, 0.5f) - center;
-            graphic.Points = new[] { start + offset, start + fromHandle + offset,
-                end + toHandle + offset, end + offset };
-        }
-
-        private static void CopyAppearance(UILineRenderer target, Transform previous)
-        {
-            if (previous == null) return;
-            var shipped = previous.GetComponent<UILineRenderer>();
-            if (shipped != null)
-            {
-                target.color = shipped.color;
-                target.material = shipped.material;
-                target.LineThickness = shipped.LineThickness;
-                target.LineCaps = shipped.LineCaps;
-                target.LineJoins = shipped.LineJoins;
-                target.BezierSegmentsPerCurve = shipped.BezierSegmentsPerCurve;
-                return;
-            }
-            var legacy = previous.GetComponent<TalentTreeCurveGraphic>();
-            if (legacy == null) return;
-            target.color = legacy.color;
-            target.material = legacy.material;
-            target.LineThickness = legacy.LineWidth;
-            target.LineCaps = legacy.RoundCaps;
-            target.BezierSegmentsPerCurve = legacy.MaxSegments;
         }
 
         private static RectTransform NewRect(string name, RectTransform parent, Vector2 size)

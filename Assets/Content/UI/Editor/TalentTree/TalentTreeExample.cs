@@ -17,6 +17,8 @@ namespace Dragon.UI.TalentTree.Editor
             public Vector2 contentCenter;
             public ExportNodeSummary[] nodes;
             public ExportEdgeSummary[] edges;
+            public ExportTileSummary[] inactiveTiles;
+            public string[] generatedAssets;
         }
 
         [Serializable] private sealed class ExportNodeSummary
@@ -30,6 +32,20 @@ namespace Dragon.UI.TalentTree.Editor
         {
             public int fromId;
             public int toId;
+            public Vector2 activePosition;
+            public Vector2 activeSize;
+            public string activeAtlasPath;
+            public string activeSpriteName;
+            public float activePixelsPerUnit;
+        }
+
+        [Serializable] private sealed class ExportTileSummary
+        {
+            public int x;
+            public int y;
+            public Vector2 position;
+            public Vector2 size;
+            public string assetPath;
         }
 
         private const string PathToDefinition = "Assets/Content/UI/Editor/TalentTree/Definitions/ExampleTalentTree.asset";
@@ -107,7 +123,7 @@ namespace Dragon.UI.TalentTree.Editor
             var missingRenderer = prefab.GetComponentsInChildren<Graphic>(true)
                 .FirstOrDefault(graphic => graphic.GetComponent<CanvasRenderer>() == null);
             if (missingRenderer != null) throw new InvalidOperationException("Missing CanvasRenderer: " + missingRenderer.gameObject.name);
-            if (json == null || json.version != 4 || Vector2.Distance(json.contentSize, bounds.Size) > 0.01f ||
+            if (json == null || json.version != 5 || Vector2.Distance(json.contentSize, bounds.Size) > 0.01f ||
                 json.contentCenter != Vector2.zero || json.nodes == null ||
                 Vector2.Distance(json.nodes.First(node => node.id == 14).position, layout.FindNode("example-14").position) > 0.01f)
                 throw new InvalidOperationException("Example JSON crop metadata is incomplete.");
@@ -184,9 +200,11 @@ namespace Dragon.UI.TalentTree.Editor
             string layoutPath = "Assets/Content/UI/Editor/TalentTree/Layouts/" + StressName + "Layout.asset";
             string prefabPath = "Assets/Content/UI/Prefab/talent_tree/" + StressName + ".prefab";
             string jsonPath = "Assets/Content/UI/Prefab/talent_tree/" + StressName + ".json";
+            string spritesPath = "Assets/Content/UI/Prefab/talent_tree/" + StressName + "_Sprites";
             if (AssetDatabase.LoadAssetAtPath<UnityEngine.Object>(definitionPath) != null ||
                 AssetDatabase.LoadAssetAtPath<UnityEngine.Object>(layoutPath) != null ||
-                AssetDatabase.LoadAssetAtPath<UnityEngine.Object>(prefabPath) != null || File.Exists(Path.GetFullPath(jsonPath)))
+                AssetDatabase.LoadAssetAtPath<UnityEngine.Object>(prefabPath) != null ||
+                File.Exists(Path.GetFullPath(jsonPath)) || AssetDatabase.IsValidFolder(spritesPath))
                 throw new InvalidOperationException("Stress-check paths already exist; remove them manually after inspection.");
 
             var definition = ScriptableObject.CreateInstance<TalentTreeDefinition>();
@@ -209,16 +227,17 @@ namespace Dragon.UI.TalentTree.Editor
                 var prefab = AssetDatabase.LoadAssetAtPath<GameObject>(prefabPath);
                 var json = JsonUtility.FromJson<ExportSummary>(File.ReadAllText(Path.GetFullPath(jsonPath)));
                 if (prefab == null || json == null || json.nodes.Length != 1000 || json.edges.Length != 999 ||
-                    prefab.GetComponentsInChildren<UILineRenderer>(true).Length != 1998)
-                    throw new InvalidOperationException("Stress-check prefab graph or individual curves are incomplete.");
+                    json.version != 5 || prefab.GetComponentsInChildren<UILineRenderer>(true).Length != 0)
+                    throw new InvalidOperationException("Stress-check prefab graph or baked sprites are incomplete.");
                 AssertPatchSafe(prefab, json);
                 timer.Stop();
-                Debug.Log("Talent Tree 1000-node stress check passed: 1000 nodes, 999 edges with hidden Active curves, " + timer.ElapsedMilliseconds + " ms.");
+                Debug.Log("Talent Tree 1000-node stress check passed: 1000 nodes, 999 active anchors, baked base tiles, " + timer.ElapsedMilliseconds + " ms.");
             }
             finally
             {
                 AssetDatabase.DeleteAsset(prefabPath);
                 AssetDatabase.DeleteAsset(jsonPath);
+                AssetDatabase.DeleteAsset(spritesPath);
                 AssetDatabase.DeleteAsset(layoutPath);
                 AssetDatabase.DeleteAsset(definitionPath);
                 AssetDatabase.Refresh();
@@ -232,10 +251,13 @@ namespace Dragon.UI.TalentTree.Editor
             string layoutPath = "Assets/Content/UI/Editor/TalentTree/Layouts/" + GraphCheckName + "Layout.asset";
             string prefabPath = "Assets/Content/UI/Prefab/talent_tree/" + GraphCheckName + ".prefab";
             string jsonPath = "Assets/Content/UI/Prefab/talent_tree/" + GraphCheckName + ".json";
+            string spritesPath = "Assets/Content/UI/Prefab/talent_tree/" + GraphCheckName + "_Sprites";
             string resultPath = "Library/Dragon/TalentTree/GraphEditCheck.result";
             foreach (string path in new[] { definitionPath, layoutPath, prefabPath, jsonPath })
                 if (File.Exists(Path.GetFullPath(path)))
                     throw new InvalidOperationException("临时测试路径已存在，请先检查：" + path);
+            if (AssetDatabase.IsValidFolder(spritesPath))
+                throw new InvalidOperationException("临时测试图片目录已存在，请先检查：" + spritesPath);
             if (File.Exists(resultPath)) File.Delete(resultPath);
             var definition = ScriptableObject.CreateInstance<TalentTreeDefinition>();
             var layout = ScriptableObject.CreateInstance<TalentTreeLayout>();
@@ -316,24 +338,14 @@ namespace Dragon.UI.TalentTree.Editor
                         view == null || Vector2.Distance(view.anchoredPosition, authored) > 0.01f)
                         throw new InvalidOperationException("Prefab 节点坐标与编辑器不一致：" + node.id);
                 }
-                if (json.version != 4 ||
+                if (json.version != 5 ||
                     json.contentCenter != Vector2.zero || json.nodes == null ||
                     json.nodes.Any(node => Vector2.Distance(node.position, layout.FindNode("example-" + node.id).position) > 0.01f))
                     throw new InvalidOperationException("临时树 JSON 画布数据不正确。");
                 int styledFromId = json.edges[0].fromId;
                 int styledToId = json.edges[0].toId;
-                var editable = PrefabUtility.LoadPrefabContents(prefabPath);
-                try
-                {
-                    var styledEdge = FindEdge(editable, styledFromId, styledToId);
-                    var styledActive = styledEdge.transform.Find("Active").GetComponent<UILineRenderer>();
-                    styledEdge.color = Color.magenta;
-                    styledActive.color = Color.cyan;
-                    styledEdge.LineThickness = 13f;
-                    styledActive.LineThickness = 19f;
-                    PrefabUtility.SaveAsPrefabAsset(editable, prefabPath);
-                }
-                finally { PrefabUtility.UnloadPrefabContents(editable); }
+                Vector2 originalPosition = json.edges[0].activePosition;
+                string originalAtlasGuid = AssetDatabase.AssetPathToGUID(json.edges[0].activeAtlasPath);
                 var changedEdge = definition.edges.Find(edge =>
                     definition.FindNode(edge.fromKey).id == styledFromId &&
                     definition.FindNode(edge.toKey).id == styledToId);
@@ -343,35 +355,23 @@ namespace Dragon.UI.TalentTree.Editor
                     throw new InvalidOperationException(updatedMessage);
                 var updated = AssetDatabase.LoadAssetAtPath<GameObject>(prefabPath);
                 var updatedEdge = FindEdge(updated, styledFromId, styledToId);
-                var updatedActive = updatedEdge.transform.Find("Active").GetComponent<UILineRenderer>();
-                var updatedVisual = layout.FindEdge(changedEdge.fromKey, changedEdge.toKey);
-                if (updatedEdge.color != Color.magenta || updatedActive.color != Color.cyan ||
-                    Mathf.Abs(updatedEdge.LineThickness - 13f) > 0.01f ||
-                    Mathf.Abs(updatedActive.LineThickness - 19f) > 0.01f ||
-                    updatedActive.gameObject.activeSelf ||
-                    Vector2.Distance(updatedEdge.Points[0] - Vector2.one * 0.5f,
-                        layout.FindNode(changedEdge.fromKey).position) > 0.01f ||
-                    Vector2.Distance(updatedActive.Points[1] - updatedActive.Points[0],
-                        updatedVisual.fromHandle) > 0.01f)
-                    throw new InvalidOperationException("重导出未保留 Prefab 样式或未更新编辑器曲线坐标。");
-                var instance = UnityEngine.Object.Instantiate(updated);
-                try
-                {
-                    var instanceEdge = FindEdge(instance, styledFromId, styledToId);
-                    var active = instanceEdge.transform.Find("Active").gameObject;
-                    active.SetActive(true);
-                    if (!active.activeSelf)
-                        throw new InvalidOperationException("程序无法打开连线 Active 状态。");
-                }
-                finally { UnityEngine.Object.DestroyImmediate(instance); }
+                var updatedJson = JsonUtility.FromJson<ExportSummary>(File.ReadAllText(Path.GetFullPath(jsonPath)));
+                var updatedRecord = updatedJson.edges.First(edge => edge.fromId == styledFromId && edge.toId == styledToId);
+                if (updatedEdge == null || Vector2.Distance(originalPosition, updatedRecord.activePosition) < 0.01f ||
+                    Vector2.Distance(updatedEdge.anchoredPosition, updatedRecord.activePosition) > 0.01f ||
+                    Vector2.Distance(updatedEdge.sizeDelta, updatedRecord.activeSize) > 0.01f ||
+                    AssetDatabase.AssetPathToGUID(updatedRecord.activeAtlasPath) != originalAtlasGuid)
+                    throw new InvalidOperationException("重导出未更新连线坐标，或图片 GUID 不稳定。");
+                AssertPatchSafe(updated, updatedJson);
                 Directory.CreateDirectory(Path.GetDirectoryName(resultPath));
-                File.WriteAllText(resultPath, "PASS: graph edits, active edge views, prefab style preservation, editor-owned geometry, cropped prefab and JSON");
+                File.WriteAllText(resultPath, "PASS: graph edits, baked sprites, stable atlas GUID, editor-owned geometry, cropped prefab and JSON");
                 Debug.Log("Talent Tree graph edit checks passed. " + message);
             }
             finally
             {
                 foreach (string path in new[] { prefabPath, jsonPath, layoutPath, definitionPath })
                     if (File.Exists(Path.GetFullPath(path))) AssetDatabase.DeleteAsset(path);
+                AssetDatabase.DeleteAsset(spritesPath);
                 if (!layoutSaved) UnityEngine.Object.DestroyImmediate(layout);
                 if (!definitionSaved) UnityEngine.Object.DestroyImmediate(definition);
             }
@@ -383,22 +383,33 @@ namespace Dragon.UI.TalentTree.Editor
             return u * u * u * p0 + 3f * u * u * t * p1 + 3f * u * t * t * p2 + t * t * t * p3;
         }
 
-        private static UILineRenderer FindEdge(GameObject prefab, int fromId, int toId)
+        private static RectTransform FindEdge(GameObject prefab, int fromId, int toId)
         {
-            var view = prefab.transform.Find("Content/Connections/Edge " + fromId + " to " + toId);
-            return view != null ? view.GetComponent<UILineRenderer>() : null;
+            return prefab.transform.Find("Content/ActiveEdges/Edge " + fromId + " to " + toId)
+                as RectTransform;
         }
 
         private static void AssertPatchSafe(GameObject prefab, ExportSummary json)
         {
             if (prefab.GetComponent<ScrollRect>() == null || prefab.GetComponent<RectMask2D>() == null ||
                 prefab.GetComponent<TalentTreeData>() != null ||
-                prefab.GetComponentsInChildren<UILineRenderer>(true).Length != json.edges.Length * 2 ||
+                prefab.GetComponentsInChildren<UILineRenderer>(true).Length != 0 ||
                 prefab.GetComponentsInChildren<Graphic>(true).Any(graphic => graphic.GetComponent<CanvasRenderer>() == null) ||
                 prefab.GetComponentsInChildren<MonoBehaviour>(true).Any(component =>
                     component == null || !(component is Image || component is RectMask2D ||
-                        component is ScrollRect || component is UILineRenderer)))
+                        component is ScrollRect)))
                 throw new InvalidOperationException("Prefab 仍引用未随包体发布的脚本或缺少必要 UGUI 组件。");
+            if (json.version != 5 || json.inactiveTiles == null || json.generatedAssets == null)
+                throw new InvalidOperationException("缺少 Sprite 烘焙清单。");
+            foreach (string path in json.generatedAssets)
+            {
+                var importer = AssetImporter.GetAtPath(path) as TextureImporter;
+                if (importer == null || importer.textureType != TextureImporterType.Sprite ||
+                    importer.mipmapEnabled ||
+                    !importer.GetPlatformTextureSettings("Android").overridden ||
+                    !importer.GetPlatformTextureSettings("Standalone").overridden)
+                    throw new InvalidOperationException("烘焙图片缺少 Sprite 或平台压缩设置：" + path);
+            }
             foreach (var node in json.nodes)
             {
                 var anchor = prefab.transform.Find("Content/Nodes/Node " + node.id) as RectTransform;
@@ -410,14 +421,26 @@ namespace Dragon.UI.TalentTree.Editor
             foreach (var edge in json.edges)
             {
                 var view = FindEdge(prefab, edge.fromId, edge.toId);
-                var active = view != null ? view.transform.Find("Active") : null;
-                var activeLine = active != null ? active.GetComponent<UILineRenderer>() : null;
-                if (view == null || activeLine == null || active.gameObject.activeSelf ||
-                    view.Points == null || view.Points.Length != 4 ||
-                    activeLine.Points == null || activeLine.Points.Length != 4 ||
-                    view.BezierMode != UILineRenderer.BezierType.Basic ||
-                    activeLine.BezierMode != UILineRenderer.BezierType.Basic)
-                    throw new InvalidOperationException("连线缺少独立贝塞尔曲线或隐藏的 Active 状态：" + edge.fromId + " to " + edge.toId);
+                if (view == null || view.childCount != 0 ||
+                    view.GetComponents<Component>().Length != 1 ||
+                    Vector2.Distance(view.anchoredPosition, edge.activePosition) > 0.01f ||
+                    Vector2.Distance(view.sizeDelta, edge.activeSize) > 0.01f ||
+                    edge.activePixelsPerUnit <= 0f ||
+                    !json.generatedAssets.Contains(edge.activeAtlasPath) ||
+                    !AssetDatabase.LoadAllAssetsAtPath(edge.activeAtlasPath).OfType<Sprite>()
+                        .Any(sprite => sprite.name == edge.activeSpriteName))
+                    throw new InvalidOperationException("激活连线挂接点或图集子 Sprite 不正确：" + edge.fromId + " to " + edge.toId);
+            }
+            foreach (var tile in json.inactiveTiles)
+            {
+                var view = prefab.transform.Find("Content/InactiveTiles/Tile " + tile.x + "," + tile.y)
+                    as RectTransform;
+                var image = view != null ? view.GetComponent<Image>() : null;
+                if (view == null || image == null || image.sprite == null ||
+                    AssetDatabase.GetAssetPath(image.sprite) != tile.assetPath ||
+                    Vector2.Distance(view.anchoredPosition, tile.position) > 0.01f ||
+                    Vector2.Distance(view.sizeDelta, tile.size) > 0.01f)
+                    throw new InvalidOperationException("未激活线条底图坐标或 Sprite 不正确：" + tile.assetPath);
             }
         }
 

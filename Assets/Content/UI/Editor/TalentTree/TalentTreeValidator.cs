@@ -71,7 +71,8 @@ namespace Dragon.UI.TalentTree.Editor
                 return errors;
             }
             if (!IsFinite(layout.smallNodeSize) || !IsFinite(layout.coreNodeSize) || !IsFinite(layout.lineWidth) ||
-                layout.smallNodeSize < 24f || layout.coreNodeSize < 32f || layout.lineWidth < 1f)
+                !IsFinite(layout.activeLineWidthMultiplier) || layout.smallNodeSize < 24f ||
+                layout.coreNodeSize < 32f || layout.lineWidth < 1f || layout.activeLineWidthMultiplier < 0.1f)
                 errors.Add("节点尺寸或线宽无效或低于允许值。");
 
             var byKey = new Dictionary<string, TalentTreeNodeLayout>();

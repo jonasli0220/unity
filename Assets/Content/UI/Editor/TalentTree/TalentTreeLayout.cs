@@ -29,6 +29,8 @@ namespace Dragon.UI.TalentTree.Editor
         [Min(32f)] public float coreNodeSize = 124f;
         [Min(1f)] public float lineWidth = 5f;
         public Color lineColor = new Color(0.65f, 0.55f, 0.36f, 1f);
+        [Min(0.1f)] public float activeLineWidthMultiplier = 1.25f;
+        public Color activeLineColor = new Color(1f, 0.8f, 0.35f, 1f);
         public Color smallFillColor = new Color(0.12f, 0.2f, 0.29f, 1f);
         public Color coreFillColor = new Color(0.25f, 0.18f, 0.24f, 1f);
         public Color nodeRimColor = new Color(0.71f, 0.59f, 0.37f, 1f);

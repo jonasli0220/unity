@@ -496,13 +496,17 @@ namespace Dragon.UI.TalentTree.Editor
             float coreSize = EditorGUILayout.FloatField("核心节点尺寸", layout.coreNodeSize);
             float lineWidth = EditorGUILayout.FloatField("线宽", layout.lineWidth);
             Color lineColor = EditorGUILayout.ColorField("线条颜色", layout.lineColor);
+            float activeLineWidthMultiplier = EditorGUILayout.FloatField("激活线宽倍率", layout.activeLineWidthMultiplier);
+            Color activeLineColor = EditorGUILayout.ColorField("激活线颜色", layout.activeLineColor);
             Color smallColor = EditorGUILayout.ColorField("小节点底色", layout.smallFillColor);
             Color coreColor = EditorGUILayout.ColorField("核心节点底色", layout.coreFillColor);
             Color rimColor = EditorGUILayout.ColorField("节点边框", layout.nodeRimColor);
             Sprite smallFrame = (Sprite)EditorGUILayout.ObjectField("小节点外框", layout.smallFrame, typeof(Sprite), false);
             Sprite coreFrame = (Sprite)EditorGUILayout.ObjectField("核心节点外框", layout.coreFrame, typeof(Sprite), false);
             if (smallSize != layout.smallNodeSize || coreSize != layout.coreNodeSize ||
-                lineWidth != layout.lineWidth || lineColor != layout.lineColor || smallColor != layout.smallFillColor ||
+                lineWidth != layout.lineWidth || lineColor != layout.lineColor ||
+                activeLineWidthMultiplier != layout.activeLineWidthMultiplier || activeLineColor != layout.activeLineColor ||
+                smallColor != layout.smallFillColor ||
                 coreColor != layout.coreFillColor || rimColor != layout.nodeRimColor || smallFrame != layout.smallFrame || coreFrame != layout.coreFrame)
             {
                 int group = BeginUndoGroup("编辑天赋树表现样式");
@@ -511,6 +515,8 @@ namespace Dragon.UI.TalentTree.Editor
                 layout.coreNodeSize = Mathf.Max(32f, coreSize);
                 layout.lineWidth = Mathf.Max(1f, lineWidth);
                 layout.lineColor = lineColor;
+                layout.activeLineWidthMultiplier = Mathf.Max(0.1f, activeLineWidthMultiplier);
+                layout.activeLineColor = activeLineColor;
                 layout.smallFillColor = smallColor;
                 layout.coreFillColor = coreColor;
                 layout.nodeRimColor = rimColor;
