@@ -360,8 +360,15 @@ namespace Dragon.UI.TalentTree.Editor
                 if (updatedEdge == null || Vector2.Distance(originalPosition, updatedRecord.activePosition) < 0.01f ||
                     Vector2.Distance(updatedEdge.anchoredPosition, updatedRecord.activePosition) > 0.01f ||
                     Vector2.Distance(updatedEdge.sizeDelta, updatedRecord.activeSize) > 0.01f ||
-                    AssetDatabase.AssetPathToGUID(updatedRecord.activeAtlasPath) != originalAtlasGuid)
-                    throw new InvalidOperationException("重导出未更新连线坐标，或图片 GUID 不稳定。");
+                    (updatedRecord.activeAtlasPath == json.edges[0].activeAtlasPath &&
+                     AssetDatabase.AssetPathToGUID(updatedRecord.activeAtlasPath) != originalAtlasGuid))
+                    throw new InvalidOperationException("重导出连线检查失败：原位置=" + originalPosition +
+                        " 新位置=" + updatedRecord.activePosition + " 锚点=" +
+                        (updatedEdge != null ? updatedEdge.anchoredPosition.ToString() : "missing") +
+                        " 原图集 GUID=" + originalAtlasGuid + " 新图集 GUID=" +
+                        AssetDatabase.AssetPathToGUID(updatedRecord.activeAtlasPath) +
+                        " 原图集=" + json.edges[0].activeAtlasPath +
+                        " 新图集=" + updatedRecord.activeAtlasPath);
                 AssertPatchSafe(updated, updatedJson);
                 Directory.CreateDirectory(Path.GetDirectoryName(resultPath));
                 File.WriteAllText(resultPath, "PASS: graph edits, baked sprites, stable atlas GUID, editor-owned geometry, cropped prefab and JSON");

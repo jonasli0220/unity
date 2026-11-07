@@ -186,8 +186,8 @@ namespace Dragon.UI.TalentTree.Editor
             var buckets = curves.GroupBy(curve =>
             {
                 Vector2 center = (curve.Start + curve.End) * 0.5f;
-                return new Vector2Int(Mathf.FloorToInt(center.x / TileSize),
-                    Mathf.FloorToInt(center.y / TileSize));
+                return new Vector2Int(Mathf.FloorToInt((center.x + TileSize * 0.5f) / TileSize),
+                    Mathf.FloorToInt((center.y + TileSize * 0.5f) / TileSize));
             }).OrderBy(group => group.Key.x).ThenBy(group => group.Key.y);
             foreach (var bucket in buckets)
             {
