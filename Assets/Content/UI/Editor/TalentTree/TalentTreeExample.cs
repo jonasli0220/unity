@@ -24,7 +24,9 @@ namespace Dragon.UI.TalentTree.Editor
         [Serializable] private sealed class ExportNodeSummary
         {
             public int id;
+            public string type;
             public Vector2 position;
+            public float size;
             public int[] prerequisiteIds;
         }
 
@@ -110,6 +112,9 @@ namespace Dragon.UI.TalentTree.Editor
             var merge = json.nodes.First(node => node.id == 14);
             if (!merge.prerequisiteIds.SequenceEqual(new[] { 8, 9 }))
                 throw new InvalidOperationException("Merge-node AND prerequisites were exported incorrectly.");
+            if (json.nodes.Any(node => Mathf.Abs(node.size -
+                (node.type == nameof(TalentNodeType.Core) ? layout.coreNodeSize : layout.smallNodeSize)) > 0.01f))
+                throw new InvalidOperationException("Exported node sizes differ from the authoring layout.");
             var bounds = TalentTreeBoundsUtility.CalculateOriginCentered(definition, layout);
             if (Vector2.Distance(merge.position, layout.FindNode("example-14").position) > 0.01f)
                 throw new InvalidOperationException("Example layout position was not merged into the prefab.");
@@ -386,16 +391,21 @@ namespace Dragon.UI.TalentTree.Editor
 
         private static void AssertPatchSafe(GameObject prefab, ExportSummary json)
         {
-            if (prefab.GetComponent<ScrollRect>() == null || prefab.GetComponent<RectMask2D>() == null ||
+            if (prefab.GetComponent<ScrollRect>() == null ||
+                prefab.GetComponentsInChildren<RectMask2D>(true).Length != 0 ||
+                prefab.GetComponentsInChildren<Mask>(true).Length != 0 ||
                 prefab.GetComponent<TalentTreeData>() != null ||
                 prefab.GetComponentsInChildren<UILineRenderer>(true).Length != 0 ||
                 prefab.GetComponentsInChildren<Graphic>(true).Any(graphic => graphic.GetComponent<CanvasRenderer>() == null) ||
                 prefab.GetComponentsInChildren<MonoBehaviour>(true).Any(component =>
-                    component == null || !(component is Image || component is RectMask2D ||
+                    component == null || !(component is Image ||
                         component is ScrollRect)))
-                throw new InvalidOperationException("Prefab 仍引用未随包体发布的脚本或缺少必要 UGUI 组件。");
+                throw new InvalidOperationException("Prefab 含有裁切组件、未随包体发布的脚本或缺少必要 UGUI 组件。");
             if (json.version != 6 || json.inactiveTiles == null || json.generatedAssets == null)
                 throw new InvalidOperationException("缺少 Sprite 烘焙清单。");
+            if (json.nodes == null || json.nodes.Any(node =>
+                node.size <= 0f || float.IsNaN(node.size) || float.IsInfinity(node.size)))
+                throw new InvalidOperationException("JSON 节点缺少有效的编辑器显示尺寸。");
             var nodeLayer = prefab.transform.Find("Content/Nodes");
             var edgeLayer = prefab.transform.Find("Content/ActiveEdges");
             var tileLayer = prefab.transform.Find("Content/InactiveTiles");

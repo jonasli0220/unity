@@ -34,6 +34,7 @@ namespace Dragon.UI.TalentTree.Editor
             public int id;
             public string type;
             public Vector2 position;
+            public float size;
             public string iconAssetPath;
             public int[] prerequisiteIds;
         }
@@ -120,6 +121,7 @@ namespace Dragon.UI.TalentTree.Editor
                 int[] prerequisites = prerequisitesByKey.TryGetValue(node.key, out var incoming)
                     ? incoming.OrderBy(id => id).ToArray() : Array.Empty<int>();
                 exportNodes[i] = new ExportNode { id = node.id, type = node.type.ToString(), position = visual.position,
+                    size = node.type == TalentNodeType.Core ? layout.coreNodeSize : layout.smallNodeSize,
                     iconAssetPath = visual.icon != null ? AssetDatabase.GetAssetPath(visual.icon) : string.Empty,
                     prerequisiteIds = prerequisites };
             }
@@ -234,7 +236,7 @@ namespace Dragon.UI.TalentTree.Editor
         private static GameObject BuildPrefab(string name, TalentTreeContentBounds bounds,
             TalentTreeSpriteBakeResult baked)
         {
-            var root = new GameObject(name, typeof(RectTransform), typeof(CanvasRenderer), typeof(Image), typeof(RectMask2D), typeof(ScrollRect));
+            var root = new GameObject(name, typeof(RectTransform), typeof(CanvasRenderer), typeof(Image), typeof(ScrollRect));
             var viewport = (RectTransform)root.transform;
             viewport.anchorMin = Vector2.zero;
             viewport.anchorMax = Vector2.one;
