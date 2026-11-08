@@ -16,7 +16,7 @@ namespace Dragon.UI.TalentTree.Editor
 
         [Serializable] private sealed class ExportDocument
         {
-            public int version = 5;
+            public int version = 6;
             public string sourceGuid;
             public string layoutGuid;
             public string name;
@@ -157,7 +157,7 @@ namespace Dragon.UI.TalentTree.Editor
                     inactiveTiles = baked.tiles.Select(tile => new ExportTile { x = tile.x, y = tile.y,
                         position = tile.position, size = tile.size, assetPath = tile.assetPath }).ToArray(),
                     generatedAssets = baked.generatedAssets.ToArray() };
-                root = BuildPrefab(name, bounds, orderedNodes, nodeLayoutsByKey, baked);
+                root = BuildPrefab(name, bounds, baked);
                 var missingRenderer = root.GetComponentsInChildren<Graphic>(true)
                     .FirstOrDefault(graphic => graphic.GetComponent<CanvasRenderer>() == null);
                 if (missingRenderer != null)
@@ -232,11 +232,8 @@ namespace Dragon.UI.TalentTree.Editor
         }
 
         private static GameObject BuildPrefab(string name, TalentTreeContentBounds bounds,
-            TalentTreeAuthorNode[] orderedNodes,
-            Dictionary<string, TalentTreeNodeLayout> nodeLayoutsByKey,
             TalentTreeSpriteBakeResult baked)
         {
-            var positions = orderedNodes.ToDictionary(node => node.key, node => nodeLayoutsByKey[node.key].position);
             var root = new GameObject(name, typeof(RectTransform), typeof(CanvasRenderer), typeof(Image), typeof(RectMask2D), typeof(ScrollRect));
             var viewport = (RectTransform)root.transform;
             viewport.anchorMin = Vector2.zero;
@@ -262,20 +259,8 @@ namespace Dragon.UI.TalentTree.Editor
                 image.sprite = tile.sprite;
                 image.raycastTarget = false;
             }
-            var edgeLayer = NewStretchRect("ActiveEdges", content);
-            foreach (var edge in baked.edges)
-            {
-                var view = NewRect("Edge " + edge.fromId + " to " + edge.toId,
-                    edgeLayer, edge.size);
-                view.anchoredPosition = edge.position;
-            }
-            var nodeLayer = NewStretchRect("Nodes", content);
-            for (int i = 0; i < orderedNodes.Length; i++)
-            {
-                var node = orderedNodes[i];
-                var view = NewRect("Node " + node.id, nodeLayer, Vector2.zero);
-                view.anchoredPosition = positions[node.key];
-            }
+            NewStretchRect("ActiveEdges", content);
+            NewStretchRect("Nodes", content);
             return root;
         }
 
