@@ -74,6 +74,9 @@ namespace Dragon.UI.TalentTree.Editor
                 !IsFinite(layout.activeLineWidthMultiplier) || layout.smallNodeSize < 24f ||
                 layout.coreNodeSize < 32f || layout.lineWidth < 1f || layout.activeLineWidthMultiplier < 0.1f)
                 errors.Add("节点尺寸或线宽无效或低于允许值。");
+            if (layout.lineTextureResolution < TalentTreeLineResolution.Full ||
+                layout.lineTextureResolution > TalentTreeLineResolution.Quarter)
+                errors.Add("线条导出分辨率无效，请选择原尺寸、1/2 或 1/4。");
 
             var byKey = new Dictionary<string, TalentTreeNodeLayout>();
             foreach (var node in layout.nodes)

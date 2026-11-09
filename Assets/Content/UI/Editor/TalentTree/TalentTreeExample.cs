@@ -345,6 +345,36 @@ namespace Dragon.UI.TalentTree.Editor
                     json.contentCenter != Vector2.zero || json.nodes == null ||
                     json.nodes.Any(node => Vector2.Distance(node.position, layout.FindNode("example-" + node.id).position) > 0.01f))
                     throw new InvalidOperationException("临时树 JSON 画布数据不正确。");
+                var originalTiles = json.inactiveTiles.ToDictionary(tile => (tile.x, tile.y));
+                layout.lineTextureResolution = TalentTreeLineResolution.Half;
+                if (!TalentTreeExporter.Export(definition, layout, out string halfMessage))
+                    throw new InvalidOperationException(halfMessage);
+                var halfPrefab = AssetDatabase.LoadAssetAtPath<GameObject>(prefabPath);
+                var halfJson = JsonUtility.FromJson<ExportSummary>(File.ReadAllText(Path.GetFullPath(jsonPath)));
+                if (halfJson.inactiveTiles.Length != originalTiles.Count ||
+                    halfJson.edges.Length != json.edges.Length || halfJson.nodes.Length != json.nodes.Length)
+                    throw new InvalidOperationException("半尺寸导出改变了图结构或底图分块。");
+                foreach (var tile in halfJson.inactiveTiles)
+                {
+                    var originalTile = originalTiles[(tile.x, tile.y)];
+                    var texture = AssetDatabase.LoadAssetAtPath<Texture2D>(tile.assetPath);
+                    var importer = AssetImporter.GetAtPath(tile.assetPath) as TextureImporter;
+                    if (texture == null || texture.width != 1024 || texture.height != 1024 ||
+                        importer == null || Mathf.Abs(importer.spritePixelsPerUnit - 0.5f) > 0.001f ||
+                        tile.position != originalTile.position || tile.size != originalTile.size)
+                        throw new InvalidOperationException("半尺寸底图像素或画布坐标不正确：" + tile.assetPath);
+                }
+                foreach (var edge in halfJson.edges)
+                {
+                    var originalEdge = json.edges.First(record => record.fromId == edge.fromId && record.toId == edge.toId);
+                    if (Mathf.Abs(edge.activePixelsPerUnit - originalEdge.activePixelsPerUnit * 0.5f) > 0.001f)
+                        throw new InvalidOperationException("半尺寸激活线像素密度不正确：" + edge.fromId + " to " + edge.toId);
+                }
+                foreach (var node in halfJson.nodes)
+                    if (node.position != json.nodes.First(originalNode => originalNode.id == node.id).position)
+                        throw new InvalidOperationException("半尺寸导出改变了节点坐标：" + node.id);
+                AssertPatchSafe(halfPrefab, halfJson);
+                json = halfJson;
                 int styledFromId = json.edges[0].fromId;
                 int styledToId = json.edges[0].toId;
                 Vector2 originalPosition = json.edges[0].activePosition;
@@ -370,7 +400,7 @@ namespace Dragon.UI.TalentTree.Editor
                         " 新图集=" + updatedRecord.activeAtlasPath);
                 AssertPatchSafe(updated, updatedJson);
                 Directory.CreateDirectory(Path.GetDirectoryName(resultPath));
-                File.WriteAllText(resultPath, "PASS: graph edits, baked sprites, stable atlas GUID, editor-owned geometry, cropped prefab and JSON");
+                File.WriteAllText(resultPath, "PASS: graph edits, half-resolution baked sprites, stable atlas GUID, editor-owned geometry, cropped prefab and JSON");
                 Debug.Log("Talent Tree graph edit checks passed. " + message);
             }
             finally

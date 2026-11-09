@@ -17,6 +17,8 @@ namespace Dragon.UI.TalentTree.Editor
         private const float MinZoom = 0.001f;
         private const float MaxZoom = 2.5f;
         private const int DefinitionPickerId = 0x54414C54;
+        private static readonly string[] LineTextureResolutionLabels =
+            { "原尺寸（100%）", "半尺寸（50%）", "四分之一（25%）" };
         private static string LastDefinitionGuidKey => "Dragon.TalentTree.LastDefinitionGuid." + Application.dataPath;
         private TalentTreeDefinition definition;
         private TalentTreeLayout layout;
@@ -498,6 +500,9 @@ namespace Dragon.UI.TalentTree.Editor
             Color lineColor = EditorGUILayout.ColorField("线条颜色", layout.lineColor);
             float activeLineWidthMultiplier = EditorGUILayout.FloatField("激活线宽倍率", layout.activeLineWidthMultiplier);
             Color activeLineColor = EditorGUILayout.ColorField("激活线颜色", layout.activeLineColor);
+            var lineTextureResolution = (TalentTreeLineResolution)EditorGUILayout.Popup("线条导出分辨率",
+                (int)layout.lineTextureResolution, LineTextureResolutionLabels);
+            GUILayout.Label("仅改变导出图片像素；画布坐标、显示尺寸和线宽不变。", EditorStyles.wordWrappedMiniLabel);
             Color smallColor = EditorGUILayout.ColorField("小节点底色", layout.smallFillColor);
             Color coreColor = EditorGUILayout.ColorField("核心节点底色", layout.coreFillColor);
             Color rimColor = EditorGUILayout.ColorField("节点边框", layout.nodeRimColor);
@@ -506,6 +511,7 @@ namespace Dragon.UI.TalentTree.Editor
             if (smallSize != layout.smallNodeSize || coreSize != layout.coreNodeSize ||
                 lineWidth != layout.lineWidth || lineColor != layout.lineColor ||
                 activeLineWidthMultiplier != layout.activeLineWidthMultiplier || activeLineColor != layout.activeLineColor ||
+                lineTextureResolution != layout.lineTextureResolution ||
                 smallColor != layout.smallFillColor ||
                 coreColor != layout.coreFillColor || rimColor != layout.nodeRimColor || smallFrame != layout.smallFrame || coreFrame != layout.coreFrame)
             {
@@ -517,6 +523,7 @@ namespace Dragon.UI.TalentTree.Editor
                 layout.lineColor = lineColor;
                 layout.activeLineWidthMultiplier = Mathf.Max(0.1f, activeLineWidthMultiplier);
                 layout.activeLineColor = activeLineColor;
+                layout.lineTextureResolution = lineTextureResolution;
                 layout.smallFillColor = smallColor;
                 layout.coreFillColor = coreColor;
                 layout.nodeRimColor = rimColor;

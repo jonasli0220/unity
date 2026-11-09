@@ -86,22 +86,24 @@ namespace Dragon.UI.TalentTree.Editor
                 AssetDatabase.CreateFolder(parent, Path.GetFileName(assetFolder));
             }
             var result = new TalentTreeSpriteBakeResult();
+            float textureScale = layout.LineTextureScale;
+            int tilePixels = Mathf.RoundToInt(TileSize * textureScale);
             try
             {
-                var tiles = GroupTiles(curves, layout.lineWidth);
+                var tiles = GroupTiles(curves, layout.lineWidth, textureScale);
                 int tileIndex = 0;
                 foreach (var pair in tiles.OrderBy(pair => pair.Key.x).ThenBy(pair => pair.Key.y))
                 {
                     EditorUtility.DisplayProgressBar("烘焙天赋树线条",
                         "未激活底图 " + (tileIndex + 1) + "/" + tiles.Count,
                         0.7f * tileIndex / Mathf.Max(1, tiles.Count));
-                    var pixels = new Color32[TileSize * TileSize];
+                    var pixels = new Color32[tilePixels * tilePixels];
                     Vector2 tileMin = new Vector2(pair.Key.x * TileSize, pair.Key.y * TileSize);
                     foreach (var curve in pair.Value)
-                        Rasterize(pixels, TileSize, TileSize, tileMin, 1, 0, 0, curve,
+                        Rasterize(pixels, tilePixels, tilePixels, tileMin, textureScale, 0, 0, curve,
                             layout.lineWidth, layout.lineColor);
                     string path = assetFolder + "/Inactive_" + pair.Key.x + "_" + pair.Key.y + ".png";
-                    WriteTexture(path, TileSize, TileSize, pixels, false, null, 1);
+                    WriteTexture(path, tilePixels, tilePixels, pixels, false, null, textureScale);
                     var sprite = AssetDatabase.LoadAssetAtPath<Sprite>(path);
                     if (sprite == null) throw new InvalidOperationException("无法导入未激活线条图片：" + path);
                     result.tiles.Add(new TalentTreeBakedTile
@@ -113,7 +115,8 @@ namespace Dragon.UI.TalentTree.Editor
                     tileIndex++;
                 }
 
-                var placements = PackActive(curves, layout.lineWidth * layout.activeLineWidthMultiplier);
+                var placements = PackActive(curves, layout.lineWidth * layout.activeLineWidthMultiplier,
+                    textureScale);
                 var atlasGroups = placements.GroupBy(placement => placement.atlasName)
                     .OrderBy(group => group.Key, StringComparer.Ordinal).ToArray();
                 for (int atlasIndex = 0; atlasIndex < atlasGroups.Length; atlasIndex++)
@@ -143,7 +146,8 @@ namespace Dragon.UI.TalentTree.Editor
                         item.record.atlasPath = path;
                         result.edges.Add(item.record);
                     }
-                    WriteTexture(path, width, height, pixels, true, metadata.ToArray(), ActivePixelsPerUnit);
+                    WriteTexture(path, width, height, pixels, true, metadata.ToArray(),
+                        ActivePixelsPerUnit * textureScale);
                     result.generatedAssets.Add(path);
                 }
                 result.edges.Sort((a, b) => a.fromId != b.fromId ? a.fromId.CompareTo(b.fromId) : a.toId.CompareTo(b.toId));
@@ -154,10 +158,10 @@ namespace Dragon.UI.TalentTree.Editor
         }
 
         private static Dictionary<Vector2Int, List<TalentTreeBakeCurve>> GroupTiles(
-            IReadOnlyList<TalentTreeBakeCurve> curves, float lineWidth)
+            IReadOnlyList<TalentTreeBakeCurve> curves, float lineWidth, float textureScale)
         {
             var tiles = new Dictionary<Vector2Int, List<TalentTreeBakeCurve>>();
-            float margin = lineWidth * 0.5f + 1f;
+            float margin = lineWidth * 0.5f + 1f / textureScale;
             foreach (var curve in curves)
             {
                 ControlBounds(curve, out Vector2 min, out Vector2 max);
@@ -180,7 +184,8 @@ namespace Dragon.UI.TalentTree.Editor
             return tiles;
         }
 
-        private static List<Placement> PackActive(IReadOnlyList<TalentTreeBakeCurve> curves, float lineWidth)
+        private static List<Placement> PackActive(IReadOnlyList<TalentTreeBakeCurve> curves,
+            float lineWidth, float textureScale)
         {
             var result = new List<Placement>(curves.Count);
             var buckets = curves.GroupBy(curve =>
@@ -195,7 +200,7 @@ namespace Dragon.UI.TalentTree.Editor
                 foreach (var curve in bucket.OrderBy(curve => curve.FromId).ThenBy(curve => curve.ToId))
                 {
                     ControlBounds(curve, out Vector2 min, out Vector2 max);
-                    float pixelsPerUnit = ActivePixelsPerUnit;
+                    float pixelsPerUnit = ActivePixelsPerUnit * textureScale;
                     int left = 0, bottom = 0, right = 0, top = 0, width = 0, height = 0;
                     for (int resolution = 0; resolution < 12; resolution++)
                     {

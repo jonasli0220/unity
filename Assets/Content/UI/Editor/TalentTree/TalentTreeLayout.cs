@@ -4,6 +4,13 @@ using UnityEngine;
 
 namespace Dragon.UI.TalentTree.Editor
 {
+    public enum TalentTreeLineResolution
+    {
+        Full = 0,
+        Half = 1,
+        Quarter = 2
+    }
+
     [Serializable]
     public sealed class TalentTreeNodeLayout
     {
@@ -28,6 +35,7 @@ namespace Dragon.UI.TalentTree.Editor
         [Min(24f)] public float smallNodeSize = 72f;
         [Min(32f)] public float coreNodeSize = 124f;
         [Min(1f)] public float lineWidth = 5f;
+        public TalentTreeLineResolution lineTextureResolution = TalentTreeLineResolution.Full;
         public Color lineColor = new Color(0.65f, 0.55f, 0.36f, 1f);
         [Min(0.1f)] public float activeLineWidthMultiplier = 1.25f;
         public Color activeLineColor = new Color(1f, 0.8f, 0.35f, 1f);
@@ -42,5 +50,8 @@ namespace Dragon.UI.TalentTree.Editor
         public TalentTreeNodeLayout FindNode(string key) => nodes.Find(node => node != null && node.key == key);
         public TalentTreeEdgeLayout FindEdge(string fromKey, string toKey) =>
             edges.Find(edge => edge != null && edge.fromKey == fromKey && edge.toKey == toKey);
+
+        public float LineTextureScale => lineTextureResolution == TalentTreeLineResolution.Half ? 0.5f :
+            lineTextureResolution == TalentTreeLineResolution.Quarter ? 0.25f : 1f;
     }
 }
