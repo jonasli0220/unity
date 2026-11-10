@@ -60,6 +60,7 @@ namespace Dragon.UI.EditorTools
         private Camera previewCamera;
         private Canvas previewCanvas;
         private bool previewDirty = true;
+        private bool draftDirty;
         private bool createTextMode;
         private int dragMode;
         private Vector2 dragStart;
@@ -98,6 +99,7 @@ namespace Dragon.UI.EditorTools
 
         private void OnUndoRedo()
         {
+            draftDirty = true;
             previewDirty = true;
             Repaint();
         }
@@ -282,6 +284,7 @@ namespace Dragon.UI.EditorTools
                 Undo.RecordObject(draft, "删除漫画文本框");
                 draft.texts.RemoveAt(draft.selectedText);
                 draft.selectedText = Mathf.Clamp(draft.selectedText - 1, -1, draft.texts.Count - 1);
+                draftDirty = true;
                 MarkPreviewDirty();
             }
         }
@@ -299,6 +302,7 @@ namespace Dragon.UI.EditorTools
                     ComicTextBox box = new ComicTextBox { rect = new Rect(pagePos.x, pagePos.y, 1, 1) };
                     draft.texts.Add(box);
                     draft.selectedText = draft.texts.Count - 1;
+                    draftDirty = true;
                     dragMode = 3;
                     dragStart = pagePos;
                     createTextMode = false;
@@ -336,6 +340,7 @@ namespace Dragon.UI.EditorTools
                     Vector2 max = Vector2.Max(dragStart, pagePos);
                     box.rect = new Rect(min.x, min.y, Mathf.Max(1, max.x - min.x), Mathf.Max(1, max.y - min.y));
                 }
+                draftDirty = true;
                 MarkPreviewDirty();
                 evt.Use();
             }
@@ -363,20 +368,23 @@ namespace Dragon.UI.EditorTools
             }
             errorMessage = null;
             if (draft.folderPath == path) return;
+            if (!ConfirmDiscard()) return;
             Undo.RecordObject(draft, "选择漫画资源文件夹");
             draft.folderPath = path;
             EditorPrefs.SetString(PrefsFolderKey, path);
-            NewPage();
+            NewPage(true);
         }
 
-        private void NewPage()
+        private void NewPage(bool skipDiscardCheck = false)
         {
+            if (!skipDiscardCheck && !ConfirmDiscard()) return;
             Undo.RecordObject(draft, "新建漫画页");
             draft.pageNumber = NextPageNumber(draft.folderPath);
             draft.imagePath = string.Empty;
             draft.imageChanged = false;
             draft.texts.Clear();
             draft.selectedText = -1;
+            draftDirty = false;
             createTextMode = false;
             errorMessage = null;
             ReleaseImage();
@@ -399,6 +407,7 @@ namespace Dragon.UI.EditorTools
             Undo.RecordObject(draft, "选择漫画背景图片");
             draft.imagePath = Normalize(path);
             draft.imageChanged = true;
+            draftDirty = true;
             errorMessage = null;
             ReleaseImage();
             MarkPreviewDirty();
@@ -406,6 +415,7 @@ namespace Dragon.UI.EditorTools
 
         private void LoadPage(int number)
         {
+            if (!ConfirmDiscard()) return;
             string path = PageAssetPath(draft.folderPath, number);
             GameObject page = null;
             try
@@ -416,11 +426,7 @@ namespace Dragon.UI.EditorTools
                 Image image = root.Find("img_bg")?.GetComponent<Image>();
                 if (image == null || image.sprite == null) throw new InvalidOperationException("prefab 缺少 img_bg 图片。");
                 string imagePath = AssetDatabase.GetAssetPath(image.sprite);
-                Undo.RecordObject(draft, "打开漫画页");
-                draft.pageNumber = number;
-                draft.imagePath = imagePath;
-                draft.imageChanged = false;
-                draft.texts.Clear();
+                List<ComicTextBox> loadedTexts = new List<ComicTextBox>();
                 List<Transform> textNodes = new List<Transform>();
                 foreach (Transform child in root)
                     if (Regex.IsMatch(child.name, @"^txt_\d+$")) textNodes.Add(child);
@@ -437,7 +443,7 @@ namespace Dragon.UI.EditorTools
                     Rect pageRect = RectFromTransform(rect);
                     int horizontal = AlignmentHorizontal(tmp.alignment);
                     int vertical = AlignmentVertical(tmp.alignment);
-                    draft.texts.Add(new ComicTextBox
+                    loadedTexts.Add(new ComicTextBox
                     {
                         text = tmp.text,
                         rect = pageRect,
@@ -450,7 +456,13 @@ namespace Dragon.UI.EditorTools
                         maxSize = Mathf.Max(1, tmp.fontSizeMax)
                     });
                 }
+                Undo.RecordObject(draft, "打开漫画页");
+                draft.pageNumber = number;
+                draft.imagePath = imagePath;
+                draft.imageChanged = false;
+                draft.texts = loadedTexts;
                 draft.selectedText = draft.texts.Count > 0 ? 0 : -1;
+                draftDirty = false;
                 ReleaseImage();
                 MarkPreviewDirty();
                 errorMessage = null;
@@ -501,6 +513,7 @@ namespace Dragon.UI.EditorTools
                 AssetDatabase.SaveAssets();
                 draft.imagePath = imagePath;
                 draft.imageChanged = false;
+                draftDirty = false;
                 errorMessage = null;
                 Selection.activeObject = AssetDatabase.LoadAssetAtPath<GameObject>(prefabPath);
                 EditorGUIUtility.PingObject(Selection.activeObject);
@@ -720,7 +733,14 @@ namespace Dragon.UI.EditorTools
         {
             Undo.RecordObject(draft, "编辑漫画文本框");
             mutation();
+            draftDirty = true;
             MarkPreviewDirty();
+        }
+
+        private bool ConfirmDiscard()
+        {
+            return !draftDirty || EditorUtility.DisplayDialog("未导出修改",
+                "当前页面有未导出的修改。离开页面将丢失这些修改。", "继续离开", "留在当前页");
         }
 
         private void MarkPreviewDirty()
