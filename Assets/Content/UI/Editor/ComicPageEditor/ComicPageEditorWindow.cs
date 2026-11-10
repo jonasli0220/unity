@@ -4,22 +4,26 @@ using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
 using TMPro;
+using TMPro.EditorUtilities;
 using UnityEditor;
 using UnityEngine;
 using UnityEngine.UI;
+using XSolution.XMultilanguage;
 
 namespace Dragon.UI.EditorTools
 {
     [Serializable]
     internal sealed class ComicTextBox
     {
-        public string text = "请输入文字";
+        public static readonly Color DefaultColor = new Color(0.8588236f, 1f, 0.6745098f, 1f);
+
+        public string text = "##请输入文字";
         public Rect rect = new Rect(760, 450, 400, 150);
         public int anchor = 4;
         public bool followAnchor = true;
         public int horizontal = 1;
         public int vertical = 1;
-        public Color color = new Color(0.8588236f, 1f, 0.6745098f, 1f);
+        public Color color = DefaultColor;
         public float minSize = 0;
         public float maxSize = 30;
     }
@@ -39,15 +43,11 @@ namespace Dragon.UI.EditorTools
         private const string BaseFolder = "Assets/Content/UI/Prefab/exterior_hero_story/resource";
         private const string TemplatePath = BaseFolder + "/a10_24370/comic/comic_1.prefab";
         private const string PrefsFolderKey = "Dragon.ComicPageEditor.TargetFolder";
+        private const string PrefsTextColorKey = "Dragon.ComicPageEditor.LastTextColor";
         private const int PageWidth = 1920;
         private const int PageHeight = 1080;
         private const float InspectorWidth = 294f;
-        private static readonly string[] AnchorLabels =
-        {
-            "左上", "上中", "右上", "左中", "居中", "右中", "左下", "下中", "右下"
-        };
-        private static readonly string[] HorizontalLabels = { "左", "中", "右" };
-        private static readonly string[] VerticalLabels = { "上", "中", "下" };
+        private const float LineSpacing = -10f;
 
         private ComicPageDraft draft;
         private Texture2D pageTexture;
@@ -116,7 +116,7 @@ namespace Dragon.UI.EditorTools
             Rect available = GUILayoutUtility.GetRect(400, 400, GUILayout.ExpandWidth(true), GUILayout.ExpandHeight(true));
             DrawCanvas(available);
             EditorGUILayout.BeginVertical(GUILayout.Width(InspectorWidth));
-            inspectorScroll = EditorGUILayout.BeginScrollView(inspectorScroll);
+            inspectorScroll = EditorGUILayout.BeginScrollView(inspectorScroll, GUILayout.Width(InspectorWidth));
             DrawInspector();
             EditorGUILayout.EndScrollView();
             EditorGUILayout.EndVertical();
@@ -243,7 +243,8 @@ namespace Dragon.UI.EditorTools
         private void DrawTextInspector(ComicTextBox box)
         {
             EditorGUILayout.LabelField("文字", EditorStyles.boldLabel);
-            string value = EditorGUILayout.TextArea(box.text, GUILayout.MinHeight(72));
+            Rect textArea = EditorGUILayout.GetControlRect(false, 96f, GUILayout.MaxWidth(InspectorWidth - 20f));
+            string value = EditorGUI.TextArea(textArea, box.text, TMP_UIStyleManager.wrappingTextArea);
             if (value != box.text) Change(() => box.text = value);
 
             EditorGUILayout.LabelField("位置和尺寸", EditorStyles.boldLabel);
@@ -256,21 +257,27 @@ namespace Dragon.UI.EditorTools
             }
 
             EditorGUILayout.LabelField("锚点和对齐", EditorStyles.boldLabel);
-            int anchor = EditorGUILayout.Popup("锚点", box.anchor, AnchorLabels);
+            int anchor = DrawAlignmentButtons("锚点", box.anchor % 3, box.anchor / 3);
             if (anchor != box.anchor) Change(() => box.anchor = anchor);
             bool follow = EditorGUILayout.Toggle("文字对齐跟随锚点", box.followAnchor);
             if (follow != box.followAnchor) Change(() => box.followAnchor = follow);
             if (!box.followAnchor)
             {
-                int horizontal = EditorGUILayout.Popup("水平对齐", box.horizontal, HorizontalLabels);
-                int vertical = EditorGUILayout.Popup("垂直对齐", box.vertical, VerticalLabels);
-                if (horizontal != box.horizontal || vertical != box.vertical)
-                    Change(() => { box.horizontal = horizontal; box.vertical = vertical; });
+                int alignment = DrawAlignmentButtons("文字对齐", box.horizontal, box.vertical);
+                if (alignment != box.vertical * 3 + box.horizontal)
+                    Change(() => { box.horizontal = alignment % 3; box.vertical = alignment / 3; });
             }
 
             EditorGUILayout.LabelField("文字样式", EditorStyles.boldLabel);
             Color color = EditorGUILayout.ColorField("字色", box.color);
-            if (color != box.color) Change(() => box.color = color);
+            if (color != box.color)
+            {
+                Change(() => box.color = color);
+                EditorPrefs.SetFloat(PrefsTextColorKey + ".R", color.r);
+                EditorPrefs.SetFloat(PrefsTextColorKey + ".G", color.g);
+                EditorPrefs.SetFloat(PrefsTextColorKey + ".B", color.b);
+                EditorPrefs.SetFloat(PrefsTextColorKey + ".A", color.a);
+            }
             float min = EditorGUILayout.FloatField("Auto Size 最小", box.minSize);
             float max = EditorGUILayout.FloatField("Auto Size 最大", box.maxSize);
             min = Mathf.Clamp(min, 0, 300);
@@ -289,6 +296,42 @@ namespace Dragon.UI.EditorTools
             }
         }
 
+        private static int DrawAlignmentButtons(string label, int horizontal, int vertical)
+        {
+            const float buttonWidth = 24f;
+            const float buttonHeight = 20f;
+            const float rowGap = 3f;
+            Rect row = EditorGUILayout.GetControlRect(false, buttonHeight * 2 + rowGap);
+            EditorGUI.LabelField(new Rect(row.x, row.y, 84f, buttonHeight), label);
+            Rect button = new Rect(row.x + 88f, row.y, buttonWidth, buttonHeight);
+            horizontal = DrawAlignmentRow(button, horizontal, TMP_UIStyleManager.alignContentA);
+            button.y += buttonHeight + rowGap;
+            vertical = DrawAlignmentRow(button, vertical, TMP_UIStyleManager.alignContentB);
+            return vertical * 3 + horizontal;
+        }
+
+        private static int DrawAlignmentRow(Rect button, int selected, GUIContent[] icons)
+        {
+            for (int i = 0; i < 3; i++)
+            {
+                GUIStyle style = i == 0 ? TMP_UIStyleManager.alignmentButtonLeft
+                    : i == 2 ? TMP_UIStyleManager.alignmentButtonRight : TMP_UIStyleManager.alignmentButtonMid;
+                if (TMP_EditorUtility.EditorToggle(button, i == selected, icons[i], style)) selected = i;
+                button.x += button.width;
+            }
+            return selected;
+        }
+
+        private static Color ReadLastTextColor()
+        {
+            Color fallback = ComicTextBox.DefaultColor;
+            return new Color(
+                EditorPrefs.GetFloat(PrefsTextColorKey + ".R", fallback.r),
+                EditorPrefs.GetFloat(PrefsTextColorKey + ".G", fallback.g),
+                EditorPrefs.GetFloat(PrefsTextColorKey + ".B", fallback.b),
+                EditorPrefs.GetFloat(PrefsTextColorKey + ".A", fallback.a));
+        }
+
         private void HandleCanvasEvent(Rect canvas)
         {
             Event evt = Event.current;
@@ -299,7 +342,11 @@ namespace Dragon.UI.EditorTools
                 if (createTextMode)
                 {
                     Undo.RecordObject(draft, "创建漫画文本框");
-                    ComicTextBox box = new ComicTextBox { rect = new Rect(pagePos.x, pagePos.y, 1, 1) };
+                    ComicTextBox box = new ComicTextBox
+                    {
+                        rect = new Rect(pagePos.x, pagePos.y, 1, 1),
+                        color = ReadLastTextColor()
+                    };
                     draft.texts.Add(box);
                     draft.selectedText = draft.texts.Count - 1;
                     draftDirty = true;
@@ -585,11 +632,14 @@ namespace Dragon.UI.EditorTools
                 (1 - anchor.y) * PageHeight - box.rect.y - (1 - anchor.y) * box.rect.height);
             rect.localScale = Vector3.one;
             text.text = box.text;
+            if (text is MultiLanguageTMPText localizedText && box.text?.StartsWith("##", StringComparison.Ordinal) == true)
+                localizedText._multiLanguageTextID = string.Empty;
             text.color = box.color;
             text.enableAutoSizing = true;
             text.fontSizeMin = box.minSize;
             text.fontSizeMax = box.maxSize;
             text.fontSize = box.maxSize;
+            text.lineSpacing = LineSpacing;
             int horizontal = box.followAnchor ? x : box.horizontal;
             int vertical = box.followAnchor ? y : box.vertical;
             text.alignment = Alignment(vertical, horizontal);
