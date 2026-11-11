@@ -77,6 +77,9 @@ namespace Dragon.UI.TalentTree.Editor
             if (layout.lineTextureResolution < TalentTreeLineResolution.Full ||
                 layout.lineTextureResolution > TalentTreeLineResolution.Quarter)
                 errors.Add("线条导出分辨率无效，请选择原尺寸、1/2 或 1/4。");
+            if (layout.guideMode < TalentTreeGuideMode.SixSectors ||
+                layout.guideMode > TalentTreeGuideMode.Horizontal1080)
+                errors.Add("辅助线模式无效，请选择横向 1080 或六片区。");
 
             var byKey = new Dictionary<string, TalentTreeNodeLayout>();
             foreach (var node in layout.nodes)
@@ -109,6 +112,11 @@ namespace Dragon.UI.TalentTree.Editor
             int missingEdges = definition.edges.Count(edge => !edgeKeys.Contains(EdgeKey(edge.fromKey, edge.toKey)));
             if (missingEdges > 0)
                 errors.Add("表现配置缺少 " + missingEdges + " 条曲线记录，请点击“补齐位置和曲线”。");
+            if (errors.Count == 0)
+            {
+                try { TalentTreeBoundsUtility.CalculateHorizontal(definition, layout); }
+                catch (InvalidOperationException exception) { errors.Add(exception.Message); }
+            }
             return errors.Distinct().ToList();
         }
 

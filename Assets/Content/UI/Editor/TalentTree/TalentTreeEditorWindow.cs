@@ -19,6 +19,7 @@ namespace Dragon.UI.TalentTree.Editor
         private const int DefinitionPickerId = 0x54414C54;
         private static readonly string[] LineTextureResolutionLabels =
             { "原尺寸（100%）", "半尺寸（50%）", "四分之一（25%）" };
+        private static readonly string[] GuideModeLabels = { "六片区", "横向 1080" };
         private static string LastDefinitionGuidKey => "Dragon.TalentTree.LastDefinitionGuid." + Application.dataPath;
         private TalentTreeDefinition definition;
         private TalentTreeLayout layout;
@@ -309,6 +310,24 @@ namespace Dragon.UI.TalentTree.Editor
                         if (GUILayout.Button("生成 Prefab + JSON", EditorStyles.toolbarButton, GUILayout.Width(140))) Export();
                         if (GUILayout.Button("适应内容", EditorStyles.toolbarButton, GUILayout.Width(75))) FitContent();
                     }
+                    if (layout != null)
+                    {
+                        GUILayout.Space(12f);
+                        GUILayout.Label("辅助线", EditorStyles.miniLabel, GUILayout.Width(42f));
+                        var nextGuide = (TalentTreeGuideMode)EditorGUILayout.Popup((int)layout.guideMode,
+                            GuideModeLabels, EditorStyles.toolbarPopup, GUILayout.Width(100f));
+                        if (nextGuide != layout.guideMode)
+                        {
+                            int group = BeginUndoGroup("切换天赋树辅助线");
+                            Undo.RecordObject(layout, "切换天赋树辅助线");
+                            layout.guideMode = nextGuide;
+                            EditorUtility.SetDirty(layout);
+                            EndUndoGroup(group);
+                            status = nextGuide == TalentTreeGuideMode.Horizontal1080
+                                ? "横向画布：高 1080，上下安全区各留 120" : "六片区辅助线";
+                            Repaint();
+                        }
+                    }
                     GUILayout.FlexibleSpace();
                 }
             }
@@ -541,7 +560,9 @@ namespace Dragon.UI.TalentTree.Editor
             var local = new Rect(0, 0, rect.width, rect.height);
             EditorGUI.DrawRect(local, new Color(0.075f, 0.09f, 0.12f));
             Handles.BeginGUI();
-            DrawSectors(local);
+            if (layout != null && layout.guideMode == TalentTreeGuideMode.Horizontal1080)
+                DrawHorizontalGuide(local);
+            else DrawSectors(local);
             DrawEdges(local);
             DrawNodes(local);
             if (marqueeActive)
@@ -580,6 +601,37 @@ namespace Dragon.UI.TalentTree.Editor
                 Handles.color = new Color(0.58f, 0.55f, 0.44f, 0.35f);
                 Handles.DrawLine(center, points[1]);
             }
+        }
+
+        private void DrawHorizontalGuide(Rect canvas)
+        {
+            float top = BoardToCanvas(new Vector2(0f, TalentTreeHorizontalCanvas.HalfHeight), canvas).y;
+            float bottom = BoardToCanvas(new Vector2(0f, -TalentTreeHorizontalCanvas.HalfHeight), canvas).y;
+            float safeTop = BoardToCanvas(new Vector2(0f, TalentTreeHorizontalCanvas.SafeHalfHeight), canvas).y;
+            float safeBottom = BoardToCanvas(new Vector2(0f, -TalentTreeHorizontalCanvas.SafeHalfHeight), canvas).y;
+            DrawGuideBand(canvas, top, bottom, new Color(0.13f, 0.18f, 0.24f, 0.55f));
+            DrawGuideBand(canvas, safeTop, safeBottom, new Color(0.15f, 0.25f, 0.28f, 0.42f));
+            DrawGuideLine(canvas, top, new Color(0.9f, 0.5f, 0.35f, 0.85f), "画布上边界 +540");
+            DrawGuideLine(canvas, bottom, new Color(0.9f, 0.5f, 0.35f, 0.85f), "画布下边界 -540");
+            DrawGuideLine(canvas, safeTop, new Color(0.55f, 0.85f, 0.72f, 0.85f), "安全区上边界 +420");
+            DrawGuideLine(canvas, safeBottom, new Color(0.55f, 0.85f, 0.72f, 0.85f), "安全区下边界 -420");
+        }
+
+        private static void DrawGuideBand(Rect canvas, float top, float bottom, Color color)
+        {
+            float visibleTop = Mathf.Clamp(top, 0f, canvas.height);
+            float visibleBottom = Mathf.Clamp(bottom, 0f, canvas.height);
+            if (visibleBottom > visibleTop)
+                EditorGUI.DrawRect(new Rect(0f, visibleTop, canvas.width, visibleBottom - visibleTop), color);
+        }
+
+        private static void DrawGuideLine(Rect canvas, float y, Color color, string label)
+        {
+            if (y < 0f || y > canvas.height) return;
+            Handles.color = color;
+            Handles.DrawLine(new Vector2(0f, y), new Vector2(canvas.width, y));
+            GUI.Label(new Rect(8f, Mathf.Clamp(y - 18f, 0f, canvas.height - 18f), 160f, 18f),
+                label, EditorStyles.whiteMiniLabel);
         }
 
         private void DrawEdges(Rect canvas)

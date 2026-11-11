@@ -40,6 +40,8 @@ namespace Dragon.UI.TalentTree.Editor
             var layout = ScriptableObject.CreateInstance<TalentTreeLayout>();
             layout.definition = definition;
             bool hasLegacy = HasLegacyPresentation(definition);
+            layout.guideMode = definition.nodes.Count == 0 && !hasLegacy
+                ? TalentTreeGuideMode.Horizontal1080 : TalentTreeGuideMode.SixSectors;
             if (hasLegacy) CopyLegacyStyle(definition, layout);
             SyncMissingEntries(definition, layout, hasLegacy);
             AssetDatabase.CreateAsset(layout, path);

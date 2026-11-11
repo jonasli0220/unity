@@ -73,15 +73,17 @@ namespace Dragon.UI.TalentTree.Editor
             var definition = ScriptableObject.CreateInstance<TalentTreeDefinition>();
             var layout = ScriptableObject.CreateInstance<TalentTreeLayout>();
             layout.definition = definition;
+            layout.guideMode = TalentTreeGuideMode.Horizontal1080;
             AddNode(definition, layout, 1, TalentNodeType.Core, Vector2.zero);
             for (int sector = 0; sector < 6; sector++)
             {
-                float angle = sector * 60f * Mathf.Deg2Rad;
-                Vector2 direction = new Vector2(Mathf.Sin(angle), Mathf.Cos(angle));
-                AddNode(definition, layout, sector + 2, TalentNodeType.Core, direction * 620f);
-                AddNode(definition, layout, sector + 8, TalentNodeType.Small, direction * 1220f);
+                float y = (sector - 2.5f) * 120f;
+                AddNode(definition, layout, sector + 2, TalentNodeType.Core,
+                    new Vector2(330f + sector * 180f, y));
+                AddNode(definition, layout, sector + 8, TalentNodeType.Small,
+                    new Vector2(900f + sector * 180f, y));
             }
-            AddNode(definition, layout, 14, TalentNodeType.Small, new Vector2(710f, 1400f));
+            AddNode(definition, layout, 14, TalentNodeType.Small, new Vector2(2000f, 0f));
             for (int sector = 0; sector < 6; sector++)
             {
                 AddEdge(definition, layout, 1, sector + 2);
@@ -115,7 +117,7 @@ namespace Dragon.UI.TalentTree.Editor
             if (json.nodes.Any(node => Mathf.Abs(node.size -
                 (node.type == nameof(TalentNodeType.Core) ? layout.coreNodeSize : layout.smallNodeSize)) > 0.01f))
                 throw new InvalidOperationException("Exported node sizes differ from the authoring layout.");
-            var bounds = TalentTreeBoundsUtility.CalculateOriginCentered(definition, layout);
+            var bounds = TalentTreeBoundsUtility.CalculateHorizontal(definition, layout);
             if (Vector2.Distance(merge.position, layout.FindNode("example-14").position) > 0.01f)
                 throw new InvalidOperationException("Example layout position was not merged into the prefab.");
             var content = prefab.transform.Find("Content") as RectTransform;
@@ -140,8 +142,18 @@ namespace Dragon.UI.TalentTree.Editor
         {
             var source = AssetDatabase.LoadAssetAtPath<TalentTreeDefinition>(PathToDefinition);
             if (source == null) throw new InvalidOperationException("Create Example Tree first.");
-            var layout = TalentTreeLayoutUtility.Find(source) ?? TalentTreeLayoutUtility.Create(source);
-            if (TalentTreeValidator.Validate(source, layout).Count != 0) throw new InvalidOperationException("Valid example was rejected.");
+            var sourceLayout = TalentTreeLayoutUtility.Find(source) ?? TalentTreeLayoutUtility.Create(source);
+            var layout = UnityEngine.Object.Instantiate(sourceLayout);
+            try
+            {
+            // Old six-sector examples can extend above 1080; normalize a disposable copy for the checks.
+            foreach (var node in layout.nodes) node.position.y *= 0.25f;
+            foreach (var edge in layout.edges)
+            {
+                edge.fromHandle.y *= 0.25f;
+                edge.toHandle.y *= 0.25f;
+            }
+            if (TalentTreeValidator.Validate(source, layout).Count != 0) throw new InvalidOperationException("Valid horizontal example was rejected.");
 
             var translated = UnityEngine.Object.Instantiate(layout);
             try
@@ -149,8 +161,8 @@ namespace Dragon.UI.TalentTree.Editor
                 Vector2 offset = new Vector2(10000f, -20000f);
                 var originalBounds = TalentTreeBoundsUtility.Calculate(source, layout);
                 foreach (var node in translated.nodes) node.position += offset;
-                if (TalentTreeValidator.Validate(source, translated).Count != 0)
-                    throw new InvalidOperationException("Finite nodes outside the old board were rejected.");
+                if (!TalentTreeValidator.Validate(source, translated).Any(error => error.Contains("横向画布高度")))
+                    throw new InvalidOperationException("Vertically translated nodes were not rejected by the 1080 canvas.");
                 var translatedBounds = TalentTreeBoundsUtility.Calculate(source, translated);
                 if (Vector2.Distance(translatedBounds.Center, originalBounds.Center + offset) > 0.05f ||
                     Vector2.Distance(translatedBounds.Size, originalBounds.Size) > 0.05f)
@@ -191,7 +203,9 @@ namespace Dragon.UI.TalentTree.Editor
                     throw new InvalidOperationException("Failed export changed the generated JSON.");
             }
             finally { UnityEngine.Object.DestroyImmediate(incomplete); }
-            Debug.Log("Talent Tree validation checks passed: valid pair, unbounded coordinates, translation-invariant crop, duplicate ID, directed cycle, missing UI layout, unchanged output after failed export.");
+            Debug.Log("Talent Tree validation checks passed: 1080 canvas, unbounded X coordinates, translation-invariant geometry, duplicate ID, directed cycle, missing UI layout, unchanged output after failed export.");
+            }
+            finally { UnityEngine.Object.DestroyImmediate(layout); }
         }
 
         [MenuItem("Tools/UI/Talent Tree/Run 1000 Node Stress Check", false, 2333)]
@@ -215,12 +229,12 @@ namespace Dragon.UI.TalentTree.Editor
             var definition = ScriptableObject.CreateInstance<TalentTreeDefinition>();
             var layout = ScriptableObject.CreateInstance<TalentTreeLayout>();
             layout.definition = definition;
+            layout.guideMode = TalentTreeGuideMode.Horizontal1080;
             for (int id = 1; id <= 1000; id++)
             {
-                float angle = id * 2.39996323f;
-                float radius = 80f + 1800f * Mathf.Sqrt(id / 1000f);
+                float y = Mathf.Sin(id * 2.39996323f) * 250f;
                 AddNode(definition, layout, id, id % 50 == 0 ? TalentNodeType.Core : TalentNodeType.Small,
-                    new Vector2(Mathf.Sin(angle), Mathf.Cos(angle)) * radius);
+                    new Vector2(id * 10f, y));
                 if (id > 1) AddEdge(definition, layout, id - 1, id);
             }
             var timer = System.Diagnostics.Stopwatch.StartNew();
@@ -321,6 +335,18 @@ namespace Dragon.UI.TalentTree.Editor
                 TalentTreeGraphEdit.EnsureEdgeLayout(definition, layout, testEdge);
                 if (TalentTreeValidator.Validate(definition, layout).Count != 0)
                     throw new InvalidOperationException("旧连线自动补全曲线失败。");
+                layout.guideMode = TalentTreeGuideMode.Horizontal1080;
+                if (TalentTreeValidator.Validate(definition, layout).Count != 0)
+                    throw new InvalidOperationException("横向 1080 画布错误地拒绝了合法布局。");
+                var boundaryNode = layout.FindNode("example-4");
+                Vector2 originalBoundaryPosition = boundaryNode.position;
+                boundaryNode.position = new Vector2(originalBoundaryPosition.x, 480f);
+                if (TalentTreeValidator.Validate(definition, layout).Count != 0)
+                    throw new InvalidOperationException("安全区之外、画布之内的节点不应被拦截。");
+                boundaryNode.position = new Vector2(originalBoundaryPosition.x, 600f);
+                if (!TalentTreeValidator.Validate(definition, layout).Any(error => error.Contains("横向画布高度")))
+                    throw new InvalidOperationException("横向画布没有拦截上下越界的节点。");
+                boundaryNode.position = originalBoundaryPosition;
 
                 AssetDatabase.CreateAsset(definition, definitionPath);
                 definitionSaved = true;
@@ -331,7 +357,8 @@ namespace Dragon.UI.TalentTree.Editor
                 var prefab = AssetDatabase.LoadAssetAtPath<GameObject>(prefabPath);
                 var json = JsonUtility.FromJson<ExportSummary>(File.ReadAllText(Path.GetFullPath(jsonPath)));
                 if (prefab == null || json == null || json.nodes.Length != 4 || json.edges.Length != 4 ||
-                    json.contentSize.x < 256f || json.contentSize.y < 256f ||
+                    json.contentSize.x < 256f ||
+                    Mathf.Abs(json.contentSize.y - TalentTreeHorizontalCanvas.Height) > 0.01f ||
                     json.contentCenter != Vector2.zero)
                     throw new InvalidOperationException("临时树导出的 Prefab 或 JSON 数据不正确。");
                 AssertPatchSafe(prefab, json);
@@ -345,6 +372,12 @@ namespace Dragon.UI.TalentTree.Editor
                     json.contentCenter != Vector2.zero || json.nodes == null ||
                     json.nodes.Any(node => Vector2.Distance(node.position, layout.FindNode("example-" + node.id).position) > 0.01f))
                     throw new InvalidOperationException("临时树 JSON 画布数据不正确。");
+                string beforeOutOfBounds = File.ReadAllText(Path.GetFullPath(jsonPath));
+                boundaryNode.position = new Vector2(originalBoundaryPosition.x, 600f);
+                if (TalentTreeExporter.Export(definition, layout, out _) ||
+                    File.ReadAllText(Path.GetFullPath(jsonPath)) != beforeOutOfBounds)
+                    throw new InvalidOperationException("越界导出修改了已有 JSON。");
+                boundaryNode.position = originalBoundaryPosition;
                 var originalTiles = json.inactiveTiles.ToDictionary(tile => (tile.x, tile.y));
                 layout.lineTextureResolution = TalentTreeLineResolution.Half;
                 if (!TalentTreeExporter.Export(definition, layout, out string halfMessage))

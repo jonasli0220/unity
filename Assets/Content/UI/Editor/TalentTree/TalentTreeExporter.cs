@@ -95,7 +95,7 @@ namespace Dragon.UI.TalentTree.Editor
                 out message)) return false;
 
             TalentTreeContentBounds bounds;
-            try { bounds = TalentTreeBoundsUtility.CalculateOriginCentered(definition, layout); }
+            try { bounds = TalentTreeBoundsUtility.CalculateHorizontal(definition, layout); }
             catch (Exception exception) { message = "无法计算导出范围：" + exception.Message; return false; }
 
             var orderedNodes = definition.nodes.OrderBy(node => node.id).ToArray();
@@ -247,7 +247,8 @@ namespace Dragon.UI.TalentTree.Editor
             var scroll = root.GetComponent<ScrollRect>();
             scroll.content = content;
             scroll.viewport = viewport;
-            scroll.horizontal = scroll.vertical = true;
+            scroll.horizontal = true;
+            scroll.vertical = false;
             scroll.inertia = false;
             scroll.movementType = ScrollRect.MovementType.Unrestricted;
             scroll.scrollSensitivity = 0f;
@@ -308,11 +309,19 @@ namespace Dragon.UI.TalentTree.Editor
 
         public static TalentTreeContentBounds Calculate(TalentTreeDefinition definition, TalentTreeLayout layout)
         {
+            return Calculate(definition, layout, Padding, MinimumSide);
+        }
+
+        private static TalentTreeContentBounds Calculate(TalentTreeDefinition definition,
+            TalentTreeLayout layout, double padding, double minimumSide)
+        {
             double minX = double.PositiveInfinity;
             double minY = double.PositiveInfinity;
             double maxX = double.NegativeInfinity;
             double maxY = double.NegativeInfinity;
-            float lineWidth = layout != null ? layout.lineWidth : definition.lineWidth;
+            float lineWidth = layout != null
+                ? layout.lineWidth * Mathf.Max(1f, layout.activeLineWidthMultiplier)
+                : definition.lineWidth;
             var nodesByKey = new Dictionary<string, TalentTreeAuthorNode>(definition.nodes.Count);
             foreach (var node in definition.nodes)
                 if (node != null && !string.IsNullOrEmpty(node.key)) nodesByKey[node.key] = node;
@@ -356,11 +365,11 @@ namespace Dragon.UI.TalentTree.Editor
             }
 
             if (double.IsPositiveInfinity(minX)) return new TalentTreeContentBounds(Vector2.zero, new Vector2(512f, 512f));
-            double margin = Padding + lineWidth * 0.5d + 12d;
+            double margin = padding + lineWidth * 0.5d + 12d;
             double centerX = (minX + maxX) * 0.5d;
             double centerY = (minY + maxY) * 0.5d;
-            double width = Math.Max(MinimumSide, maxX - minX + margin * 2d);
-            double height = Math.Max(MinimumSide, maxY - minY + margin * 2d);
+            double width = Math.Max(minimumSide, maxX - minX + margin * 2d);
+            double height = Math.Max(minimumSide, maxY - minY + margin * 2d);
             if (!IsFiniteFloat(centerX) || !IsFiniteFloat(centerY) || !IsFiniteFloat(width) || !IsFiniteFloat(height))
                 throw new InvalidOperationException("节点或曲线坐标过大，无法生成有效的 UGUI 画布。");
             return new TalentTreeContentBounds(new Vector2((float)centerX, (float)centerY),
@@ -377,6 +386,19 @@ namespace Dragon.UI.TalentTree.Editor
             if (!IsFiniteFloat(width) || !IsFiniteFloat(height))
                 throw new InvalidOperationException("节点或曲线坐标过大，无法生成有效的 UGUI 画布。");
             return new TalentTreeContentBounds(Vector2.zero, new Vector2((float)width, (float)height));
+        }
+
+        public static TalentTreeContentBounds CalculateHorizontal(TalentTreeDefinition definition,
+            TalentTreeLayout layout)
+        {
+            TalentTreeContentBounds geometry = Calculate(definition, layout, 0d, 0d);
+            double furthestY = Math.Abs((double)geometry.Center.y) + geometry.Size.y * 0.5d;
+            if (furthestY > TalentTreeHorizontalCanvas.HalfHeight + 0.01d)
+                throw new InvalidOperationException("横向画布高度为 1080，节点或连线超出 Y=-540～540。" +
+                    "请将越界内容移入画布；上下安全区参考线为 Y=±420。");
+            TalentTreeContentBounds padded = CalculateOriginCentered(definition, layout);
+            return new TalentTreeContentBounds(Vector2.zero,
+                new Vector2(padded.Size.x, TalentTreeHorizontalCanvas.Height));
         }
 
         private static Vector2 NodePosition(TalentTreeAuthorNode node, TalentTreeLayout layout,

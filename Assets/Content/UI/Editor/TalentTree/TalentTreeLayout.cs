@@ -11,6 +11,20 @@ namespace Dragon.UI.TalentTree.Editor
         Quarter = 2
     }
 
+    public enum TalentTreeGuideMode
+    {
+        SixSectors = 0,
+        Horizontal1080 = 1
+    }
+
+    public static class TalentTreeHorizontalCanvas
+    {
+        public const float Height = 1080f;
+        public const float SafeInset = 120f;
+        public const float HalfHeight = Height * 0.5f;
+        public const float SafeHalfHeight = HalfHeight - SafeInset;
+    }
+
     [Serializable]
     public sealed class TalentTreeNodeLayout
     {
@@ -31,6 +45,7 @@ namespace Dragon.UI.TalentTree.Editor
     public sealed class TalentTreeLayout : ScriptableObject
     {
         public TalentTreeDefinition definition;
+        public TalentTreeGuideMode guideMode = TalentTreeGuideMode.SixSectors;
         [HideInInspector] public float boardSize = 4096f; // Legacy migration value; export sizes itself from content.
         [Min(24f)] public float smallNodeSize = 72f;
         [Min(32f)] public float coreNodeSize = 124f;
