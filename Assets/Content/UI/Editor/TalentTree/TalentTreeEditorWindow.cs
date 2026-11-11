@@ -30,7 +30,7 @@ namespace Dragon.UI.TalentTree.Editor
         private int selectedEdge = -1;
         private string pendingSourceKey;
         private Vector2 pan;
-        private float zoom = 0.36f;
+        private float zoom = 1f;
         private Vector2 lastMouse;
         private Vector2 rightDown;
         private Vector2 nodeDragStartBoard;
@@ -83,7 +83,13 @@ namespace Dragon.UI.TalentTree.Editor
         private void OnEnable()
         {
             Undo.undoRedoPerformed += OnUndoRedo;
-            if (!LoadSelectedAsset() && definition == null) RestoreLastDefinition();
+            if (LoadSelectedAsset()) return;
+            if (definition == null) RestoreLastDefinition();
+            else
+            {
+                if (layout == null) layout = TalentTreeLayoutUtility.Find(definition);
+                RestoreViewport();
+            }
         }
 
         private void OnSelectionChange()
@@ -130,6 +136,7 @@ namespace Dragon.UI.TalentTree.Editor
 
         private void ShowDefinition(TalentTreeDefinition selected)
         {
+            SaveViewport();
             definition = selected;
             layout = TalentTreeLayoutUtility.Find(selected);
             string layoutError = null;
@@ -151,7 +158,7 @@ namespace Dragon.UI.TalentTree.Editor
             status = selected == null ? "新建天赋树，或打开已保存的天赋树" :
                 layoutError != null ? "创建表现配置失败：" + layoutError :
                 layout == null ? "已打开 " + selected.name + "，请创建表现配置" : "已打开 " + selected.name;
-            FitContent();
+            RestoreViewport();
             Repaint();
         }
 
@@ -165,7 +172,7 @@ namespace Dragon.UI.TalentTree.Editor
             }
             ShowDefinition(selected.definition);
             layout = selected;
-            FitContent();
+            Repaint();
         }
 
         private void RestoreLastDefinition()
@@ -179,8 +186,49 @@ namespace Dragon.UI.TalentTree.Editor
 
         private void OnDisable()
         {
+            SaveViewport();
             FinishDragUndo();
             Undo.undoRedoPerformed -= OnUndoRedo;
+        }
+
+        private static string ViewportKey(TalentTreeDefinition source)
+        {
+            if (source == null) return null;
+            string guid = AssetDatabase.AssetPathToGUID(AssetDatabase.GetAssetPath(source));
+            return string.IsNullOrEmpty(guid) ? null :
+                "Dragon.TalentTree.ViewCenter." + Application.dataPath + "." + guid;
+        }
+
+        private void SaveViewport()
+        {
+            string key = ViewportKey(definition);
+            if (key == null || zoom <= 0f || float.IsNaN(zoom) || float.IsInfinity(zoom)) return;
+            Vector2 center = new Vector2(-pan.x / zoom, pan.y / zoom);
+            if (float.IsNaN(center.x) || float.IsInfinity(center.x) ||
+                float.IsNaN(center.y) || float.IsInfinity(center.y)) return;
+            EditorPrefs.SetFloat(key + ".x", center.x);
+            EditorPrefs.SetFloat(key + ".y", center.y);
+        }
+
+        private void RestoreViewport()
+        {
+            zoom = 1f;
+            Vector2 center = Vector2.zero;
+            string key = ViewportKey(definition);
+            if (key != null && EditorPrefs.HasKey(key + ".x") && EditorPrefs.HasKey(key + ".y"))
+            {
+                center = new Vector2(EditorPrefs.GetFloat(key + ".x"), EditorPrefs.GetFloat(key + ".y"));
+                if (float.IsNaN(center.x) || float.IsInfinity(center.x) ||
+                    float.IsNaN(center.y) || float.IsInfinity(center.y)) center = Vector2.zero;
+            }
+            else if (definition != null && definition.nodes != null && definition.nodes.Count > 0)
+            {
+                try { center = TalentTreeBoundsUtility.Calculate(definition, layout).Center; }
+                catch (InvalidOperationException) { /* A damaged tree can still open at the origin. */ }
+            }
+            if (float.IsNaN(center.x) || float.IsInfinity(center.x) ||
+                float.IsNaN(center.y) || float.IsInfinity(center.y)) center = Vector2.zero;
+            pan = new Vector2(-center.x, center.y);
         }
         private void OnUndoRedo()
         {
@@ -314,7 +362,11 @@ namespace Dragon.UI.TalentTree.Editor
                 {
                     using (new EditorGUI.DisabledScope(definition == null))
                     {
-                        if (GUILayout.Button("保存", EditorStyles.toolbarButton, GUILayout.Width(55))) AssetDatabase.SaveAssets();
+                        if (GUILayout.Button("保存", EditorStyles.toolbarButton, GUILayout.Width(55)))
+                        {
+                            SaveViewport();
+                            AssetDatabase.SaveAssets();
+                        }
                         if (GUILayout.Button("检查", EditorStyles.toolbarButton, GUILayout.Width(55))) ShowValidation();
                         if (GUILayout.Button("生成 Prefab + JSON", EditorStyles.toolbarButton, GUILayout.Width(140))) Export();
                         if (GUILayout.Button("适应内容", EditorStyles.toolbarButton, GUILayout.Width(75))) FitContent();
