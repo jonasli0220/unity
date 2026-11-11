@@ -16,7 +16,16 @@ namespace Dragon.UI.TalentTree.Editor
             if (string.IsNullOrEmpty(sourcePath)) return null;
             string name = Path.GetFileNameWithoutExtension(sourcePath);
             var layout = AssetDatabase.LoadAssetAtPath<TalentTreeLayout>(LayoutFolder + "/" + name + "Layout.asset");
-            return layout != null && layout.definition == definition ? layout : null;
+            if (layout != null && layout.definition == definition) return layout;
+
+            string[] guids = AssetDatabase.FindAssets("t:TalentTreeLayout", new[] { LayoutFolder });
+            Array.Sort(guids, StringComparer.Ordinal);
+            foreach (string guid in guids)
+            {
+                layout = AssetDatabase.LoadAssetAtPath<TalentTreeLayout>(AssetDatabase.GUIDToAssetPath(guid));
+                if (layout != null && layout.definition == definition) return layout;
+            }
+            return null;
         }
 
         public static TalentTreeLayout Create(TalentTreeDefinition definition)
@@ -29,12 +38,19 @@ namespace Dragon.UI.TalentTree.Editor
             if (string.IsNullOrEmpty(sourcePath)) throw new InvalidOperationException("请先保存逻辑配置。");
             if (!AssetDatabase.IsValidFolder(LayoutFolder))
                 AssetDatabase.CreateFolder("Assets/Content/UI/Editor/TalentTree", "Layouts");
+            var matchingLayout = Find(definition);
+            if (matchingLayout != null) return matchingLayout;
             string path = LayoutFolder + "/" + Path.GetFileNameWithoutExtension(sourcePath) + "Layout.asset";
-            var existing = AssetDatabase.LoadAssetAtPath<UnityEngine.Object>(path);
-            if (existing != null)
+            if (AssetPathOccupied(path))
             {
-                if (existing is TalentTreeLayout matching && matching.definition == definition) return matching;
-                throw new InvalidOperationException("表现配置路径已被其他资产占用：" + path);
+                string sourceGuid = AssetDatabase.AssetPathToGUID(sourcePath);
+                if (string.IsNullOrEmpty(sourceGuid))
+                    throw new InvalidOperationException("无法读取逻辑配置 GUID：" + sourcePath);
+                string fallbackBase = LayoutFolder + "/" + Path.GetFileNameWithoutExtension(sourcePath) +
+                                      "Layout_" + sourceGuid.Substring(0, Math.Min(8, sourceGuid.Length));
+                path = fallbackBase + ".asset";
+                for (int suffix = 2; AssetPathOccupied(path); suffix++)
+                    path = fallbackBase + "_" + suffix + ".asset";
             }
 
             var layout = ScriptableObject.CreateInstance<TalentTreeLayout>();
@@ -48,6 +64,9 @@ namespace Dragon.UI.TalentTree.Editor
             AssetDatabase.SaveAssets();
             return layout;
         }
+
+        private static bool AssetPathOccupied(string path) =>
+            AssetDatabase.LoadAssetAtPath<UnityEngine.Object>(path) != null || File.Exists(Path.GetFullPath(path));
 
         public static int SyncMissingEntries(TalentTreeDefinition definition, TalentTreeLayout layout, bool copyLegacy = false)
         {

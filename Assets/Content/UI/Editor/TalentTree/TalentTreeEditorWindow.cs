@@ -132,6 +132,14 @@ namespace Dragon.UI.TalentTree.Editor
         {
             definition = selected;
             layout = TalentTreeLayoutUtility.Find(selected);
+            string layoutError = null;
+            if (selected != null && layout == null && selected.nodes != null && selected.edges != null &&
+                selected.nodes.Count == 0 && selected.edges.Count == 0 &&
+                !string.IsNullOrEmpty(AssetDatabase.GetAssetPath(selected)))
+            {
+                try { layout = TalentTreeLayoutUtility.Create(selected); }
+                catch (Exception exception) { layoutError = exception.Message; }
+            }
             ClearSelection();
             iconCache.Clear();
             if (selected != null)
@@ -141,6 +149,7 @@ namespace Dragon.UI.TalentTree.Editor
                 if (!string.IsNullOrEmpty(guid)) EditorPrefs.SetString(LastDefinitionGuidKey, guid);
             }
             status = selected == null ? "新建天赋树，或打开已保存的天赋树" :
+                layoutError != null ? "创建表现配置失败：" + layoutError :
                 layout == null ? "已打开 " + selected.name + "，请创建表现配置" : "已打开 " + selected.name;
             FitContent();
             Repaint();
@@ -1129,13 +1138,30 @@ namespace Dragon.UI.TalentTree.Editor
             string path = EditorUtility.SaveFilePanelInProject("新建天赋树", "NewTalentTree", "asset", "请选择配置资产名称",
                 definitionsFolder);
             if (string.IsNullOrEmpty(path)) return;
+            if (AssetDatabase.LoadAssetAtPath<UnityEngine.Object>(path) != null || File.Exists(Path.GetFullPath(path)))
+                path = AssetDatabase.GenerateUniqueAssetPath(path);
             var asset = CreateInstance<TalentTreeDefinition>();
-            AssetDatabase.CreateAsset(asset, path);
-            AssetDatabase.SaveAssets();
-            layout = TalentTreeLayoutUtility.Create(asset);
+            try
+            {
+                AssetDatabase.CreateAsset(asset, path);
+                TalentTreeLayoutUtility.Create(asset);
+                AssetDatabase.SaveAssets();
+            }
+            catch (Exception exception)
+            {
+                if (AssetDatabase.LoadAssetAtPath<TalentTreeDefinition>(path) == asset)
+                    AssetDatabase.DeleteAsset(path);
+                else DestroyImmediate(asset);
+                status = "新建天赋树失败";
+                EditorUtility.DisplayDialog("无法新建天赋树", exception.Message, "确定");
+                return;
+            }
             ShowDefinition(asset);
             Selection.activeObject = asset;
-            status = "已创建天赋树，可添加节点并摆放"; Repaint();
+            EditorGUIUtility.PingObject(asset);
+            Focus();
+            status = "已打开新建天赋树，可添加节点并摆放";
+            Repaint();
         }
 
         private void CreateLayout()
