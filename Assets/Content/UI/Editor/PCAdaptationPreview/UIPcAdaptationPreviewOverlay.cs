@@ -283,7 +283,8 @@ public static class UIPcAdaptationPreviewController
 
         if (currentPrefabStage != null && currentPrefabStage.prefabContentsRoot != null)
         {
-            CanvasScaler stageScaler = FindPrefabStageEnvironmentScaler(currentPrefabStage);
+            Canvas previewCanvas = FindPrefabStagePreviewCanvas(currentPrefabStage);
+            CanvasScaler stageScaler = previewCanvas != null ? previewCanvas.GetComponent<CanvasScaler>() : null;
             if (stageScaler != null)
             {
                 AddTarget(result, seen, stageScaler);
@@ -343,15 +344,7 @@ public static class UIPcAdaptationPreviewController
 
         if (currentPrefabStage != null && currentPrefabStage.prefabContentsRoot != null)
         {
-            Canvas environmentCanvas = FindPrefabStageEnvironmentCanvas(currentPrefabStage);
-            if (environmentCanvas != null)
-            {
-                AddTemporaryScalerTarget(result, seen, environmentCanvas);
-            }
-            else
-            {
-                AddTemporaryScalerTarget(result, seen, FindPrefabStagePrefabCanvas(currentPrefabStage));
-            }
+            AddTemporaryScalerTarget(result, seen, FindPrefabStagePreviewCanvas(currentPrefabStage));
 
             return result;
         }
@@ -459,7 +452,7 @@ public static class UIPcAdaptationPreviewController
         return GetRootCanvasScaler(canvas);
     }
 
-    private static Canvas FindPrefabStagePrefabCanvas(PrefabStage prefabStage)
+    private static Canvas FindPrefabStagePreviewCanvas(PrefabStage prefabStage)
     {
         if (prefabStage == null || prefabStage.prefabContentsRoot == null)
         {
@@ -467,157 +460,17 @@ public static class UIPcAdaptationPreviewController
         }
 
         GameObject prefabRoot = prefabStage.prefabContentsRoot;
-        Canvas rootCanvas = prefabRoot.GetComponent<Canvas>();
-        if (CanAddTemporaryScaler(rootCanvas))
-        {
-            return rootCanvas;
-        }
-
-        Transform namedRoot = prefabRoot.transform.Find("root");
-        if (namedRoot != null)
-        {
-            Canvas namedRootCanvas = namedRoot.GetComponent<Canvas>();
-            if (CanAddTemporaryScaler(namedRootCanvas))
-            {
-                return namedRootCanvas;
-            }
-        }
-
-        return null;
-    }
-
-    private static CanvasScaler FindPrefabStageEnvironmentScaler(PrefabStage prefabStage)
-    {
-        Transform prefabRoot = prefabStage.prefabContentsRoot.transform;
-        CanvasScaler parentScaler = FindCanvasScalerInParents(prefabRoot);
-        parentScaler = GetRootCanvasScaler(parentScaler);
-        if (IsPrefabStageEnvironmentObject(prefabStage, parentScaler)
-            && !IsTransformUnder(parentScaler.transform, prefabRoot))
-        {
-            return parentScaler;
-        }
-
-        CanvasScaler fallback = null;
-        CanvasScaler[] allScalers = Resources.FindObjectsOfTypeAll<CanvasScaler>();
-        for (int i = 0; i < allScalers.Length; i++)
-        {
-            CanvasScaler scaler = allScalers[i];
-            if (!CanPreviewScaler(scaler)
-                || !IsPrefabStageEnvironmentObject(prefabStage, scaler)
-                || IsTransformUnder(scaler.transform, prefabRoot))
-            {
-                continue;
-            }
-
-            Canvas canvas = scaler.GetComponent<Canvas>() ?? scaler.GetComponentInParent<Canvas>(true);
-            CanvasScaler rootScaler = GetRootCanvasScaler(canvas);
-            if (rootScaler == null || !CanPreviewScaler(rootScaler))
-            {
-                continue;
-            }
-
-            if (IsEnvironmentCanvas(canvas))
-            {
-                return rootScaler;
-            }
-
-            if (fallback == null)
-            {
-                fallback = rootScaler;
-            }
-        }
-
-        return fallback;
-    }
-
-    private static Canvas FindPrefabStageEnvironmentCanvas(PrefabStage prefabStage)
-    {
-        Transform prefabRoot = prefabStage.prefabContentsRoot.transform;
-        Canvas parentCanvas = FindCanvasInParents(prefabRoot);
-        if (IsPrefabStageEnvironmentObject(prefabStage, parentCanvas)
-            && !IsTransformUnder(parentCanvas.transform, prefabRoot))
-        {
-            return parentCanvas;
-        }
-
-        Canvas fallback = null;
-        Canvas[] allCanvases = Resources.FindObjectsOfTypeAll<Canvas>();
-        for (int i = 0; i < allCanvases.Length; i++)
-        {
-            Canvas canvas = allCanvases[i];
-            Canvas scalerCanvas = GetRootCanvas(canvas);
-            if (!CanAddTemporaryScaler(scalerCanvas)
-                || !IsPrefabStageEnvironmentObject(prefabStage, canvas)
-                || IsTransformUnder(canvas.transform, prefabRoot))
-            {
-                continue;
-            }
-
-            if (IsEnvironmentCanvas(canvas))
-            {
-                return canvas;
-            }
-
-            if (fallback == null)
-            {
-                fallback = canvas;
-            }
-        }
-
-        return fallback;
-    }
-
-    private static bool IsPrefabStageEnvironmentObject(PrefabStage prefabStage, Component component)
-    {
-        return component != null && IsPrefabStageEnvironmentObject(prefabStage, component.gameObject);
-    }
-
-    private static bool IsPrefabStageEnvironmentObject(PrefabStage prefabStage, GameObject gameObject)
-    {
-        if (prefabStage == null || prefabStage.prefabContentsRoot == null || gameObject == null)
-        {
-            return false;
-        }
-
-        if (gameObject.scene == prefabStage.scene)
-        {
-            return true;
-        }
-
-        if (gameObject.name.IndexOf("Environment", StringComparison.OrdinalIgnoreCase) >= 0
-            || gameObject.name.IndexOf("环境", StringComparison.OrdinalIgnoreCase) >= 0)
-        {
-            return true;
-        }
-
-        return StageUtility.GetStageHandle(gameObject) == StageUtility.GetCurrentStageHandle();
-    }
-
-    private static bool IsEnvironmentCanvas(Canvas canvas)
-    {
+        Canvas canvas = FindCanvasInParents(prefabRoot.transform);
         if (canvas == null)
         {
-            return false;
+            Transform namedRoot = prefabRoot.transform.Find("root");
+            canvas = namedRoot != null ? namedRoot.GetComponent<Canvas>() : null;
         }
 
-        return canvas.name.IndexOf("Environment", StringComparison.OrdinalIgnoreCase) >= 0
-            || canvas.name.IndexOf("环境", StringComparison.OrdinalIgnoreCase) >= 0;
-    }
-
-    private static bool IsTransformUnder(Transform child, Transform parent)
-    {
-        Transform current = child;
-        while (current != null)
-        {
-            if (current == parent)
-            {
-                return true;
-            }
-
-            current = current.parent;
-        }
-
-        return false;
+        Canvas rootCanvas = GetRootCanvas(canvas);
+        return rootCanvas != null && rootCanvas.isActiveAndEnabled && IsSceneObject(rootCanvas)
+            ? rootCanvas
+            : null;
     }
 
     private static void AddTarget(List<CanvasScaler> targets, HashSet<int> seen, CanvasScaler scaler)
@@ -1004,6 +857,7 @@ public static class UIPcAdaptationPreviewController
     {
         Canvas.ForceUpdateCanvases();
         EditorApplication.QueuePlayerLoopUpdate();
+        UnityEditorInternal.InternalEditorUtility.RepaintAllViews();
         SceneView.RepaintAll();
     }
 

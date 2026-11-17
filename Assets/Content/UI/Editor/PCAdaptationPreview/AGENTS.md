@@ -17,9 +17,9 @@ This directory contains the Unity Editor scene toolbar button for temporarily pr
 - The button is hosted by the existing `Prefab导航` Scene View overlay.
 - Preview temporarily applies `CanvasScaler.uiScaleMode = ConstantPixelSize` and `CanvasScaler.scaleFactor = 0.8`, then restores the original scaler mode and scale.
 - Prefer existing enabled `CanvasScaler` components.
-- In Prefab Stage, target the editing environment Canvas/CanvasScaler that contains `prefabContentsRoot`; do not scan child prefab `CanvasScaler` components as preview targets.
+- In Prefab Stage, use the effective root Canvas containing the opened prefab: the prefab root Canvas when it is a root Canvas, otherwise its ancestor editing-environment Canvas. If neither exists, a direct `root` child Canvas may be used. Never select unrelated stage canvases or embedded child prefabs as preview targets.
 - In Prefab Stage, clicking the toolbar button must preview the currently opened prefab without requiring any specific hierarchy selection.
-- If a UI prefab is opened inside a prefab editing environment that has a root `Canvas` but no effective `CanvasScaler`, temporarily add a `DontSave` `CanvasScaler` to that existing root `Canvas`, then remove it when preview ends.
+- If the effective root `Canvas` has no `CanvasScaler`, temporarily add a visible `DontSave` `CanvasScaler` to that Canvas, then remove it when preview ends. Refresh the Inspector after toggling so the component and its 0.8 scale factor can be inspected.
 - Do not add or delete `Canvas` components during preview. It is acceptable to remove old preview-created `DontSave` `CanvasScaler` components left by earlier tool versions; never delete editor environment `Canvas` components.
 - Do not use a direct `Canvas.scaleFactor` fallback. `AdaptationLocking` and background adaptation scripts must see a real parent `CanvasScaler`.
 - In regular scenes, if the current selection is under a `CanvasScaler`, preview that canvas only. If no scaler is selected, preview scalers in the open scene.
