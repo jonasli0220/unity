@@ -17,6 +17,7 @@ Scene View toolbar button for temporarily previewing UI PC adaptation while edit
 
 - When an active scene `CanvasScaler` is found, preview uses `CanvasScaler.uiScaleMode = ConstantPixelSize` and `CanvasScaler.scaleFactor = 0.8`.
 - In Prefab Stage, preview resolves the opened prefab's effective root Canvas. If the prefab itself owns that root Canvas, its Inspector shows the temporary `CanvasScaler` and scale factor 0.8 while preview is on.
+- If the opened prefab Canvas is nested under `Canvas (Environment)`, the root prefab Inspector instead shows the effective environment `CanvasScaler` values and a link to its owning Canvas. Unity does not scale a non-root Canvas with its own `CanvasScaler`.
 - When the effective root Canvas has no `CanvasScaler`, preview temporarily adds a visible `DontSave` `CanvasScaler` to it, then removes it when preview ends.
 - The preview tool never adds or deletes `Canvas` components. It may remove old preview-created `DontSave` `CanvasScaler` components left by earlier tool versions.
 - In Prefab Stage, embedded child prefab `CanvasScaler` components are ignored so background prefabs are not treated as the preview target.

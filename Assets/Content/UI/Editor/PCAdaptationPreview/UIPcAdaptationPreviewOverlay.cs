@@ -33,6 +33,8 @@ public static class UIPcAdaptationPreviewController
         EditorApplication.playModeStateChanged += OnPlayModeStateChanged;
         EditorApplication.update += OnEditorUpdate;
         EditorApplication.quitting += EndPreview;
+        Editor.finishedDefaultHeaderGUI -= DrawPrefabRootPreviewHeader;
+        Editor.finishedDefaultHeaderGUI += DrawPrefabRootPreviewHeader;
     }
 
     public static bool IsPreviewing
@@ -273,6 +275,46 @@ public static class UIPcAdaptationPreviewController
             ApplyBackgroundPreview(snapshot);
         }
 
+    }
+
+    private static void DrawPrefabRootPreviewHeader(Editor editor)
+    {
+        if (!IsPreviewing || editor == null || editor.targets == null || editor.targets.Length != 1)
+        {
+            return;
+        }
+
+        PrefabStage stage = PrefabStageUtility.GetCurrentPrefabStage();
+        if (stage == null || editor.target != stage.prefabContentsRoot)
+        {
+            return;
+        }
+
+        Canvas effectiveCanvas = FindPrefabStagePreviewCanvas(stage);
+        if (effectiveCanvas == null || effectiveCanvas.gameObject == stage.prefabContentsRoot)
+        {
+            return;
+        }
+
+        CanvasScaler scaler = effectiveCanvas.GetComponent<CanvasScaler>();
+        if (scaler == null || !ActiveSnapshots.Exists(snapshot => snapshot.scaler == scaler))
+        {
+            return;
+        }
+
+        GUILayout.Space(3f);
+        EditorGUILayout.LabelField("Canvas Scaler（外层画布生效）", EditorStyles.boldLabel);
+        using (new EditorGUI.DisabledScope(true))
+        {
+            EditorGUILayout.ObjectField("生效画布", effectiveCanvas, typeof(Canvas), true);
+            EditorGUILayout.EnumPopup("UI Scale Mode", scaler.uiScaleMode);
+            EditorGUILayout.FloatField("Scale Factor", scaler.scaleFactor);
+        }
+
+        if (GUILayout.Button("定位实际 Canvas", GUILayout.Width(132f)))
+        {
+            Selection.activeGameObject = effectiveCanvas.gameObject;
+        }
     }
 
     private static List<CanvasScaler> CollectPreviewTargets()
